@@ -1,8 +1,6 @@
-/* Drift-prevention: verify embedded Apps Script schema/seed data
- * exactly matches the canonical JSON source files.
- * If this test fails, regenerate:
- *   apps-script/S02SchemaData.js from schema/tables.json
- *   apps-script/S02SeedData.js from schema/config-seed.json
+/* Drift-prevention and Apps Script compatibility tests.
+ * Verifies embedded schema/seed data matches canonical JSON,
+ * and that the Apps Script provisioner core is compatible.
  */
 
 const { test } = require('node:test');
@@ -117,4 +115,126 @@ test('no S02_SCHEMA or S02_CONFIG_SEED reference in provisioner', () => {
   assert.ok(!source.includes('S02_CONFIG_SEED'), 'S02Provisioner.js should not reference S02_CONFIG_SEED property');
   assert.ok(source.includes('getS02SchemaDefinition'), 'S02Provisioner.js should call getS02SchemaDefinition()');
   assert.ok(source.includes('getS02ConfigSeed'), 'S02Provisioner.js should call getS02ConfigSeed()');
+});
+
+// --- Apps Script compatibility tests ---
+
+test('S02ProvisionerCore.js exposes S02Provisioner global with provisionSchema and validateSchema', () => {
+  const source = fs.readFileSync('apps-script/S02ProvisionerCore.js', 'utf8');
+  const sandbox = {};
+  const context = vm.createContext(sandbox);
+  vm.runInContext(source, context);
+
+  assert.ok(sandbox.S02Provisioner, 'S02Provisioner global not defined');
+  assert.equal(typeof sandbox.S02Provisioner.provisionSchema, 'function', 'provisionSchema missing');
+  assert.equal(typeof sandbox.S02Provisioner.validateSchema, 'function', 'validateSchema missing');
+  assert.equal(typeof sandbox.S02Provisioner.assertDevOnly, 'function', 'assertDevOnly missing');
+  assert.equal(sandbox.S02Provisioner.SCHEMA_VERSION, 'S02-1.0', 'SCHEMA_VERSION mismatch');
+});
+
+test('S02ProvisionerCore.js has no Node.js runtime dependencies', () => {
+  const source = fs.readFileSync('apps-script/S02ProvisionerCore.js', 'utf8');
+
+  const banned = [
+    { pattern: 'require(', desc: 'require() call' },
+    { pattern: 'module.exports', desc: 'module.exports' },
+    { pattern: 'exports.', desc: 'exports. assignment' },
+    { pattern: 'require("fs")', desc: 'fs module' },
+    { pattern: "require('fs')", desc: 'fs module' },
+    { pattern: 'process.', desc: 'process global' },
+    { pattern: '__dirname', desc: '__dirname' },
+    { pattern: '__filename', desc: '__filename' }
+  ];
+
+  // The file IS allowed to have 'module.exports' ONLY on the last line(s)
+  // (for Node compatibility). Check that it only appears in the final if-guard.
+  const lines = source.trimEnd().split('\n');
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    if (line.includes('module.exports') || line.includes('exports.')) {
+      // Allow only in the last conditional block
+      assert.ok(i >= lines.length - 5, 'module.exports/exports found outside final guard at line ' + (i + 1));
+    }
+  }
+
+  // Check no require() calls exist
+  assert.ok(!source.includes('require('), 'S02ProvisionerCore.js must not contain require()');
+  assert.ok(!source.includes('process.'), 'S02ProvisionerCore.js must not reference process');
+});
+
+test('S02ProvisionerCore.js matches schema/provisioner.js exactly', () => {
+  const canonical = fs.readFileSync('schema/provisioner.js', 'utf8');
+  const appsScript = fs.readFileSync('apps-script/S02ProvisionerCore.js', 'utf8');
+  assert.equal(appsScript, canonical, 'S02ProvisionerCore.js must be identical to schema/provisioner.js');
+});
+
+test('S02ProvisionerCore.js uses only ES3-compatible syntax (no const/let/arrow/for-of)', () => {
+  const source = fs.readFileSync('apps-script/S02ProvisionerCore.js', 'utf8');
+
+  // const/let outside of string literals
+  const codeOnly = source.replace(/'[^']*'/g, '').replace(/"[^"]*"/g, '').replace(/\/\/.*/g, '');
+
+  // 'const ' not preceded by a letter (catches standalone const, not 'reconcile')
+  assert.ok(!/\bconst\s+\w/.test(codeOnly), 'S02ProvisionerCore.js must not use const declarations');
+
+  // 'let ' not preceded by a letter
+  assert.ok(!/\blet\s+\w/.test(codeOnly), 'S02ProvisionerCore.js must not use let declarations');
+
+  // No arrow functions (=> outside strings)
+  assert.ok(!codeOnly.includes('=>'), 'S02ProvisionerCore.js must not use arrow functions');
+
+  // No for...of
+  assert.ok(!/\bfor\s*\(.*\bof\b/.test(codeOnly), 'S02ProvisionerCore.js must not use for...of');
+
+  // No template literals
+  assert.ok(!codeOnly.includes('`'), 'S02ProvisionerCore.js must not use template literals');
+});
+
+test('canonical schema/provisioner.js also exposes S02Provisioner global', () => {
+  const source = fs.readFileSync('schema/provisioner.js', 'utf8');
+  const sandbox = {};
+  const context = vm.createContext(sandbox);
+  vm.runInContext(source, context);
+
+  assert.ok(sandbox.S02Provisioner, 'canonical provisioner.js must define S02Provisioner global');
+  assert.equal(typeof sandbox.S02Provisioner.provisionSchema, 'function');
+});
+
+test('provisioner core functions identically via global and require', () => {
+  // Test that both access paths work and produce identical results
+  const viaRequire = require('../schema/provisioner.js');
+
+  const source = fs.readFileSync('apps-script/S02ProvisionerCore.js', 'utf8');
+  const sandbox = {};
+  vm.runInContext(source, vm.createContext(sandbox));
+  const viaGlobal = sandbox.S02Provisioner;
+
+  // Both should have the same function signatures
+  assert.equal(typeof viaRequire.provisionSchema, 'function');
+  assert.equal(typeof viaGlobal.provisionSchema, 'function');
+  assert.equal(typeof viaRequire.validateSchema, 'function');
+  assert.equal(typeof viaGlobal.validateSchema, 'function');
+
+  // Both should produce identical results for a basic call
+  const schema = require('../schema/tables.json');
+  const adapter = {
+    getSheetId: () => 'test-sheet',
+    getTabNames: () => [],
+    createTab: () => {},
+    getHeaders: () => [],
+    setHeaders: () => {},
+    freezeHeaderRow: () => {},
+    applyTextFormat: () => {},
+    getData: () => [],
+    insertRow: () => {},
+    deleteTab: () => {},
+    checkTextFormat: () => ({ notFormatted: [] })
+  };
+
+  const opts = { dryRun: true, environment: 'DEV', configuredSheetId: 'test-sheet' };
+  const viaRequireResult = viaRequire.provisionSchema(schema, null, adapter, opts);
+  const viaGlobalResult = viaGlobal.provisionSchema(schema, null, adapter, opts);
+
+  assert.equal(viaRequireResult.tables_total, viaGlobalResult.tables_total);
+  assert.equal(viaRequireResult.success, viaGlobalResult.success);
 });

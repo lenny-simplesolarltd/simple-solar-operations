@@ -1,8 +1,10 @@
 /* S02 DEV schema provisioner — Apps Script entry points.
  * Deploy to the DEV Sheet-bound Apps Script project alongside:
- *   OutboundGuard.js, S01Probe.js, S02SchemaData.js, S02SeedData.js
+ *   OutboundGuard.js, S01Probe.js, S02ProvisionerCore.js,
+ *   S02SchemaData.js, S02SeedData.js
  * Zero-arg functions: runS02DryRun, runS02Apply, runS02Validate.
- * Schema and config seed are embedded in S02SchemaData.js and S02SeedData.js.
+ * Schema/seed embedded in S02SchemaData.js and S02SeedData.js.
+ * Core logic in S02ProvisionerCore.js (exposes global S02Provisioner).
  * Only S01_CONFIG remains in Script Properties.
  * No triggers, no email, no calendar, no network calls.
  */
