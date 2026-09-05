@@ -1,6 +1,9 @@
 /* S02 DEV schema provisioner — Apps Script entry points.
- * Deploy to the DEV Sheet-bound Apps Script project alongside OutboundGuard and S01Probe.
+ * Deploy to the DEV Sheet-bound Apps Script project alongside:
+ *   OutboundGuard.js, S01Probe.js, S02SchemaData.js, S02SeedData.js
  * Zero-arg functions: runS02DryRun, runS02Apply, runS02Validate.
+ * Schema and config seed are embedded in S02SchemaData.js and S02SeedData.js.
+ * Only S01_CONFIG remains in Script Properties.
  * No triggers, no email, no calendar, no network calls.
  */
 
@@ -13,7 +16,7 @@ function _loadProvisionerConfig() {
   }
 
   var sheetId = SpreadsheetApp.getActiveSpreadsheet().getId();
-  var configuredSheetId = config.sheetId || config.spreadsheetId || null;
+  var configuredSheetId = config.sheetId || null;
 
   if (!configuredSheetId) {
     throw new Error('S02_PROVISIONER_REFUSED: S01_CONFIG.sheetId is mandatory. Set it to the DEV Sheet ID.');
@@ -23,19 +26,20 @@ function _loadProvisionerConfig() {
     throw new Error('S02_PROVISIONER_REFUSED: sheet identity mismatch. Expected ' + configuredSheetId + ', got ' + sheetId);
   }
 
-  var schemaJson = properties.getProperty('S02_SCHEMA');
-  if (!schemaJson) {
-    throw new Error('S02_PROVISIONER_REFUSED: S02_SCHEMA property not set. Paste schema/tables.json content.');
-  }
+  // Schema and config seed are embedded in companion .gs files
+  var schema = getS02SchemaDefinition();
+  var configSeed = getS02ConfigSeed();
 
-  var configJson = properties.getProperty('S02_CONFIG_SEED');
+  if (!schema || !schema.tables || schema.tables.length === 0) {
+    throw new Error('S02_PROVISIONER_REFUSED: embedded schema is empty or invalid.');
+  }
 
   return {
     config: config,
     sheetId: sheetId,
     configuredSheetId: configuredSheetId,
-    schema: JSON.parse(schemaJson),
-    configSeed: configJson ? JSON.parse(configJson) : null
+    schema: schema,
+    configSeed: configSeed || null
   };
 }
 
@@ -68,17 +72,14 @@ function runS02Apply() {
 }
 
 function runS02Validate() {
-  var properties = PropertiesService.getScriptProperties();
-  var schemaJson = properties.getProperty('S02_SCHEMA');
-  var configJson = properties.getProperty('S02_CONFIG_SEED');
-
-  if (!schemaJson) {
-    throw new Error('S02_VALIDATE_REFUSED: S02_SCHEMA property not set.');
-  }
-
-  var schema = JSON.parse(schemaJson);
-  var configSeed = configJson ? JSON.parse(configJson) : null;
   var adapter = new AppsScriptSheetAdapter();
+
+  var schema = getS02SchemaDefinition();
+  var configSeed = getS02ConfigSeed();
+
+  if (!schema || !schema.tables) {
+    throw new Error('S02_VALIDATE_REFUSED: embedded schema is empty or invalid.');
+  }
 
   var result = S02Provisioner.validateSchema(schema, configSeed, adapter);
   console.log(JSON.stringify(result, null, 2));
