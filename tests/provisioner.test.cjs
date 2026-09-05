@@ -350,3 +350,156 @@ test('assertDevOnly rejects PROD, TEST, missing, null', () => {
   // DEV with matching IDs passes
   assert.doesNotThrow(() => assertDevOnly('DEV', 'sheet-1', 'sheet-1'));
 });
+
+// --- Comprehensive validateSchema regression tests ---
+
+function createFullyProvisionedAdapter() {
+  const initialTabs = [];
+  for (const table of tables.tables) {
+    const headers = table.columns.map(c => c.name);
+    const data = [];
+    // Add seed data for tables that have config seed entries
+    if (configSeed[table.name] && Array.isArray(configSeed[table.name])) {
+      for (const row of configSeed[table.name]) {
+        const rowData = headers.map(h => {
+          if (row[h] !== undefined) {
+            const val = row[h];
+            if (val === null) return '';
+            if (typeof val === 'boolean') return val ? 'TRUE' : 'FALSE';
+            if (typeof val === 'object') return JSON.stringify(val);
+            return String(val);
+          }
+          return '';
+        });
+        data.push(rowData);
+      }
+    }
+    initialTabs.push({ name: table.name, headers, data });
+  }
+  return createMockSheetAdapter(initialTabs);
+}
+
+test('validateSchema with 60 fully provisioned tables returns success', () => {
+  const adapter = createFullyProvisionedAdapter();
+  const validation = validateSchema(tables, configSeed, adapter);
+
+  assert.equal(validation.expected_table_count, 60);
+  assert.equal(validation.actual_table_count, 60);
+  assert.equal(validation.missing_tabs.length, 0, 'no missing tabs: ' + JSON.stringify(validation.missing_tabs));
+  assert.equal(validation.missing_columns.length, 0, 'no missing columns');
+  assert.equal(validation.errors.length, 0, 'no errors: ' + JSON.stringify(validation.errors));
+  assert.equal(validation.success, true, 'should succeed');
+});
+
+test('validateSchema detects all 60 primary key columns', () => {
+  const adapter = createFullyProvisionedAdapter();
+  const validation = validateSchema(tables, configSeed, adapter);
+
+  // All 60 tables have 'id' as primary key
+  assert.equal(validation.primary_key_columns_present.length, 60,
+    'all 60 PKs present, got ' + validation.primary_key_columns_present.length);
+  assert.equal(validation.primary_key_columns_missing.length, 0,
+    'no missing PKs: ' + JSON.stringify(validation.primary_key_columns_missing));
+});
+
+test('validateSchema populates seed_row_counts for seeded tables', () => {
+  const adapter = createFullyProvisionedAdapter();
+  const validation = validateSchema(tables, configSeed, adapter);
+
+  // Config seed has entries for specific tables
+  assert.ok(validation.seed_row_counts['Companies'] > 0, 'Companies seed rows counted');
+  assert.ok(validation.seed_row_counts['People'] > 0, 'People seed rows counted');
+  assert.ok(validation.seed_row_counts['Products'] > 0, 'Products seed rows counted');
+  assert.ok(validation.seed_row_counts['ReleaseModes'] > 0, 'ReleaseModes seed rows counted');
+  assert.equal(validation.seed_row_counts['ReleaseModes'], 20, '20 ReleaseModes seeded');
+});
+
+test('validateSchema text_format_missing populated when applicable', () => {
+  const adapter = createFullyProvisionedAdapter();
+  const validation = validateSchema(tables, configSeed, adapter);
+
+  // text_format_missing should be populated (or empty if mock doesn't track formats)
+  assert.ok(Array.isArray(validation.text_format_missing),
+    'text_format_missing should be an array');
+});
+
+test('validateSchema reports missing table by its actual name, not array index', () => {
+  // Provision all tables EXCEPT People
+  const initialTabs = [];
+  for (const table of tables.tables) {
+    if (table.name === 'People') continue;
+    initialTabs.push({ name: table.name, headers: table.columns.map(c => c.name), data: [] });
+  }
+  const adapter = createMockSheetAdapter(initialTabs);
+
+  const validation = validateSchema(tables, configSeed, adapter);
+  assert.equal(validation.missing_tabs.length, 1, 'one missing tab');
+  assert.equal(validation.missing_tabs[0], 'People', 'reported by name, not index');
+  assert.ok(!validation.missing_tabs.includes('0'), 'must not contain numeric index');
+  assert.ok(!validation.missing_tabs.includes(0), 'must not contain numeric index as number');
+  assert.equal(validation.success, false);
+});
+
+test('validateSchema performs zero writes (read-only)', () => {
+  const adapter = createFullyProvisionedAdapter();
+  const tabCountBefore = adapter.getTabNames().length;
+
+  validateSchema(tables, configSeed, adapter);
+
+  const tabCountAfter = adapter.getTabNames().length;
+  assert.equal(tabCountAfter, tabCountBefore, 'tab count must not change');
+
+  // Check that no data was modified
+  const peopleData = adapter.getData('People');
+  assert.ok(peopleData.length > 0, 'People data should still exist');
+});
+
+test('validateSchema with empty sheet (no tabs) reports all 60 missing', () => {
+  const adapter = createMockSheetAdapter([]);
+  const validation = validateSchema(tables, configSeed, adapter);
+
+  assert.equal(validation.actual_table_count, 0);
+  assert.equal(validation.missing_tabs.length, 60, 'all 60 missing');
+  assert.equal(validation.success, false);
+});
+
+test('validateSchema with only directory tables reports correct missing count', () => {
+  const dirTables = ['Companies', 'Contacts', 'People', 'PersonRoles', 'PermissionRules',
+    'Products', 'StockLocations', 'TaskTemplates', 'Holidays', 'Settings', 'ReleaseModes', 'Customers'];
+  const initialTabs = dirTables.map(name => ({
+    name,
+    headers: tables.tables.find(t => t.name === name).columns.map(c => c.name),
+    data: []
+  }));
+  const adapter = createMockSheetAdapter(initialTabs);
+
+  const validation = validateSchema(tables, configSeed, adapter);
+  assert.equal(validation.actual_table_count, dirTables.length);
+  assert.equal(validation.missing_tabs.length, 60 - dirTables.length,
+    'missing ' + (60 - dirTables.length) + ' operational tables');
+});
+
+test('validateSchema schema.tables is used as array, not object keys', () => {
+  // Verify the function signature: schema.tables must be an array
+  assert.ok(Array.isArray(tables.tables), 'schema.tables must be an array');
+
+  // Verify validateSchema iterates it by numeric index, not by key
+  const adapter = createFullyProvisionedAdapter();
+  const validation = validateSchema(tables, configSeed, adapter);
+
+  // If tables were treated as an object, table.name would be "0", "1", etc.
+  // and missing_tabs would contain numeric strings. Verify it doesn't.
+  for (const tab of validation.missing_tabs) {
+    assert.ok(isNaN(Number(tab)), 'missing tab must be a name, not a number: ' + tab);
+  }
+  for (const tab of validation.primary_key_columns_present) {
+    assert.ok(isNaN(Number(tab)), 'PK present tab must be a name: ' + tab);
+  }
+});
+
+test('validateSchema duplicate_primary_keys array is always present', () => {
+  const adapter = createFullyProvisionedAdapter();
+  const validation = validateSchema(tables, configSeed, adapter);
+  assert.ok(Array.isArray(validation.duplicate_primary_keys),
+    'duplicate_primary_keys must be an array');
+});

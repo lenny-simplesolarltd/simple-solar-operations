@@ -74,16 +74,10 @@ function runS02Apply() {
 }
 
 function runS02Validate() {
+  var cfg = _loadProvisionerConfig();
   var adapter = new AppsScriptSheetAdapter();
 
-  var schema = getS02SchemaDefinition();
-  var configSeed = getS02ConfigSeed();
-
-  if (!schema || !schema.tables) {
-    throw new Error('S02_VALIDATE_REFUSED: embedded schema is empty or invalid.');
-  }
-
-  var result = S02Provisioner.validateSchema(schema, configSeed, adapter);
+  var result = S02Provisioner.validateSchema(cfg.schema, cfg.configSeed, adapter);
   console.log(JSON.stringify(result, null, 2));
   return result;
 }
@@ -191,8 +185,8 @@ var AppsScriptSheetAdapter = function() {
         }
       }
       if (colIdx >= 0) {
-        // Check format of row 2 in that column
-        var lastRow = Math.max(sheet.getLastRow(), 2);
+        // Only check format if there are data rows (row 2+)
+        var lastRow = sheet.getLastRow();
         if (lastRow >= 2) {
           var range = sheet.getRange(2, colIdx + 1);
           var format = range.getNumberFormat();
