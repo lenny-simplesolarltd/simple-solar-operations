@@ -6,11 +6,14 @@
 
 const SCHEMA_VERSION = 'S02-1.0';
 
-function assertDevOnly(environment, sheetId, configuredSheetId) {
+function assertDevOnly(environment, sheetId, configuredSheetId, isDryRun) {
   if (environment !== 'DEV') {
     throw new Error('S02_PROVISIONER_REFUSED: environment must be DEV, got ' + environment);
   }
-  if (configuredSheetId && sheetId !== configuredSheetId) {
+  if (!configuredSheetId) {
+    throw new Error('S02_PROVISIONER_REFUSED: configuredSheetId is mandatory');
+  }
+  if (sheetId !== configuredSheetId) {
     throw new Error('S02_PROVISIONER_REFUSED: sheet identity mismatch. Expected ' + configuredSheetId + ', got ' + sheetId);
   }
 }
@@ -47,7 +50,7 @@ function provisionSchema(schema, configSeed, sheetAdapter, options = {}) {
   };
 
   try {
-    assertDevOnly(environment, result.sheet_id, configuredSheetId);
+    assertDevOnly(environment, result.sheet_id, configuredSheetId, dryRun);
 
     const seedOrder = schema.seed_order || schema.tables.map(t => t.name);
     const existingTabs = sheetAdapter.getTabNames();

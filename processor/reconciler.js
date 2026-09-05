@@ -11,36 +11,44 @@ function recoverUncommitted(journal, dataStore, auditLog) {
   const uncommitted = [];
   for (const [, entry] of journal.entries) {
     if (entry.state === CommitState.PREPARED) {
-      // Prepared but never applied — safe to discard
-      uncommitted.push({ commit_id: entry.commit_id, action: 'discard', reason: 'never applied' });
+      uncommitted.push({ commit_id: entry.commit_id, action: 'discard', reason: 'PREPARED but never applied' });
     } else if (entry.state === CommitState.APPLYING) {
-      // Applying but not committed — need to check if changes were applied
       const changes = JSON.parse(entry.changes_json);
-      const partiallyApplied = checkPartialApplication(dataStore, entry.entity_type, entry.entity_id, changes);
-      if (partiallyApplied) {
-        // Changes exist — can commit
-        uncommitted.push({ commit_id: entry.commit_id, action: 'commit', reason: 'partially applied, safe to commit' });
+      const appStatus = checkApplicationStatus(dataStore, entry.entity_type, entry.entity_id, changes);
+
+      if (appStatus === 'FULLY_APPLIED') {
+        uncommitted.push({ commit_id: entry.commit_id, action: 'commit', reason: 'all changes verified in data store' });
+      } else if (appStatus === 'NOT_APPLIED') {
+        uncommitted.push({ commit_id: entry.commit_id, action: 'discard', reason: 'no changes found in data store' });
       } else {
-        // No changes found — can discard
-        uncommitted.push({ commit_id: entry.commit_id, action: 'discard', reason: 'not applied' });
+        uncommitted.push({ commit_id: entry.commit_id, action: 'manual_review', reason: 'PARTIALLY_APPLIED — some changes present, some missing. Do not assume completion.' });
       }
     } else if (entry.state === CommitState.RECOVERY_REQUIRED) {
-      uncommitted.push({ commit_id: entry.commit_id, action: 'manual_review', reason: 'needs human decision' });
+      uncommitted.push({ commit_id: entry.commit_id, action: 'manual_review', reason: 'explicitly marked RECOVERY_REQUIRED' });
     }
   }
   return uncommitted;
 }
 
-function checkPartialApplication(dataStore, entityType, entityId, changes) {
-  if (!dataStore || !dataStore[entityType]) return false;
+function checkApplicationStatus(dataStore, entityType, entityId, changes) {
+  if (!dataStore || !dataStore[entityType]) return 'NOT_APPLIED';
   const record = dataStore[entityType].get(entityId);
-  if (!record) return false;
+  if (!record) return 'NOT_APPLIED';
 
-  // Check if any changed field matches
+  const changeKeys = Object.keys(changes).filter(k => !k.startsWith('_'));
+  if (changeKeys.length === 0) return 'FULLY_APPLIED';
+
+  let appliedCount = 0;
   for (const [field, newValue] of Object.entries(changes)) {
-    if (record[field] !== undefined && record[field] === newValue) return true;
+    if (field.startsWith('_')) continue;
+    if (record[field] !== undefined && record[field] === newValue) {
+      appliedCount++;
+    }
   }
-  return false;
+
+  if (appliedCount === changeKeys.length) return 'FULLY_APPLIED';
+  if (appliedCount === 0) return 'NOT_APPLIED';
+  return 'PARTIALLY_APPLIED';
 }
 
 function reconcileOutbox(outbox, externalStateChecker) {

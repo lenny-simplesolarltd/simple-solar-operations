@@ -167,37 +167,42 @@ test('pilot-only function accepts pilot job', () => {
 });
 
 // --- 8. Partial/interrupted commit ---
-test('interrupted commit after APPLYING is recoverable', () => {
+test('interrupted commit: FULLY_APPLIED is safe to commit', () => {
   const journal = createJournal();
-  const changes = { status: 'updated' };
+  const changes = { status: 'updated', assigned_to: 'PERSON-tanya' };
   prepareCommit(journal, 'COMMIT-1', 'CMD-1', 'Job', 'JOB-1', 1, changes);
   markApplying(journal, 'COMMIT-1');
 
-  const dataStore = { Job: new Map([['JOB-1', { id: 'JOB-1', version: 1, status: 'updated', created_at: '2026-01-01' }]]) };
+  const dataStore = { Job: new Map([['JOB-1', { id: 'JOB-1', version: 1, status: 'updated', assigned_to: 'PERSON-tanya', created_at: '2026-01-01' }]]) };
 
   const recovery = recoverUncommitted(journal, dataStore, { events: [] });
   const commitAction = recovery.find(r => r.commit_id === 'COMMIT-1');
-  assert.equal(commitAction.action, 'commit', 'partially applied should be committed');
+  assert.equal(commitAction.action, 'commit', 'fully applied should be committed');
 });
 
-test('PREPARED but never applied is discarded', () => {
+test('interrupted commit: NOT_APPLIED is safe to discard', () => {
   const journal = createJournal();
   prepareCommit(journal, 'COMMIT-2', 'CMD-2', 'Job', 'JOB-2', 1, { status: 'new' });
+  markApplying(journal, 'COMMIT-2');
 
   const recovery = recoverUncommitted(journal, {}, { events: [] });
   const discardAction = recovery.find(r => r.commit_id === 'COMMIT-2');
-  assert.equal(discardAction.action, 'discard', 'never applied should be discarded');
+  assert.equal(discardAction.action, 'discard', 'not applied should be discarded');
 });
 
-test('RECOVERY_REQUIRED needs manual review', () => {
+test('interrupted commit: PARTIALLY_APPLIED requires manual review', () => {
   const journal = createJournal();
-  prepareCommit(journal, 'COMMIT-3', 'CMD-3', 'Job', 'JOB-3', 1, {});
+  const changes = { status: 'updated', assigned_to: 'PERSON-tanya', priority: 'high' };
+  prepareCommit(journal, 'COMMIT-3', 'CMD-3', 'Job', 'JOB-3', 1, changes);
   markApplying(journal, 'COMMIT-3');
-  markRecoveryRequired(journal, 'COMMIT-3');
 
-  const recovery = recoverUncommitted(journal, {}, { events: [] });
+  // Only status was applied; assigned_to and priority are missing
+  const dataStore = { Job: new Map([['JOB-3', { id: 'JOB-3', version: 1, status: 'updated', created_at: '2026-01-01' }]]) };
+
+  const recovery = recoverUncommitted(journal, dataStore, { events: [] });
   const reviewAction = recovery.find(r => r.commit_id === 'COMMIT-3');
-  assert.equal(reviewAction.action, 'manual_review');
+  assert.equal(reviewAction.action, 'manual_review', 'partially applied must go to manual review');
+  assert.ok(reviewAction.reason.includes('PARTIALLY_APPLIED'));
 });
 
 // --- 9. Task creation exactly once ---
@@ -444,25 +449,31 @@ test('command envelope requires all mandatory fields', () => {
   assert.equal(validateCommandEnvelope(noActor).valid, false);
 });
 
-// --- 24. Admin can do anything ---
-test('admin bypasses all permission checks', () => {
+// --- 24. Admin role permission authorization (not a bypass of mode/lock/audit) ---
+test('admin role passes permission checks but does not bypass ReleaseMode or locking', () => {
+  // Admin can perform actions that Office role cannot (permission check only).
+  // Admin does NOT bypass: ReleaseMode enforcement, pilot scope, version checks,
+  // locking, idempotency, or audit recording.
+
+  // Admin can complete tasks (Office can too, but this verifies admin permission path)
   const proc = createProcessor({ releaseModes, peopleDirectory: peopleDir });
-  // Even for a Disabled function, admin should be able to... actually no,
-  // ReleaseMode enforcement happens before permission check? Let me check.
-  // The processor checks: envelope → idempotency → actor → permission → schema → mode → lock...
-  // So mode check happens after permission. Admin can pass permission but mode check still applies.
-  // This is correct — even admin cannot run Disabled functions.
+  const cmd = makeCommand('COMPLETE_TASK', makeActor('ben@office.test', ['Admin']), 'JOB-1', null, {});
+  const r = proc.process(cmd);
+  assert.equal(r.accepted, true, 'admin can complete tasks via permission check');
 
-  // But admin CAN run functions that non-admins cannot
-  const cmd = makeCommand('RECONCILE', makeActor('ben@office.test', ['Admin']), 'JOB-1', null, {});
-  // RECONCILE maps to FN-14 which is Disabled — so even admin can't run it
-  // Let me test with an automated function that Office can't do
+  // Admin still cannot run Disabled functions
+  const proc2 = createProcessor({ releaseModes, peopleDirectory: peopleDir });
   const cmd2 = makeCommand('CREATE_ORDER', makeActor('ben@office.test', ['Admin']), 'JOB-1', null, {});
-  // CREATE_ORDER maps to FN-03 which is Disabled
-  // So this gets caught by mode check
+  const r2 = proc2.process(cmd2);
+  assert.equal(r2.accepted, false, 'admin cannot bypass Disabled mode');
+  assert.equal(r2.error_category, 'DisabledMode');
 
-  // Actually admin bypasses permissions but not mode enforcement
-  const cmd3 = makeCommand('COMPLETE_TASK', makeActor('ben@office.test', ['Admin']), 'JOB-1', null, {});
-  const r = proc.process(cmd3);
-  assert.equal(r.accepted, true, 'admin can complete tasks');
+  // Admin still subject to version conflicts
+  const proc3 = createProcessor({ releaseModes, peopleDirectory: peopleDir });
+  proc3.getProcessor().dataStore['Job'] = new Map();
+  proc3.getProcessor().dataStore['Job'].set('JOB-1', { id: 'JOB-1', version: 5, created_at: '2026-01-01', created_by: 'system' });
+  const cmd3 = makeCommand('COMPLETE_TASK', makeActor('ben@office.test', ['Admin']), 'JOB-1', 3, {});
+  const r3 = proc3.process(cmd3);
+  assert.equal(r3.accepted, false, 'admin cannot bypass version check');
+  assert.equal(r3.error_category, 'Concurrency');
 });

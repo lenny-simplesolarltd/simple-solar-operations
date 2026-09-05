@@ -143,14 +143,11 @@ test('refuses sheet identity mismatch', () => {
   assert.ok(result.errors.some(e => e.includes('sheet identity mismatch')), 'should reject mismatch');
 });
 
-test('accepts null configuredSheetId (no mismatch check)', () => {
+test('refuses missing configuredSheetId', () => {
   const adapter = createMockSheetAdapter();
-  const result = provisionSchema(tables, configSeed, adapter, {
-    dryRun: true,
-    environment: 'DEV',
-    configuredSheetId: null
-  });
-  assert.equal(result.success, true);
+  const result = provisionSchema(tables, configSeed, adapter, { environment: 'DEV', configuredSheetId: null });
+  assert.equal(result.success, false);
+  assert.ok(result.errors.some(e => e.includes('configuredSheetId is mandatory')), 'should reject null configuredSheetId');
 });
 
 // --- Idempotency ---
@@ -340,11 +337,16 @@ test('provisioner preserves existing data when adding columns', () => {
 });
 
 test('assertDevOnly rejects PROD, TEST, missing, null', () => {
-  assert.throws(() => assertDevOnly('PROD'), /environment must be DEV/);
-  assert.throws(() => assertDevOnly('TEST'), /environment must be DEV/);
-  assert.throws(() => assertDevOnly('dev'), /environment must be DEV/);
-  assert.throws(() => assertDevOnly(null), /environment must be DEV/);
-  assert.throws(() => assertDevOnly(undefined), /environment must be DEV/);
-  // DEV passes
-  assert.doesNotThrow(() => assertDevOnly('DEV'));
+  assert.throws(() => assertDevOnly('PROD', 'sheet-1', 'sheet-1'), /environment must be DEV/);
+  assert.throws(() => assertDevOnly('TEST', 'sheet-1', 'sheet-1'), /environment must be DEV/);
+  assert.throws(() => assertDevOnly('dev', 'sheet-1', 'sheet-1'), /environment must be DEV/);
+  assert.throws(() => assertDevOnly(null, 'sheet-1', 'sheet-1'), /environment must be DEV/);
+  assert.throws(() => assertDevOnly(undefined, 'sheet-1', 'sheet-1'), /environment must be DEV/);
+  // configuredSheetId mandatory
+  assert.throws(() => assertDevOnly('DEV', 'sheet-1', null), /configuredSheetId is mandatory/);
+  assert.throws(() => assertDevOnly('DEV', 'sheet-1', ''), /configuredSheetId is mandatory/);
+  // Sheet ID mismatch
+  assert.throws(() => assertDevOnly('DEV', 'sheet-1', 'sheet-2'), /sheet identity mismatch/);
+  // DEV with matching IDs passes
+  assert.doesNotThrow(() => assertDevOnly('DEV', 'sheet-1', 'sheet-1'));
 });

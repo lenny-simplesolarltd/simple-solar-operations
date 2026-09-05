@@ -1,39 +1,66 @@
-/* S02 DEV schema provisioner — Apps Script entry point.
+/* S02 DEV schema provisioner — Apps Script entry points.
  * Deploy to the DEV Sheet-bound Apps Script project alongside OutboundGuard and S01Probe.
+ * Zero-arg functions: runS02DryRun, runS02Apply, runS02Validate.
  * No triggers, no email, no calendar, no network calls.
  */
 
-function runS02Provisioner(dryRun) {
-  const isDryRun = dryRun === true || dryRun === 'true' || dryRun === 'DRY_RUN';
-
-  // Read schema from Script Properties or from the embedded variable
+function _loadProvisionerConfig() {
   var properties = PropertiesService.getScriptProperties();
   var config = JSON.parse(properties.getProperty('S01_CONFIG') || 'null');
 
   if (!config || config.environment !== 'DEV') {
-    throw new Error('S02_PROVISIONER_REFUSED: S01_CONFIG.environment must be DEV');
+    throw new Error('S02_PROVISIONER_REFUSED: S01_CONFIG.environment must be DEV, got ' + (config ? config.environment : 'null'));
   }
 
   var sheetId = SpreadsheetApp.getActiveSpreadsheet().getId();
   var configuredSheetId = config.sheetId || config.spreadsheetId || null;
 
-  var adapter = new AppsScriptSheetAdapter();
+  if (!configuredSheetId) {
+    throw new Error('S02_PROVISIONER_REFUSED: S01_CONFIG.sheetId is mandatory. Set it to the DEV Sheet ID.');
+  }
 
-  // Load schema from the embedded S02_SCHEMA property or a separate file
+  if (sheetId !== configuredSheetId) {
+    throw new Error('S02_PROVISIONER_REFUSED: sheet identity mismatch. Expected ' + configuredSheetId + ', got ' + sheetId);
+  }
+
   var schemaJson = properties.getProperty('S02_SCHEMA');
-  var configJson = properties.getProperty('S02_CONFIG_SEED');
-
   if (!schemaJson) {
     throw new Error('S02_PROVISIONER_REFUSED: S02_SCHEMA property not set. Paste schema/tables.json content.');
   }
 
-  var schema = JSON.parse(schemaJson);
-  var configSeed = configJson ? JSON.parse(configJson) : null;
+  var configJson = properties.getProperty('S02_CONFIG_SEED');
 
-  var result = S02Provisioner.provisionSchema(schema, configSeed, adapter, {
-    dryRun: isDryRun,
-    environment: config.environment,
-    configuredSheetId: configuredSheetId
+  return {
+    config: config,
+    sheetId: sheetId,
+    configuredSheetId: configuredSheetId,
+    schema: JSON.parse(schemaJson),
+    configSeed: configJson ? JSON.parse(configJson) : null
+  };
+}
+
+function runS02DryRun() {
+  var cfg = _loadProvisionerConfig();
+  var adapter = new AppsScriptSheetAdapter();
+
+  var result = S02Provisioner.provisionSchema(cfg.schema, cfg.configSeed, adapter, {
+    dryRun: true,
+    environment: cfg.config.environment,
+    configuredSheetId: cfg.configuredSheetId
+  });
+
+  console.log(JSON.stringify(result, null, 2));
+  return result;
+}
+
+function runS02Apply() {
+  var cfg = _loadProvisionerConfig();
+  var adapter = new AppsScriptSheetAdapter();
+
+  var result = S02Provisioner.provisionSchema(cfg.schema, cfg.configSeed, adapter, {
+    dryRun: false,
+    environment: cfg.config.environment,
+    configuredSheetId: cfg.configuredSheetId
   });
 
   console.log(JSON.stringify(result, null, 2));
