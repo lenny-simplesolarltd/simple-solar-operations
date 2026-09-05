@@ -1,0 +1,90 @@
+TAP version 13
+# Subtest: EMAIL: allowed capture succeeds without a transport call
+ok 1 - EMAIL: allowed capture succeeds without a transport call
+  ---
+  duration_ms: 0.604417
+  ...
+# Subtest: EMAIL: mixed approved and unapproved recipients refused before transport
+ok 2 - EMAIL: mixed approved and unapproved recipients refused before transport
+  ---
+  duration_ms: 0.215417
+  ...
+# Subtest: CALENDAR: allowed capture succeeds without a transport call
+ok 3 - CALENDAR: allowed capture succeeds without a transport call
+  ---
+  duration_ms: 0.06025
+  ...
+# Subtest: CALENDAR: mixed approved and unapproved recipients refused before transport
+ok 4 - CALENDAR: mixed approved and unapproved recipients refused before transport
+  ---
+  duration_ms: 0.101792
+  ...
+# Subtest: CC and BCC cannot bypass allowlist
+ok 5 - CC and BCC cannot bypass allowlist
+  ---
+  duration_ms: 0.434167
+  ...
+# Subtest: reject display names, lists, wildcards, whitespace and header injection
+ok 6 - reject display names, lists, wildcards, whitespace and header injection
+  ---
+  duration_ms: 0.130125
+  ...
+# Subtest: bare mailbox case normalization works without alias or domain matching
+ok 7 - bare mailbox case normalization works without alias or domain matching
+  ---
+  duration_ms: 0.054333
+  ...
+# Subtest: missing configuration, invalid environments and PROD fail closed
+ok 8 - missing configuration, invalid environments and PROD fail closed
+  ---
+  duration_ms: 0.066667
+  ...
+# Subtest: PROBE requires explicit enablement
+ok 9 - PROBE requires explicit enablement
+  ---
+  duration_ms: 0.215833
+  ...
+# Subtest: calendar target is independently restricted
+ok 10 - calendar target is independently restricted
+  ---
+  duration_ms: 0.263583
+  ...
+# Subtest: reject unsupported channels and undeclared routing fields
+ok 11 - reject unsupported channels and undeclared routing fields
+  ---
+  duration_ms: 0.136333
+  ...
+# Subtest: EMAIL: probe wrapper submits through stub only and does not claim receipt
+ok 12 - EMAIL: probe wrapper submits through stub only and does not claim receipt
+  ---
+  duration_ms: 0.8385
+  ...
+# Subtest: EMAIL: wrapper refuses unapproved destination with no side effect
+ok 13 - EMAIL: wrapper refuses unapproved destination with no side effect
+  ---
+  duration_ms: 0.293709
+  ...
+# Subtest: CALENDAR: probe wrapper submits through stub only and does not claim receipt
+ok 14 - CALENDAR: probe wrapper submits through stub only and does not claim receipt
+  ---
+  duration_ms: 0.34375
+  ...
+# Subtest: CALENDAR: wrapper refuses unapproved destination with no side effect
+ok 15 - CALENDAR: wrapper refuses unapproved destination with no side effect
+  ---
+  duration_ms: 0.270041
+  ...
+# Subtest: wrapper refuses wrong project and non-owned calendar
+ok 16 - wrapper refuses wrong project and non-owned calendar
+  ---
+  duration_ms: 0.569459
+  ...
+1..16
+# tests 16
+# suites 0
+# pass 16
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 66.40025

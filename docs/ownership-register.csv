@@ -1,0 +1,14 @@
+asset_or_role,required_owner,actual_company_account,developer_access,recovery_owner_contact,backup,licence_renewal_owner,evidence,verified_by,verified_at,status
+Repository/project inventory,Ben / company,,,,,,,,,BLOCKED — INPUT REQUIRED
+Workspace project folders,Company administrator designated by Ben,,,,,,,,,BLOCKED — INPUT REQUIRED
+DEV Apps Script and connection,Company-controlled automation identity,,,,,,,,,BLOCKED — INPUT REQUIRED
+TEST Apps Script and connection,Company-controlled automation identity,,,,,,,,,BLOCKED — INPUT REQUIRED
+DEV AppSheet and sources,Company-controlled app owner,,,,,,,,,BLOCKED — INPUT REQUIRED
+TEST AppSheet and sources,Company-controlled app owner,,,,,,,,,BLOCKED — INPUT REQUIRED
+Integration accounts,Actual connection owner per integration inventory,,,,,,,,,BLOCKED — INPUT REQUIRED
+Operations,Tanya; escalation backup Ben,,,,,,,,,BLOCKED — INPUT REQUIRED
+Variations/Phoenix evidence,Hannah,,,,,,,,,BLOCKED — INPUT REQUIRED
+Bank deposit approval,Ben,,,,,,,,,BLOCKED — INPUT REQUIRED
+Commissioning,Technical reviewer,,,,,,,,,BLOCKED — INPUT REQUIRED
+Finance policy,Accountant/finance owner,,,,,,,,,BLOCKED — INPUT REQUIRED
+Implementation/support,Named developer during agreed term,,,,,,,,,BLOCKED — INPUT REQUIRED

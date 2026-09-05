@@ -1,0 +1,22 @@
+{
+  "fixture": "S01-PROBES-v1",
+  "synthetic": true,
+  "approved": "approved@example.invalid",
+  "outsideAllowlist": "outside@example.invalid",
+  "calendarId": "synthetic-test-calendar",
+  "requests": [
+    {
+      "kind": "EMAIL",
+      "to": [
+        "approved@example.invalid"
+      ]
+    },
+    {
+      "kind": "CALENDAR",
+      "to": [
+        "approved@example.invalid"
+      ],
+      "calendarId": "synthetic-test-calendar"
+    }
+  ]
+}

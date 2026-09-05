@@ -1,0 +1,1 @@
+defect_id,test_id,severity,summary,steps_to_reproduce,expected_result,actual_result,environment,release_version,reported_by,reported_at,owner,status,evidence,fix_version,retest_result,retested_by,retested_at,notes

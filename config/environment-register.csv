@@ -1,0 +1,22 @@
+environment,resource_type,resource_id_protected_reference,company_owner,connection_owner,allowed_users,production_access_denied_evidence,timezone,permitted_data,credential_store_reference,verified_by,verified_at,status
+DEV,Project folder,,,,,,Europe/London,Synthetic only,,,,BLOCKED — INPUT REQUIRED
+DEV,Sheets,,,,,,Europe/London,Synthetic only,,,,BLOCKED — INPUT REQUIRED
+DEV,Drive evidence folder,,,,,,Europe/London,Synthetic only,,,,BLOCKED — INPUT REQUIRED
+DEV,Secondary Calendar,,,,,,Europe/London,Synthetic only,,,,BLOCKED — INPUT REQUIRED
+DEV,AppSheet app/data connections,,,,,,Europe/London,Synthetic only,,,,BLOCKED — INPUT REQUIRED
+DEV,Apps Script project,,,,,,Europe/London,Synthetic only,,,,BLOCKED — INPUT REQUIRED
+DEV,Credential/config store,,,,,,Europe/London,Synthetic only,,,,BLOCKED — INPUT REQUIRED
+TEST,Project folder,,,,,,Europe/London,Synthetic only,,,,BLOCKED — INPUT REQUIRED
+TEST,Sheets,,,,,,Europe/London,Synthetic only,,,,BLOCKED — INPUT REQUIRED
+TEST,Drive evidence folder,,,,,,Europe/London,Synthetic only,,,,BLOCKED — INPUT REQUIRED
+TEST,Secondary Calendar,,,,,,Europe/London,Synthetic only,,,,BLOCKED — INPUT REQUIRED
+TEST,AppSheet app/data connections,,,,,,Europe/London,Synthetic only,,,,BLOCKED — INPUT REQUIRED
+TEST,Apps Script project,,,,,,Europe/London,Synthetic only,,,,BLOCKED — INPUT REQUIRED
+TEST,Credential/config store,,,,,,Europe/London,Synthetic only,,,,BLOCKED — INPUT REQUIRED
+PROD,Project folder,,,,,,Europe/London,No S01 deployment or modification,,,,BLOCKED — INPUT REQUIRED
+PROD,Sheets,,,,,,Europe/London,No S01 deployment or modification,,,,BLOCKED — INPUT REQUIRED
+PROD,Drive evidence folder,,,,,,Europe/London,No S01 deployment or modification,,,,BLOCKED — INPUT REQUIRED
+PROD,Secondary Calendar,,,,,,Europe/London,No S01 deployment or modification,,,,BLOCKED — INPUT REQUIRED
+PROD,AppSheet app/data connections,,,,,,Europe/London,No S01 deployment or modification,,,,BLOCKED — INPUT REQUIRED
+PROD,Apps Script project,,,,,,Europe/London,No S01 deployment or modification,,,,BLOCKED — INPUT REQUIRED
+PROD,Credential/config store,,,,,,Europe/London,No S01 deployment or modification,,,,BLOCKED — INPUT REQUIRED

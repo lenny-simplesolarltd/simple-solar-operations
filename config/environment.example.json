@@ -1,0 +1,24 @@
+{
+  "environment": "TEST",
+  "timezone": "Europe/London",
+  "mode": "CAPTURE",
+  "probeEnabled": false,
+  "scriptProjectId": null,
+  "sheetId": null,
+  "evidenceFolderId": null,
+  "appSheetAppId": null,
+  "allowedRecipients": [],
+  "allowedCalendarIds": [],
+  "businessCalendar": {
+    "staffedWeekdays": [
+      1,
+      2,
+      3,
+      4,
+      5
+    ],
+    "holidayDates": null,
+    "capacitySettings": null,
+    "status": "Defaults from specification; confirm with Ben; no business scheduler implemented"
+  }
+}

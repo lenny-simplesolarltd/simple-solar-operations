@@ -1,0 +1,18 @@
+{
+  "started_at_utc": "2026-09-05T08:25:02.890437+00:00",
+  "finished_at_utc": "2026-09-05T08:25:03.005523+00:00",
+  "command": [
+    "node",
+    "--test",
+    "--test-reporter=tap",
+    "tests/outbound.test.cjs"
+  ],
+  "exit_code": 0,
+  "node": "v22.13.0",
+  "platform": "Darwin",
+  "tester": "Codex automated local execution",
+  "environment": "LOCAL; all transports stubbed",
+  "fixture": "S01-PROBES-v1",
+  "result": "PASS",
+  "receipt_or_cloud_access_verified": false
+}

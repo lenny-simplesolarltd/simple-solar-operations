@@ -1,0 +1,8 @@
+system,actual_plan,account_owner,test_identity_type,operation_to_verify,entitlement_evidence,observed_limit_or_unsupported_operation,agreed_implementation_path,decision_owner,verified_by,verified_at,status
+Workspace,,,Company automation owner,Licensed user/MFA; company storage and recovery; Sheets/Drive permissions,,,,Ben with developer/company administrator,,,BLOCKED — INPUT REQUIRED
+Apps Script,,,Company automation owner,Project ownership/deployment; mail/secondary Calendar scopes and quotas,,,,Ben with developer/company administrator,,,BLOCKED — INPUT REQUIRED
+AppSheet,,,Internal office test user,Required sign-in; isolated synthetic source; source/file access,,,,Ben with developer/company administrator,,,BLOCKED — INPUT REQUIRED
+AppSheet,,,External installer and scaffolder test accounts,Subscribed plan permits partner access; security filters; own test source access,,,,Ben with developer/company administrator,,,BLOCKED — INPUT REQUIRED
+Zapier/Jotform,,,Existing connection owner,Read-only current definition export and future supported intake path; no new live Zap,,,,Ben with developer/company administrator,,,BLOCKED — INPUT REQUIRED
+Zapier/Xero,,,Finance connection owner,Record plan and supported invoice/callback operations; provision test organisation or approved equivalent before S13,,,,Ben with developer/company administrator,,,BLOCKED — INPUT REQUIRED
+GHL/Phoenix,,,Existing connection owner,Read-only inventory; human-task path retained; no real actions,,,,Ben with developer/company administrator,,,BLOCKED — INPUT REQUIRED
