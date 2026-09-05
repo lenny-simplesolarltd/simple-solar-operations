@@ -82,51 +82,160 @@ function runS02Validate() {
   return result;
 }
 
+function runS02HeaderDiagnostic() {
+  var cfg = _loadProvisionerConfig();
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+
+  var result = {
+    spreadsheet_id: ss.getId(),
+    spreadsheet_name: ss.getName(),
+    total_sheets: ss.getSheets().length,
+    configured_sheet_id: cfg.configuredSheetId,
+    tests: []
+  };
+
+  var testTabs = ['Companies', 'People', 'Jobs'];
+  for (var i = 0; i < testTabs.length; i++) {
+    var tabName = testTabs[i];
+    var test = { tab: tabName };
+
+    try {
+      // Step 1: getActiveSpreadsheet
+      var ssFresh = SpreadsheetApp.getActiveSpreadsheet();
+      test.ss_fresh = !!ssFresh;
+      test.ss_fresh_id = ssFresh ? ssFresh.getId() : null;
+
+      // Step 2: getSheetByName
+      var sheet = ssFresh.getSheetByName(tabName);
+      test.sheet_found = !!sheet;
+
+      if (!sheet) {
+        test.error = 'getSheetByName returned null';
+        result.tests.push(test);
+        continue;
+      }
+
+      // Step 3: sheet metadata
+      try { test.sheet_name = sheet.getName(); } catch(e) { test.name_error = e.message; }
+      try { test.sheet_id = sheet.getSheetId(); } catch(e) { test.sheetId_error = e.message; }
+      try { test.sheet_index = sheet.getIndex(); } catch(e) { test.index_error = e.message; }
+
+      // Step 4: getLastColumn
+      try {
+        test.last_column = sheet.getLastColumn();
+      } catch(e) {
+        test.error = 'getLastColumn failed: ' + e.message;
+        result.tests.push(test);
+        continue;
+      }
+
+      // Step 5: getRange
+      try {
+        var range = sheet.getRange(1, 1, 1, test.last_column);
+        test.range_ok = true;
+      } catch(e) {
+        test.error = 'getRange(1,1,1,' + test.last_column + ') failed: ' + e.message;
+        result.tests.push(test);
+        continue;
+      }
+
+      // Step 6: getValues
+      try {
+        var values = range.getValues();
+        test.values_rows = values.length;
+        test.values_cols = values[0] ? values[0].length : 0;
+        test.first_cell = values[0] ? String(values[0][0] || '') : '';
+      } catch(e) {
+        test.error = 'getValues failed: ' + e.message;
+        result.tests.push(test);
+        continue;
+      }
+
+      test.success = true;
+    } catch(e) {
+      test.error = 'unexpected: ' + (e.message || String(e));
+    }
+
+    result.tests.push(test);
+  }
+
+  console.log(JSON.stringify(result, null, 2));
+  return result;
+}
+
 /* Apps Script Sheet adapter — implements the sheetAdapter interface using SpreadsheetApp.
- * Must be bound to the target spreadsheet. */
+ * Must be bound to the target spreadsheet.
+ * Re-acquires the spreadsheet reference per-operation to avoid stale state
+ * after programmatic sheet deletion (original S01_Setup gid=0 removed). */
 
 var AppsScriptSheetAdapter = function() {
-  this.ss = SpreadsheetApp.getActiveSpreadsheet();
+  // Do NOT cache this.ss in constructor — re-acquire per operation
+  // to avoid stale reference after sheets are added/deleted.
+
+  this._getSs = function() {
+    return SpreadsheetApp.getActiveSpreadsheet();
+  };
 
   this.getSheetId = function() {
-    return this.ss.getId();
+    return this._getSs().getId();
   };
 
   this.getTabNames = function() {
-    return this.ss.getSheets().map(function(s) { return s.getName(); });
+    return this._getSs().getSheets().map(function(s) { return s.getName(); });
   };
 
   this.createTab = function(name) {
-    var existing = this.ss.getSheetByName(name);
-    if (existing) return; // Idempotent
-    this.ss.insertSheet(name);
+    var ss = this._getSs();
+    var existing = ss.getSheetByName(name);
+    if (existing) return;
+    ss.insertSheet(name);
   };
 
   this.getHeaders = function(tabName) {
-    var sheet = this.ss.getSheetByName(tabName);
-    if (!sheet) return [];
-    var lastCol = sheet.getLastColumn();
-    if (lastCol === 0) return [];
-    var range = sheet.getRange(1, 1, 1, lastCol);
-    var values = range.getValues()[0];
-    return values.map(function(v) { return String(v || '').trim(); });
+    try {
+      var ss = this._getSs();
+      if (!ss) throw new Error('getActiveSpreadsheet returned null');
+
+      var sheet = ss.getSheetByName(tabName);
+      if (!sheet) throw new Error('getSheetByName returned null for "' + tabName + '"');
+
+      try { var sheetName = sheet.getName(); } catch(e) { throw new Error('getName failed: ' + e.message); }
+
+      var lastCol;
+      try { lastCol = sheet.getLastColumn(); } catch(e) { throw new Error('getLastColumn failed for ' + sheetName + ': ' + e.message); }
+      if (lastCol === 0) return [];
+
+      var range;
+      try { range = sheet.getRange(1, 1, 1, lastCol); } catch(e) { throw new Error('getRange(1,1,1,' + lastCol + ') failed for ' + sheetName + ': ' + e.message); }
+
+      var values;
+      try { values = range.getValues(); } catch(e) { throw new Error('getValues failed for ' + sheetName + ': ' + e.message); }
+
+      if (!values || values.length === 0) return [];
+      return values[0].map(function(v) { return String(v || '').trim(); });
+    } catch (e) {
+      throw new Error('[getHeaders tab=' + tabName + '] ' + (e.message || String(e)));
+    }
   };
 
   this.setHeaders = function(tabName, headers) {
-    var sheet = this.ss.getSheetByName(tabName);
+    var ss = this._getSs();
+    var sheet = ss.getSheetByName(tabName);
     if (!sheet) throw new Error('Tab not found: ' + tabName);
     var range = sheet.getRange(1, 1, 1, headers.length);
     range.setValues([headers]);
   };
 
   this.freezeHeaderRow = function(tabName) {
-    var sheet = this.ss.getSheetByName(tabName);
+    var ss = this._getSs();
+    var sheet = ss.getSheetByName(tabName);
     if (!sheet) return;
     sheet.setFrozenRows(1);
   };
 
   this.applyTextFormat = function(tabName, columnNames) {
-    var sheet = this.ss.getSheetByName(tabName);
+    var ss = this._getSs();
+    var sheet = ss.getSheetByName(tabName);
     if (!sheet) return;
     var headers = this.getHeaders(tabName);
     for (var i = 0; i < columnNames.length; i++) {
@@ -138,7 +247,6 @@ var AppsScriptSheetAdapter = function() {
         }
       }
       if (colIdx >= 0) {
-        // Apply Plain Text format to the entire column (rows 2 to max)
         var maxRows = Math.max(sheet.getMaxRows(), 2);
         var range = sheet.getRange(2, colIdx + 1, maxRows - 1, 1);
         range.setNumberFormat('@');
@@ -147,7 +255,8 @@ var AppsScriptSheetAdapter = function() {
   };
 
   this.getData = function(tabName) {
-    var sheet = this.ss.getSheetByName(tabName);
+    var ss = this._getSs();
+    var sheet = ss.getSheetByName(tabName);
     if (!sheet) return [];
     var lastRow = sheet.getLastRow();
     var lastCol = sheet.getLastColumn();
@@ -157,7 +266,8 @@ var AppsScriptSheetAdapter = function() {
   };
 
   this.insertRow = function(tabName, values) {
-    var sheet = this.ss.getSheetByName(tabName);
+    var ss = this._getSs();
+    var sheet = ss.getSheetByName(tabName);
     if (!sheet) throw new Error('Tab not found: ' + tabName);
     var lastRow = sheet.getLastRow();
     var targetRow = lastRow + 1;
@@ -166,13 +276,15 @@ var AppsScriptSheetAdapter = function() {
   };
 
   this.deleteTab = function(tabName) {
-    var sheet = this.ss.getSheetByName(tabName);
+    var ss = this._getSs();
+    var sheet = ss.getSheetByName(tabName);
     if (!sheet) return;
-    this.ss.deleteSheet(sheet);
+    ss.deleteSheet(sheet);
   };
 
   this.checkTextFormat = function(tabName, columnNames) {
-    var sheet = this.ss.getSheetByName(tabName);
+    var ss = this._getSs();
+    var sheet = ss.getSheetByName(tabName);
     if (!sheet) return { notFormatted: columnNames };
     var headers = this.getHeaders(tabName);
     var notFormatted = [];
