@@ -503,3 +503,101 @@ test('validateSchema duplicate_primary_keys array is always present', () => {
   assert.ok(Array.isArray(validation.duplicate_primary_keys),
     'duplicate_primary_keys must be an array');
 });
+
+// --- Adapter call instrumentation: no numeric sheet names ---
+
+function createInstrumentedAdapter(baseAdapter) {
+  const calls = [];
+  return {
+    getSheetId: function() { return baseAdapter.getSheetId(); },
+    getTabNames: function() {
+      calls.push({ method: 'getTabNames', args: [] });
+      return baseAdapter.getTabNames();
+    },
+    createTab: function(name) {
+      calls.push({ method: 'createTab', args: [name] });
+      return baseAdapter.createTab(name);
+    },
+    getHeaders: function(tabName) {
+      calls.push({ method: 'getHeaders', args: [tabName] });
+      return baseAdapter.getHeaders(tabName);
+    },
+    setHeaders: function(tabName, headers) {
+      calls.push({ method: 'setHeaders', args: [tabName, '[' + headers.length + ' cols]'] });
+      return baseAdapter.setHeaders(tabName, headers);
+    },
+    freezeHeaderRow: function(tabName) {
+      calls.push({ method: 'freezeHeaderRow', args: [tabName] });
+      return baseAdapter.freezeHeaderRow(tabName);
+    },
+    applyTextFormat: function(tabName, colNames) {
+      calls.push({ method: 'applyTextFormat', args: [tabName, '[' + colNames.length + ' cols]'] });
+      return baseAdapter.applyTextFormat(tabName, colNames);
+    },
+    getData: function(tabName) {
+      calls.push({ method: 'getData', args: [tabName] });
+      return baseAdapter.getData(tabName);
+    },
+    insertRow: function(tabName, values) {
+      calls.push({ method: 'insertRow', args: [tabName] });
+      return baseAdapter.insertRow(tabName, values);
+    },
+    deleteTab: function(tabName) {
+      calls.push({ method: 'deleteTab', args: [tabName] });
+      return baseAdapter.deleteTab(tabName);
+    },
+    checkTextFormat: function(tabName, colNames) {
+      calls.push({ method: 'checkTextFormat', args: [tabName] });
+      return baseAdapter.checkTextFormat ? baseAdapter.checkTextFormat(tabName, colNames) : { notFormatted: [] };
+    },
+    getCalls: function() { return calls; }
+  };
+}
+
+test('validateSchema never passes a numeric sheet name to any adapter method', () => {
+  const baseAdapter = createFullyProvisionedAdapter();
+  const adapter = createInstrumentedAdapter(baseAdapter);
+
+  validateSchema(tables, configSeed, adapter);
+
+  const allCalls = adapter.getCalls();
+  assert.ok(allCalls.length > 0, 'adapter should be called');
+
+  const numericPattern = /^[0-9]+$/;
+  for (const call of allCalls) {
+    for (const arg of call.args) {
+      if (typeof arg === 'string') {
+        assert.ok(!numericPattern.test(arg),
+          call.method + ' received numeric string "' + arg + '" — must be a table name');
+      }
+      if (typeof arg === 'number') {
+        assert.fail(call.method + ' received number ' + arg + ' as a sheet name argument');
+      }
+    }
+  }
+});
+
+test('provisionSchema never passes a numeric sheet name to any adapter method', () => {
+  const baseAdapter = createMockSheetAdapter();
+  const adapter = createInstrumentedAdapter(baseAdapter);
+
+  provisionSchema(tables, configSeed, adapter, {
+    dryRun: false, environment: 'DEV', configuredSheetId: 'mock-dev-sheet-id'
+  });
+
+  const allCalls = adapter.getCalls();
+  assert.ok(allCalls.length > 0, 'adapter should be called');
+
+  const numericPattern = /^[0-9]+$/;
+  for (const call of allCalls) {
+    for (const arg of call.args) {
+      if (typeof arg === 'string') {
+        assert.ok(!numericPattern.test(arg),
+          call.method + ' received numeric string "' + arg + '" — must be a table name');
+      }
+      if (typeof arg === 'number') {
+        assert.fail(call.method + ' received number ' + arg + ' as a sheet name argument');
+      }
+    }
+  }
+});

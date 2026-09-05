@@ -347,98 +347,130 @@ var S02Provisioner = (function () {
       success: false
     };
 
+    function fail(section, err) {
+      result.errors.push('[' + section + '] ' + (err.message || String(err)));
+      result.success = false;
+    }
+
     try {
-      var existingTabs = sheetAdapter.getTabNames();
+      // Phase 1: Build schema tab name index
       var schemaTabNames = {};
       for (var i = 0; i < schema.tables.length; i++) {
         schemaTabNames[normalizeTabName(schema.tables[i].name).toLowerCase()] = true;
       }
 
-      result.actual_table_count = 0;
-      for (var j = 0; j < existingTabs.length; j++) {
-        var lower = existingTabs[j].toLowerCase();
-        if (schemaTabNames[lower]) {
-          result.actual_table_count++;
-        } else if (lower !== 'sheet1') {
-          result.unexpected_tabs.push(existingTabs[j]);
+      // Phase 2: Count existing tabs
+      try {
+        var existingTabs = sheetAdapter.getTabNames();
+        result.actual_table_count = 0;
+        for (var j = 0; j < existingTabs.length; j++) {
+          var lower = existingTabs[j].toLowerCase();
+          if (schemaTabNames[lower]) {
+            result.actual_table_count++;
+          } else if (lower !== 'sheet1') {
+            result.unexpected_tabs.push(existingTabs[j]);
+          }
         }
-      }
+      } catch (e) { fail('phase2-tab-count', e); return result; }
 
+      // Phase 3: Validate each table
       for (var k = 0; k < schema.tables.length; k++) {
         var table = schema.tables[k];
-        var tabName = normalizeTabName(table.name);
-        var found = false;
-        for (var m = 0; m < existingTabs.length; m++) {
-          if (existingTabs[m].toLowerCase() === tabName.toLowerCase()) { found = true; break; }
-        }
-        if (!found) {
-          result.missing_tabs.push(tabName);
-          continue;
+        var tableName = normalizeTabName(table.name);
+
+        // Validate table.name is a proper string, not numeric
+        if (typeof tableName !== 'string' || /^[0-9]+$/.test(tableName)) {
+          fail('phase3-table-name', new Error('table.name is not a valid table name: ' + JSON.stringify(tableName) + ' at index ' + k));
+          return result;
         }
 
-        var existingHeaders = sheetAdapter.getHeaders(tabName);
-        var expectedHeaders = [];
-        for (var n = 0; n < table.columns.length; n++) {
-          expectedHeaders.push(table.columns[n].name);
-        }
-        var existingHeaderSet = {};
-        for (var p = 0; p < existingHeaders.length; p++) {
-          existingHeaderSet[existingHeaders[p].toLowerCase().trim()] = true;
-        }
-
-        var missing = [];
-        for (var q = 0; q < expectedHeaders.length; q++) {
-          if (!existingHeaderSet[expectedHeaders[q].toLowerCase()]) {
-            missing.push(expectedHeaders[q]);
+        try {
+          // Check tab exists
+          var found = false;
+          for (var m = 0; m < existingTabs.length; m++) {
+            if (existingTabs[m].toLowerCase() === tableName.toLowerCase()) { found = true; break; }
           }
-        }
-        if (missing.length > 0) {
-          result.missing_columns.push({ tab: tabName, missing: missing });
-        }
-
-        var extra = [];
-        for (var r = 0; r < existingHeaders.length; r++) {
-          var foundExpected = false;
-          for (var s = 0; s < expectedHeaders.length; s++) {
-            if (expectedHeaders[s].toLowerCase() === existingHeaders[r].toLowerCase()) { foundExpected = true; break; }
+          if (!found) {
+            result.missing_tabs.push(tableName);
+            continue;
           }
-          if (!foundExpected) extra.push(existingHeaders[r]);
-        }
-        if (extra.length > 0) {
-          result.extra_columns.push({ tab: tabName, extra: extra });
-        }
 
-        var keyCol = null;
-        for (var t = 0; t < table.columns.length; t++) {
-          if (table.columns[t].key) { keyCol = table.columns[t]; break; }
-        }
-        if (keyCol) {
-          if (existingHeaderSet[keyCol.name.toLowerCase()]) {
-            result.primary_key_columns_present.push(tabName);
-          } else {
-            result.primary_key_columns_missing.push(tabName);
-          }
-        }
+          // Check columns
+          try {
+            var existingHeaders = sheetAdapter.getHeaders(tableName);
+            var expectedHeaders = [];
+            for (var n = 0; n < table.columns.length; n++) {
+              expectedHeaders.push(table.columns[n].name);
+            }
+            var existingHeaderSet = {};
+            for (var p = 0; p < existingHeaders.length; p++) {
+              existingHeaderSet[existingHeaders[p].toLowerCase().trim()] = true;
+            }
 
-        var textCols = [];
-        for (var u = 0; u < table.columns.length; u++) {
-          if (table.columns[u].type === 'TEXT') textCols.push(table.columns[u]);
-        }
-        if (textCols.length > 0) {
-          var textColNames = [];
-          for (var v = 0; v < textCols.length; v++) {
-            textColNames.push(textCols[v].name);
-          }
-          var formatInfo = sheetAdapter.checkTextFormat ? sheetAdapter.checkTextFormat(tabName, textColNames) : null;
-          if (formatInfo && formatInfo.notFormatted && formatInfo.notFormatted.length > 0) {
-            result.text_format_missing.push({ tab: tabName, columns: formatInfo.notFormatted });
-          }
-        }
+            var missing = [];
+            for (var q = 0; q < expectedHeaders.length; q++) {
+              if (!existingHeaderSet[expectedHeaders[q].toLowerCase()]) {
+                missing.push(expectedHeaders[q]);
+              }
+            }
+            if (missing.length > 0) {
+              result.missing_columns.push({ tab: tableName, missing: missing });
+            }
 
-        if (configSeed && configSeed[table.name]) {
-          var data = sheetAdapter.getData(tabName);
-          result.seed_row_counts[table.name] = data.length;
-        }
+            var extra = [];
+            for (var r = 0; r < existingHeaders.length; r++) {
+              var foundExpected = false;
+              for (var s = 0; s < expectedHeaders.length; s++) {
+                if (expectedHeaders[s].toLowerCase() === existingHeaders[r].toLowerCase()) { foundExpected = true; break; }
+              }
+              if (!foundExpected) extra.push(existingHeaders[r]);
+            }
+            if (extra.length > 0) {
+              result.extra_columns.push({ tab: tableName, extra: extra });
+            }
+
+            // Check primary key
+            var keyCol = null;
+            for (var t = 0; t < table.columns.length; t++) {
+              if (table.columns[t].key) { keyCol = table.columns[t]; break; }
+            }
+            if (keyCol) {
+              if (existingHeaderSet[keyCol.name.toLowerCase()]) {
+                result.primary_key_columns_present.push(tableName);
+              } else {
+                result.primary_key_columns_missing.push(tableName);
+              }
+            }
+
+            // Check TEXT format
+            try {
+              var textCols = [];
+              for (var u = 0; u < table.columns.length; u++) {
+                if (table.columns[u].type === 'TEXT') textCols.push(table.columns[u]);
+              }
+              if (textCols.length > 0) {
+                var textColNames = [];
+                for (var v = 0; v < textCols.length; v++) {
+                  textColNames.push(textCols[v].name);
+                }
+                var formatInfo = sheetAdapter.checkTextFormat ? sheetAdapter.checkTextFormat(tableName, textColNames) : null;
+                if (formatInfo && formatInfo.notFormatted && formatInfo.notFormatted.length > 0) {
+                  result.text_format_missing.push({ tab: tableName, columns: formatInfo.notFormatted });
+                }
+              }
+            } catch (e) { fail('phase3-text-format:' + tableName, e); }
+
+            // Count seed rows
+            try {
+              if (configSeed && configSeed[table.name]) {
+                var data = sheetAdapter.getData(tableName);
+                result.seed_row_counts[table.name] = data.length;
+              }
+            } catch (e) { fail('phase3-seed-count:' + tableName, e); }
+
+          } catch (e) { fail('phase3-columns:' + tableName, e); }
+
+        } catch (e) { fail('phase3-table:' + tableName, e); }
       }
 
       result.success = result.missing_tabs.length === 0 &&
@@ -446,7 +478,7 @@ var S02Provisioner = (function () {
                        result.primary_key_columns_missing.length === 0 &&
                        result.errors.length === 0;
     } catch (err) {
-      result.errors.push(err.message);
+      result.errors.push('[phase1-setup] ' + (err.message || String(err)));
       result.success = false;
     }
 
