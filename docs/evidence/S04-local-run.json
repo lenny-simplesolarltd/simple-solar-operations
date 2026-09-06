@@ -1,0 +1,42 @@
+{
+  "scope": "S04 local implementation only; no cloud/AppSheet/G04 acceptance",
+  "command": "npm test",
+  "completed_at_utc": "2026-09-06T02:27:35.476005+00:00",
+  "runtime": "v22.13.0",
+  "exit_code": 0,
+  "tests": 215,
+  "passed": 215,
+  "failed": 0,
+  "skipped": 0,
+  "s04_tests": 93,
+  "existing_tests_retained": 122,
+  "evidence": "docs/evidence/S04-local-tests.tap",
+  "source_sha256": {
+    "apps-script/s04/S04Core.gs": "983d690f3898537afd3eea95a3c29c49c328acb35615b06cdbf452ba8a2f54c5",
+    "apps-script/s04/S04Entry.gs": "21de3146ea2baa30197978d824c2996bfef6516e88aa47a454785bf0d626191f",
+    "apps-script/s04/appsscript.json": "58f460047e830bde34796b95a691e3907a378ff89775f5ba4dffd275df01e05a",
+    "fixtures/s04-local.json": "eaf601dedcb2060cb39e91335b833a3f5e8936cbdc58c37e42f49ceae0c4e2f2",
+    "package.json": "54729eb18b9799194921ac0101701a880ec23292dda12ad8e02b10964709d3b0",
+    "processor/journal.js": "187ac7c32bee20da7f0b221d8d21444aa0dd2a8057714eb86b0cd320c0f12f02",
+    "processor/reconciler.js": "bfd7d1f77452e14a87142a7068ab4663eaf1c6568184433c8552cfca8fdb223d",
+    "processor/tasks.js": "50df141ef64429deff6c043ab3e168f306a77dc5180c29ef0c719f2610135092",
+    "processor/types.js": "24dc6d5ddc86dcecbe105e8881b1d408b4e17b0721c71341338c4ef1cfcef717",
+    "s04/client-state.js": "1dddbeef88bc7e844972179c63bd32fc3e36a037ed4ce3de01058f64802c1eba",
+    "s04/identity.js": "27d4ac67152fe4a21f757b246c1c92ed7fba9b0090698152de356f29772152aa",
+    "s04/local-adapters.cjs": "43d737d80fc8b1919fa9c2e987c8cd0e5a2230990d59133802caa2e5d42732f1",
+    "s04/processor.js": "02aaebc6a1bb87b342211ebaae6004857ef2aa16a62a8a24c06bac71a817b1b7",
+    "s04/runtime.js": "f94bb974f00c0fbcc4c06d74627d16cb302398ce161e7d1f61d71686269bde51",
+    "s04/sheet-store.js": "89423161625c5412185bcfbcc28aa9519c531112b476811316121d0e9310af98",
+    "schema/tables.json": "1b13d78f75302070710470a5730f631d60d1606701965c59993844c76f3fd59f",
+    "scripts/build-s04.cjs": "f7670f14b528e45d1c0ba1dd5167a21a979151c5c8b728b0af726ab67f698988",
+    "tests/s04-client.test.cjs": "dcd1afb25a3aa324459eaef40204679f15ca64533dd1d411c9e7fb489692359c",
+    "tests/s04-runtime.test.cjs": "2ea2e4cc20d783d05ae4e547ebbd3d02035a312944655fdcf875726a6dc76a9c",
+    "tests/s04-sheet-helper.cjs": "9501cad239d3ff2c0eb11a3a6bf9283d5f7bac7ea74a62445eeff096dd8a561c",
+    "tests/s04.test.cjs": "cc54dd0d58067b8d8d23dbf6716526abf65e059e8db9206ba749138a9e92b9e9"
+  },
+  "notes": [
+    "TAP captured from the actual local test execution; no cloud calls made.",
+    "Storage restart tests use local files; Apps Script runtime tests use mocked Sheets/Utilities/LockService in a VM.",
+    "Trusted issuer/bridge is a remaining cloud integration prerequisite; signed proof verification is implemented and tested."
+  ]
+}

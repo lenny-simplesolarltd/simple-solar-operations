@@ -1,0 +1,448 @@
+/* S04 fixture core — pure functions, no SpreadsheetApp.
+ * Takes a store interface: { getSheetId, readTable(name)->[{record,row}],
+ *   insertRow(name, values), updateRow(name, rowIndex, values),
+ *   getLastRow(name)->number, getMaxRows(name)->number }.
+ * All logic is environment/sheet agnostic; guards are in the Apps Script layer. */
+
+const DEV_SHEET_ID = '1z7PNZtDdC4Z5eLbmTuQdqp0QpJSmuEvx3QvN3VyNTsc';
+const TEST_EMAIL = 'lenny@simplesolarltd.co.uk';
+const SYNTHETIC_JOB_INTERNAL_ID = 'J-s04-pilot';
+const SYNTHETIC_TASK_ID = 'T-open';
+const NOW = () => new Date().toISOString();
+
+function clone(v) { return JSON.parse(JSON.stringify(v)); }
+
+function normaliseEmail(email) {
+  return typeof email === 'string' ? email.trim().toLowerCase() : '';
+}
+
+/* --- Table read helpers --- */
+function findRow(store, table, id) {
+  return store.readTable(table).find(r => r.record.id === id) || null;
+}
+
+function findRowsBy(store, table, predicate) {
+  return store.readTable(table).filter(r => predicate(r));
+}
+
+/* --- Capacity --- */
+function countAvailableRows(store, tableName) {
+  const rows = store.readTable(tableName);
+  const lastRow = store.getLastRow(tableName);
+  const maxRows = store.getMaxRows(tableName);
+  const used = rows.filter(r => r.record.id !== null && r.record.id !== '').length;
+  const available = maxRows - lastRow;
+  return { used, lastRow, maxRows, available, sufficient: available >= 5 };
+}
+
+/* --- Dry run: read-only report --- */
+function dryRun(store) {
+  const result = {
+    environment: 'DEV',
+    sheet_id: store.getSheetId(),
+    sheet_match: store.getSheetId() === DEV_SHEET_ID,
+    actor: null,
+    roles: [],
+    permission_rule: null,
+    synthetic_job: null,
+    task: null,
+    dependencies: [],
+    fn01: null,
+    capacity: {},
+    planned: { inserts: [], updates: [] },
+    errors: [],
+    warnings: [],
+    fixture_ready: false,
+    fn01_enabled: false,
+    command_ready: false,
+    success: true
+  };
+
+  /* People */
+  const people = findRowsBy(store, 'People', p => normaliseEmail(p.record.email) === TEST_EMAIL);
+  if (people.length === 0) {
+    const tanya = findRow(store, 'People', 'PERSON-tanya');
+    if (!tanya) {
+      result.errors.push('PERSON-tanya not found; cannot seed test email');
+    } else if (normaliseEmail(tanya.record.email) !== 'not_configured' && normaliseEmail(tanya.record.email) !== '') {
+      result.errors.push('PERSON-tanya already has a real email: ' + tanya.record.email);
+    } else {
+      result.planned.updates.push({ table: 'People', id: 'PERSON-tanya', field: 'email', to: TEST_EMAIL });
+      result.actor = { id: 'PERSON-tanya', email: TEST_EMAIL, active: tanya.record.active };
+    }
+  } else if (people.length > 1) {
+    result.errors.push('Multiple People rows match ' + TEST_EMAIL + ': ' + people.map(p => p.record.id).join(', '));
+  } else {
+    result.actor = { id: people[0].record.id, email: TEST_EMAIL, active: people[0].record.active };
+  }
+
+  if (result.actor && !result.actor.active) {
+    result.errors.push('Actor ' + result.actor.id + ' is not active');
+  }
+
+  /* PersonRoles */
+  if (result.actor) {
+    const roles = findRowsBy(store, 'PersonRoles', r => r.record.person_id === result.actor.id && r.record.active === true);
+    result.roles = roles.map(r => ({ id: r.record.id, role: r.record.role }));
+    if (result.roles.length === 0) {
+      const existingRole = findRow(store, 'PersonRoles', 'PROLE-tanya-office');
+      if (existingRole && existingRole.record.active === true && existingRole.record.person_id === result.actor.id) {
+        result.roles.push({ id: existingRole.record.id, role: existingRole.record.role });
+      } else {
+        result.errors.push('No active PersonRoles for ' + result.actor.id + '; cannot auto-create role');
+      }
+    }
+  }
+
+  /* PermissionRules */
+  if (result.roles.length > 0) {
+    const roleNames = result.roles.map(r => r.role);
+    const rules = findRowsBy(store, 'PermissionRules', r =>
+      roleNames.includes(r.record.role) &&
+      ['CompleteTask', '*'].includes(r.record.action) &&
+      ['Tasks', '*'].includes(r.record.entity) &&
+      r.record.allowed === true &&
+      ['All', 'Assigned'].includes(r.record.scope));
+    if (rules.length === 0) {
+      const denyRules = findRowsBy(store, 'PermissionRules', r =>
+        roleNames.includes(r.record.role) &&
+        ['CompleteTask', '*'].includes(r.record.action) &&
+        ['Tasks', '*'].includes(r.record.entity) &&
+        r.record.allowed === false);
+      if (denyRules.length > 0) {
+        result.errors.push('Permission explicitly denied by rule(s): ' + denyRules.map(r => r.record.id).join(', '));
+      } else {
+        result.errors.push('No PermissionRule allows CompleteTask on Tasks for roles: ' + roleNames.join(', '));
+      }
+    } else {
+      result.permission_rule = rules[0].record;
+    }
+  }
+
+  /* Synthetic pilot Job */
+  let job = findRow(store, 'Jobs', SYNTHETIC_JOB_INTERNAL_ID);
+  if (!job) {
+    result.planned.inserts.push({ table: 'Jobs', id: SYNTHETIC_JOB_INTERNAL_ID });
+  } else {
+    const j = job.record;
+    const issues = [];
+    if (j.pilot_job !== true) issues.push('pilot_job must be TRUE');
+    if (j.release_scope !== 'R1') issues.push('release_scope must be R1');
+    if (j.source_system !== 'S04-synthetic') issues.push('source_system must be S04-synthetic');
+    if (issues.length > 0) {
+      result.errors.push('Synthetic job ' + SYNTHETIC_JOB_INTERNAL_ID + ' exists but has issues: ' + issues.join('; '));
+    } else {
+      result.synthetic_job = { id: j.id, job_id: j.job_id, pilot_job: j.pilot_job, release_scope: j.release_scope, source_system: j.source_system };
+    }
+  }
+
+  /* Task T-open */
+  let task = findRow(store, 'Tasks', SYNTHETIC_TASK_ID);
+  if (!task) {
+    if (result.synthetic_job || result.planned.inserts.some(i => i.table === 'Jobs')) {
+      result.planned.inserts.push({ table: 'Tasks', id: SYNTHETIC_TASK_ID });
+    }
+  } else {
+    const t = task.record;
+    const issues = [];
+    if (t.job_id !== SYNTHETIC_JOB_INTERNAL_ID) issues.push('job_id must be ' + SYNTHETIC_JOB_INTERNAL_ID);
+    if (t.template_code !== 'S04-DEV-COMPLETE') issues.push('template_code must be S04-DEV-COMPLETE');
+    if (t.source_system !== 'S04-synthetic') issues.push('source_system must be S04-synthetic');
+    if (t.status !== 'Open') issues.push('status must be Open, is ' + t.status);
+    if (t.version !== 1) issues.push('version must be 1, is ' + t.version);
+    if (t.revision_required !== false) issues.push('revision_required must be false');
+    if (t.blocking_reason !== null && t.blocking_reason !== '') issues.push('blocking_reason must be blank');
+    if (issues.length > 0) {
+      result.errors.push('Task ' + SYNTHETIC_TASK_ID + ' exists but has issues: ' + issues.join('; '));
+    } else {
+      result.task = { id: t.id, job_id: t.job_id, status: t.status, version: t.version, owner_id: t.owner_id, template_code: t.template_code, source_system: t.source_system };
+    }
+  }
+
+  /* TaskDependencies */
+  const deps = findRowsBy(store, 'TaskDependencies', d => d.record.task_id === SYNTHETIC_TASK_ID && (d.record.satisfied_at === null || d.record.satisfied_at === ''));
+  result.dependencies = deps.map(d => ({ id: d.record.id, prerequisite_task_id: d.record.prerequisite_task_id }));
+  if (result.dependencies.length > 0) {
+    result.errors.push('Unsatisfied TaskDependencies for T-open: ' + result.dependencies.map(d => d.id).join(', '));
+  }
+
+  /* ReleaseModes FN-01 */
+  const fn01rows = findRowsBy(store, 'ReleaseModes', r => r.record.function_id === 'FN-01');
+  if (fn01rows.length === 0) {
+    result.errors.push('FN-01 ReleaseMode row not found');
+  } else if (fn01rows.length > 1) {
+    result.errors.push('Multiple FN-01 ReleaseMode rows found');
+  } else {
+    result.fn01 = { id: fn01rows[0].record.id, mode: fn01rows[0].record.mode, authorised_job_scope: fn01rows[0].record.authorised_job_scope, target_release: fn01rows[0].record.target_release };
+    result.fn01_enabled = fn01rows[0].record.mode === 'Automated' && fn01rows[0].record.authorised_job_scope === 'Pilot' && fn01rows[0].record.target_release === 'R1';
+    if (fn01rows[0].record.mode !== 'Disabled' && !result.fn01_enabled) {
+      result.warnings.push('FN-01 mode is ' + fn01rows[0].record.mode + ', not Disabled or the expected Automated/Pilot/R1');
+    }
+  }
+
+  /* Capacity */
+  for (const t of ['CommitJournal', 'TaskEvents', 'AuditEvents', 'Tasks']) {
+    result.capacity[t] = countAvailableRows(store, t);
+    if (!result.capacity[t].sufficient) {
+      result.errors.push(t + ' has insufficient row capacity: ' + result.capacity[t].available + ' rows available after row ' + result.capacity[t].lastRow);
+    }
+  }
+
+  /* Fixture readiness */
+  result.fixture_ready = result.errors.length === 0 && result.warnings.length === 0;
+  result.command_ready = result.fixture_ready && result.fn01_enabled;
+  result.success = result.errors.length === 0;
+
+  return result;
+}
+
+/* --- Apply: idempotent fixture installation --- */
+function apply(store, options = {}) {
+  const dryRunResult = dryRun(store);
+  const result = clone(dryRunResult);
+  result.performed = { inserts: [], updates: [] };
+
+  if (dryRunResult.errors.length > 0 && !options.force) {
+    result.applied = false;
+    result.error = 'Pre-validation failed; run dry run for details. Use force=true to override.';
+    return result;
+  }
+
+  /* Update People email if needed */
+  if (dryRunResult.planned.updates.some(u => u.table === 'People')) {
+    const tanya = findRow(store, 'People', 'PERSON-tanya');
+    if (tanya && normaliseEmail(tanya.record.email) !== TEST_EMAIL) {
+      store.updateRow('People', tanya.row, tanya.record.id, { email: TEST_EMAIL });
+      result.performed.updates.push({ table: 'People', id: 'PERSON-tanya', field: 'email', to: TEST_EMAIL });
+    }
+  }
+
+  /* Insert synthetic Job if missing */
+  if (dryRunResult.planned.inserts.some(i => i.table === 'Jobs')) {
+    const jobRow = buildSyntheticJob(store);
+    store.insertRow('Jobs', jobRow);
+    result.performed.inserts.push({ table: 'Jobs', id: SYNTHETIC_JOB_INTERNAL_ID });
+    result.synthetic_job = { id: SYNTHETIC_JOB_INTERNAL_ID, job_id: jobRow.job_id, pilot_job: true, release_scope: 'R1', source_system: 'S04-synthetic' };
+  }
+
+  /* Insert Task T-open if missing */
+  if (dryRunResult.planned.inserts.some(i => i.table === 'Tasks')) {
+    const actorId = result.actor ? result.actor.id : 'PERSON-tanya';
+    const taskRow = buildSyntheticTask(actorId);
+    store.insertRow('Tasks', taskRow);
+    result.performed.inserts.push({ table: 'Tasks', id: SYNTHETIC_TASK_ID });
+    result.task = { id: SYNTHETIC_TASK_ID, job_id: SYNTHETIC_JOB_INTERNAL_ID, status: 'Open', version: 1, owner_id: actorId, template_code: 'S04-DEV-COMPLETE', source_system: 'S04-synthetic' };
+  }
+
+  result.applied = true;
+
+  /* Re-validate after apply */
+  const postValidation = dryRun(store);
+  result.fixture_ready = postValidation.fixture_ready;
+  result.fn01_enabled = postValidation.fn01_enabled;
+  result.command_ready = postValidation.command_ready;
+  result.post_errors = postValidation.errors;
+  result.post_warnings = postValidation.warnings;
+
+  return result;
+}
+
+function buildSyntheticJob(store) {
+  const now = NOW();
+  const jobId = 'SS-DEV-S04-' + Date.now().toString(36).toUpperCase();
+  return {
+    id: SYNTHETIC_JOB_INTERNAL_ID,
+    job_id: jobId,
+    customer_id: 'S04-fixture',
+    display_name: 'S04 synthetic DEV pilot job',
+    sold_submission_id: null,
+    booking_submission_id: null,
+    sold_at: null,
+    salesperson_id: null,
+    lead_source: null,
+    quote_reference: null,
+    presale_file_id: null,
+    finance_route: 'S04-fixture',
+    contract_status: 'S04-fixture',
+    contract_id: null,
+    contract_signed_at: null,
+    contract_evidence_id: null,
+    original_net_pence: null,
+    original_vat_pence: null,
+    original_gross_pence: null,
+    approved_change_pence: null,
+    current_contract_gross_pence: null,
+    valuation_basis: null,
+    sold_booking_match_status: 'S04-fixture',
+    customer_details_verified_at: null,
+    customer_details_verified_by: null,
+    deposit_bank_confirmed_at: null,
+    deposit_bank_confirmed_by: null,
+    deposit_bank_reference: null,
+    roof_required: false,
+    electrical_required: false,
+    scaffold_required: false,
+    workflow_stage: 'S04-fixture',
+    booking_approved_at: null,
+    booking_approved_by: null,
+    operational_complete_at: null,
+    operational_complete_by: null,
+    customer_happy_at: null,
+    customer_happy_by: null,
+    handover_status: 'S04-fixture',
+    financial_status: 'S04-fixture',
+    cancellation_at: null,
+    cancellation_by: null,
+    cancellation_reason: null,
+    archived_at: null,
+    next_action_at: null,
+    account_policy_version: null,
+    pilot_job: true,
+    release_scope: 'R1',
+    created_at: now,
+    created_by: 'S04-fixture',
+    updated_at: now,
+    updated_by: 'S04-fixture',
+    version: 1,
+    source_system: 'S04-synthetic',
+    source_record_id: null,
+    commit_id: 'S04-fixture'
+  };
+}
+
+function buildSyntheticTask(ownerId) {
+  const now = NOW();
+  return {
+    id: SYNTHETIC_TASK_ID,
+    job_id: SYNTHETIC_JOB_INTERNAL_ID,
+    template_code: 'S04-DEV-COMPLETE',
+    instance_key: 'S04-DEV-COMPLETE-' + SYNTHETIC_JOB_INTERNAL_ID + '-ROOT-nodue',
+    group: 'System',
+    title: 'Synthetic S04 DEV completion test',
+    owner_id: ownerId,
+    backup_id: null,
+    related_entity_type: null,
+    related_entity_id: null,
+    due_at: null,
+    original_due_at: null,
+    priority: 1,
+    status: 'Open',
+    blocking_reason: null,
+    next_followup_at: null,
+    completed_at: null,
+    completed_by: null,
+    completion_note: null,
+    evidence_id: null,
+    revision_required: false,
+    created_rule_version: 'S04-fixture',
+    created_at: now,
+    created_by: 'S04-fixture',
+    updated_at: now,
+    updated_by: 'S04-fixture',
+    version: 1,
+    source_system: 'S04-synthetic',
+    commit_id: 'S04-fixture'
+  };
+}
+
+/* --- Validate: check all S04 backend gates (read-only) --- */
+function validate(store) {
+  const result = dryRun(store);
+  result.checks = [];
+
+  function check(name, pass, detail) {
+    result.checks.push({ name, pass, detail });
+    if (!pass && !result.errors.includes(detail)) result.errors.push(detail);
+  }
+
+  /* Actor */
+  check('actor_exists', !!result.actor, result.actor ? 'Found ' + result.actor.id : 'No actor');
+  check('actor_active', result.actor && result.actor.active, 'Actor is active');
+  check('actor_has_roles', result.roles.length > 0, 'Actor has ' + result.roles.length + ' active role(s)');
+
+  /* Permission */
+  check('permission_allows', !!result.permission_rule, result.permission_rule ? 'Rule ' + result.permission_rule.id + ' allows ' + result.permission_rule.role + ' to ' + result.permission_rule.action + ' on ' + result.permission_rule.entity : 'No permission rule');
+
+  /* Job */
+  check('synthetic_job_exists', !!result.synthetic_job, result.synthetic_job ? 'Job ' + result.synthetic_job.id : 'No synthetic job');
+  check('job_is_pilot', result.synthetic_job && result.synthetic_job.pilot_job === true, 'pilot_job is TRUE');
+  check('job_release_r1', result.synthetic_job && result.synthetic_job.release_scope === 'R1', 'release_scope is R1');
+  check('job_source_synthetic', result.synthetic_job && result.synthetic_job.source_system === 'S04-synthetic', 'source_system is S04-synthetic');
+
+  /* Task */
+  check('task_exists', !!result.task, result.task ? 'Task ' + result.task.id : 'No T-open task');
+  check('task_status_open', result.task && result.task.status === 'Open', 'status is Open');
+  check('task_version_1', result.task && result.task.version === 1, 'version is 1');
+  check('task_job_id_correct', result.task && result.task.job_id === SYNTHETIC_JOB_INTERNAL_ID, 'job_id matches synthetic job');
+  check('task_template_s04', result.task && result.task.template_code === 'S04-DEV-COMPLETE', 'template_code is S04-DEV-COMPLETE');
+  check('task_source_synthetic', result.task && result.task.source_system === 'S04-synthetic', 'source_system is S04-synthetic');
+
+  /* Dependencies */
+  check('no_unsatisfied_deps', result.dependencies.length === 0, result.dependencies.length === 0 ? 'No unsatisfied dependencies' : result.dependencies.length + ' unsatisfied');
+
+  /* FN-01 */
+  check('fn01_exists', !!result.fn01, result.fn01 ? 'FN-01 found (mode: ' + result.fn01.mode + ')' : 'FN-01 missing');
+
+  /* Capacity */
+  for (const t of ['CommitJournal', 'TaskEvents', 'AuditEvents', 'Tasks']) {
+    check('capacity_' + t, result.capacity[t] && result.capacity[t].sufficient, t + ': ' + (result.capacity[t] ? result.capacity[t].available + ' rows available' : 'unknown'));
+  }
+
+  result.fixture_ready = result.checks.every(c => c.pass);
+  result.command_ready = result.fixture_ready && result.fn01_enabled;
+  result.success = result.errors.length === 0;
+
+  return result;
+}
+
+/* --- FN-01 enable/disable --- */
+function enableFn01(store) {
+  const fn01rows = findRowsBy(store, 'ReleaseModes', r => r.record.function_id === 'FN-01');
+  if (fn01rows.length !== 1) {
+    return { success: false, error: 'FN-01 row not found or duplicate' };
+  }
+  const row = fn01rows[0];
+  const before = { mode: row.record.mode, scope: row.record.authorised_job_scope, release: row.record.target_release };
+  if (row.record.mode === 'Automated' && row.record.authorised_job_scope === 'Pilot' && row.record.target_release === 'R1') {
+    return { success: true, already_enabled: true, before, after: before };
+  }
+  const now = NOW();
+  store.updateRow('ReleaseModes', row.row, row.record.id, {
+    mode: 'Automated',
+    authorised_job_scope: 'Pilot',
+    target_release: 'R1',
+    updated_at: now,
+    updated_by: 'S04-fixture-enable',
+    version: (row.record.version || 0) + 1
+  });
+  return { success: true, already_enabled: false, before, after: { mode: 'Automated', scope: 'Pilot', release: 'R1' } };
+}
+
+function disableFn01(store) {
+  const fn01rows = findRowsBy(store, 'ReleaseModes', r => r.record.function_id === 'FN-01');
+  if (fn01rows.length !== 1) {
+    return { success: false, error: 'FN-01 row not found or duplicate' };
+  }
+  const row = fn01rows[0];
+  const before = { mode: row.record.mode, scope: row.record.authorised_job_scope, release: row.record.target_release };
+  if (row.record.mode === 'Disabled' && row.record.authorised_job_scope === 'None') {
+    return { success: true, already_disabled: true, before, after: before };
+  }
+  const now = NOW();
+  store.updateRow('ReleaseModes', row.row, row.record.id, {
+    mode: 'Disabled',
+    authorised_job_scope: 'None',
+    target_release: 'R1',
+    updated_at: now,
+    updated_by: 'S04-fixture-disable',
+    version: (row.record.version || 0) + 1
+  });
+  return { success: true, already_disabled: false, before, after: { mode: 'Disabled', scope: 'None', release: 'R1' } };
+}
+
+module.exports = {
+  DEV_SHEET_ID, TEST_EMAIL, SYNTHETIC_JOB_INTERNAL_ID, SYNTHETIC_TASK_ID,
+  dryRun, apply, validate, enableFn01, disableFn01,
+  buildSyntheticJob, buildSyntheticTask, countAvailableRows,
+  normaliseEmail, findRow, findRowsBy
+};

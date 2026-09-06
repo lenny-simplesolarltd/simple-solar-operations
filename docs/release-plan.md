@@ -1,6 +1,6 @@
 # RA01 release and milestone plan
 
-Authority: RA01 v1.0, 5 September 2026, §§1–12; [DEC-002](implementation-decisions.md). **Planning only. S01 active/PARTIAL, G01 BLOCKED; no S02 functionality authorised.**
+Authority: RA01 v1.0, 5 September 2026, §§1–12; [DEC-002](implementation-decisions.md). **Release planning only; no release approval.** Current [implementation status](implementation-status.md): S01 PARTIAL, G01 BLOCKED, S02 COMPLETE IN DEV, S03 COMPLETE LOCALLY / NOT CLOUD DEPLOYED, S04 LOCAL IMPLEMENTATION PASS / NOT CLOUD DEPLOYED.
 
 ## Precedence and dependency rules
 
@@ -51,7 +51,7 @@ For enrolled jobs the new job record owns agreed installation dates; non-pilot j
 | Scope | BLOCKED — INPUT REQUIRED / prerequisite | Owner / resolution |
 |---|---|---|
 | Immediate S01 | Real company Workspace/AppSheet setup, ownership/recovery, entitlements, verified test accounts/recipients/resources, G01 receipt/denial/company-access evidence | Ben/company administrator supplies setup/access; developer/named testers demonstrate; Ben verifies own access. Existing S01 gate unchanged. |
-| R1 build | S01/G01 pass then implementation of all included foundations/office/manual controls; no S02 code yet | Developer; current request permits planning only. |
+| R1 build | S02 DEV complete; S03 local only; S04 implemented locally only. Remaining office/manual controls and cloud integration required. G01 blocks release acceptance, not all isolated DEV coding | Developer; current task permits documentation/readiness audit only. |
 | R1 current processes | Current Jotform question IDs/Ben-Tanya mapping decisions, actual producers/settings/IDs and exclusion capabilities; authorised retained invoice/Calendar/order/scaffold/evidence/handover routes, reviewers, contacts and calendars | Ben/Tanya and existing connection owners; no guessed IDs. Existing process existence confirmed, actual operation/config remains unverified. |
 | R1 evidence safety | Current forms/files, authorised reviewers and proof of accepted evidence/complete handover can be recorded through the existing process | Ben supplies current route and responsible reviewers; technical reviewer retains technical acceptance. Separate full commissioning amendment need not block controlled R1/R2, but a missing safe manual evidence route does. |
 | Each release | Scope/version/modes, authorised pilot job IDs/users, pilot dates/period/criteria, support/rollback contacts, training/evidence and Ben decision | Ben and developer with affected operators; specific values/dates not supplied. |

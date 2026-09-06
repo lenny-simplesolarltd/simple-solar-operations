@@ -238,3 +238,54 @@ test('provisioner core functions identically via global and require', () => {
   assert.equal(viaRequireResult.tables_total, viaGlobalResult.tables_total);
   assert.equal(viaRequireResult.success, viaGlobalResult.success);
 });
+
+// --- Adapter safety: no getSheetByName in operational paths ---
+
+test('S02Provisioner.js adapter uses _findSheetByName, not getSheetByName', () => {
+  const source = fs.readFileSync('apps-script/S02Provisioner.js', 'utf8');
+
+  // The adapter starts at 'var AppsScriptSheetAdapter' and ends at the last '};'
+  const adapterStart = source.indexOf('var AppsScriptSheetAdapter');
+  assert.ok(adapterStart > 0, 'AppsScriptSheetAdapter section not found');
+
+  // Find the adapter's closing: the adapter is an IIFE assigned to a var,
+  // so find the matching '};' after the adapter start
+  const adapterCode = source.substring(adapterStart);
+
+  // The adapter must NOT call getSheetByName
+  assert.ok(!adapterCode.includes('.getSheetByName('),
+    'AppsScriptSheetAdapter must not call .getSheetByName() — use _findSheetByName');
+
+  // The adapter must use _findSheetByName
+  assert.ok(adapterCode.includes('_findSheetByName'),
+    'AppsScriptSheetAdapter must use _findSheetByName for sheet lookups');
+});
+
+test('S02Provisioner.js: only runS02HeaderDiagnostic contains getSheetByName', () => {
+  const source = fs.readFileSync('apps-script/S02Provisioner.js', 'utf8');
+
+  // Find the diagnostic function boundaries
+  const diagStart = source.indexOf('function runS02HeaderDiagnostic');
+  const diagEnd = source.indexOf('/* --- Enumerated sheet lookup');
+  assert.ok(diagStart > 0 && diagEnd > diagStart, 'diagnostic boundaries not found');
+
+  const beforeDiag = source.substring(0, diagStart);
+  const diagSection = source.substring(diagStart, diagEnd);
+  const afterDiag = source.substring(diagEnd);
+
+  // Before diagnostic: zero getSheetByName calls
+  const beforeCalls = (beforeDiag.match(/\.getSheetByName\(/g) || []).length;
+  assert.equal(beforeCalls, 0,
+    'No .getSheetByName() calls before diagnostic, found ' + beforeCalls);
+
+  // Diagnostic section: should contain getSheetByName calls (Path B test)
+  const diagCalls = (diagSection.match(/\.getSheetByName\(/g) || []).length;
+  assert.ok(diagCalls > 0,
+    'Diagnostic should contain .getSheetByName() for Path B test');
+
+  // After diagnostic (adapter + helper): zero getSheetByName calls
+  // (comments referencing getSheetByName are allowed)
+  const afterCalls = (afterDiag.match(/\.getSheetByName\(/g) || []).length;
+  assert.equal(afterCalls, 0,
+    'No .getSheetByName() calls in adapter or helpers, found ' + afterCalls);
+});

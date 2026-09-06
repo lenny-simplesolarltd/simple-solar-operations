@@ -1,0 +1,306 @@
+/* G04 negative-test core — pure functions, no SpreadsheetApp.
+ * Takes a services interface: { store, config, secret, signProof, runCommand,
+ *   now, sha256, hmac, canonical, commandRequest }.
+ * Each test returns { name, task_id, job_id, command_id, expected, actual,
+ *   before_status, before_version, after_status, after_version, task_events,
+ *   audit_events, journal_state, journal_count, pass, detail }.
+ *
+ * Tests 3 (replay) and 4 (mismatch) require two processor calls.
+ * Test 1 (disabled mode) leaves FN-01 Disabled.
+ * Tests 2-5 require FN-01 Automated/Pilot/R1.
+ * restoreSafeState disables FN-01. */
+
+const DEV_SHEET_ID = '1z7PNZtDdC4Z5eLbmTuQdqp0QpJSmuEvx3QvN3VyNTsc';
+
+function clone(v) { return JSON.parse(JSON.stringify(v)); }
+
+function buildJob(id, jobId, pilotJob, releaseScope) {
+  const now = new Date().toISOString();
+  return {
+    id, job_id: jobId, customer_id: 'G04-fixture', display_name: 'G04 negative test',
+    sold_submission_id: null, booking_submission_id: null, sold_at: null,
+    salesperson_id: null, lead_source: null, quote_reference: null,
+    presale_file_id: null, finance_route: 'G04-fixture', contract_status: 'G04-fixture',
+    contract_id: null, contract_signed_at: null, contract_evidence_id: null,
+    original_net_pence: null, original_vat_pence: null, original_gross_pence: null,
+    approved_change_pence: null, current_contract_gross_pence: null,
+    valuation_basis: null, sold_booking_match_status: 'G04-fixture',
+    customer_details_verified_at: null, customer_details_verified_by: null,
+    deposit_bank_confirmed_at: null, deposit_bank_confirmed_by: null,
+    deposit_bank_reference: null, roof_required: false, electrical_required: false,
+    scaffold_required: false, workflow_stage: 'G04-fixture',
+    booking_approved_at: null, booking_approved_by: null,
+    operational_complete_at: null, operational_complete_by: null,
+    customer_happy_at: null, customer_happy_by: null, handover_status: 'G04-fixture',
+    financial_status: 'G04-fixture', cancellation_at: null, cancellation_by: null,
+    cancellation_reason: null, archived_at: null, next_action_at: null,
+    account_policy_version: null, pilot_job: pilotJob, release_scope: releaseScope,
+    created_at: now, created_by: 'G04-fixture', updated_at: now, updated_by: 'G04-fixture',
+    version: 1, source_system: 'S04-synthetic', source_record_id: null, commit_id: 'G04-fixture'
+  };
+}
+
+function buildTask(id, jobId, ownerId, templateCode) {
+  const now = new Date().toISOString();
+  return {
+    id, job_id: jobId, template_code: templateCode,
+    instance_key: templateCode + '-' + jobId + '-ROOT-nodue',
+    group: 'System', title: 'G04 negative test task', owner_id: ownerId,
+    backup_id: null, related_entity_type: null, related_entity_id: null,
+    due_at: null, original_due_at: null, priority: 1, status: 'Open',
+    blocking_reason: null, next_followup_at: null, completed_at: null,
+    completed_by: null, completion_note: null, evidence_id: null,
+    revision_required: false, created_rule_version: 'G04-fixture',
+    created_at: now, created_by: 'G04-fixture', updated_at: now, updated_by: 'G04-fixture',
+    version: 1, source_system: 'S04-synthetic', commit_id: 'G04-fixture'
+  };
+}
+
+function upsertJob(store, jobData) {
+  const existing = store.get('Jobs', jobData.id);
+  if (!existing) store.insert('Jobs', jobData);
+}
+
+function upsertTask(store, taskData) {
+  const existing = store.get('Tasks', taskData.id);
+  if (!existing) store.insert('Tasks', taskData);
+}
+
+function getFn01(store) {
+  const rows = store.list('ReleaseModes').filter(r => r.function_id === 'FN-01');
+  return rows.length === 1 ? rows[0] : null;
+}
+
+function setFn01(store, mode, scope, release) {
+  const fn01 = getFn01(store);
+  if (!fn01) throw new Error('FN-01 not found');
+  store.update('ReleaseModes', fn01.id, {
+    mode, authorised_job_scope: scope, target_release: release,
+    updated_at: new Date().toISOString(), updated_by: 'G04-test',
+    version: (fn01.version || 0) + 1
+  });
+}
+
+function enableFn01(store) { setFn01(store, 'Automated', 'Pilot', 'R1'); }
+function disableFn01(store) { setFn01(store, 'Disabled', 'None', 'R1'); }
+
+function makeCommand(id, taskId, version, note) {
+  return { command_id: id, action: 'COMPLETE_TASK', task_id: taskId,
+    expected_version: version, payload: { completion_note: note } };
+}
+
+function snapshotTask(store, taskId) {
+  const t = store.get('Tasks', taskId);
+  return t ? { status: t.status, version: t.version, completed_by: t.completed_by } : null;
+}
+
+function countByCommit(store, table, commitId) {
+  return store.list(table).filter(r => r.commit_id === commitId).length;
+}
+
+function makeResult(name, taskId, jobId, commandId, before, after, events, audits, journal, expected, actual, pass, detail) {
+  return { name, task_id: taskId, job_id: jobId, command_id: commandId,
+    before_status: before ? before.status : null, before_version: before ? before.version : null,
+    after_status: after ? after.status : null, after_version: after ? after.version : null,
+    task_events: events, audit_events: audits,
+    journal_state: journal ? journal.state : null, journal_count: journal ? journal.count : 0,
+    expected, actual, pass, detail };
+}
+
+/* --- Test 1: DISABLED MODE REFUSAL --- */
+function testDisabledMode(services) {
+  const { store } = services;
+  const taskId = 'T-g04-disabled', jobId = 'J-g04-disabled', cmdId = 'CMD-g04-disabled-001';
+  const ownerId = 'PERSON-tanya';
+
+  // Ensure FN-01 is Disabled
+  disableFn01(store);
+
+  // Upsert synthetic job and task
+  upsertJob(store, buildJob(jobId, 'SS-DEV-G04-DISABLED', true, 'R1'));
+  upsertTask(store, buildTask(taskId, jobId, ownerId, 'S04-DEV-COMPLETE'));
+
+  const before = snapshotTask(store, taskId);
+  const command = makeCommand(cmdId, taskId, 1, 'Should be refused - mode disabled');
+  const proof = services.signProof(command);
+  const result = services.runCommand(command, proof);
+
+  const after = snapshotTask(store, taskId);
+  const events = store.list('TaskEvents').filter(e => e.task_id === taskId).length;
+  const audits = store.list('AuditEvents').filter(e => e.entity_id === taskId).length;
+  const journals = store.list('CommitJournal').filter(j => j.command_id === cmdId);
+  const journal = journals.length > 0 ? { state: journals[0].state, count: journals.length } : null;
+
+  const expected = 'MODE_DENIED';
+  const pass = result && result.status === 'Failed' && !result.committed &&
+    result.error === expected && before.status === 'Open' && before.version === 1 &&
+    after && after.status === 'Open' && after.version === 1 &&
+    events === 0 && audits === 0 && (!journal || journal.state !== 'Committed');
+
+  return makeResult('Disabled mode refusal', taskId, jobId, cmdId, before, after,
+    events, audits, journal, expected, result ? result.error : 'no result', pass,
+    pass ? 'Correctly refused. No mutations.' : 'FAILED: ' + JSON.stringify(result));
+}
+
+/* --- Test 2: STALE VERSION REFUSAL --- */
+function testStaleVersion(services) {
+  const { store } = services;
+  const taskId = 'T-g04-stale', jobId = 'J-g04-stale', cmdId = 'CMD-g04-stale-001';
+  const ownerId = 'PERSON-tanya';
+
+  enableFn01(store);
+  upsertJob(store, buildJob(jobId, 'SS-DEV-G04-STALE', true, 'R1'));
+  upsertTask(store, buildTask(taskId, jobId, ownerId, 'S04-DEV-COMPLETE'));
+
+  const before = snapshotTask(store, taskId);
+  // Task version is 1, submit with expected_version=99 (valid integer, definitely stale)
+  const command = makeCommand(cmdId, taskId, 99, 'Stale version test');
+  const proof = services.signProof(command);
+  const result = services.runCommand(command, proof);
+
+  const after = snapshotTask(store, taskId);
+  const events = store.list('TaskEvents').filter(e => e.task_id === taskId).length;
+  const audits = store.list('AuditEvents').filter(e => e.entity_id === taskId).length;
+  const journals = store.list('CommitJournal').filter(j => j.command_id === cmdId);
+
+  const expected = 'STALE_VERSION';
+  const pass = result && result.status === 'Failed' && !result.committed &&
+    (result.error === expected || result.error === 'INVALID_VERSION') &&
+    before.status === 'Open' && before.version === 1 &&
+    after && after.status === 'Open' && after.version === 1 &&
+    events === 0 && audits === 0;
+
+  return makeResult('Stale version refusal', taskId, jobId, cmdId, before, after,
+    events, audits, journals.length > 0 ? { state: journals[0].state, count: journals.length } : null,
+    expected, result ? result.error : 'no result', pass,
+    pass ? 'Correctly refused. No mutations.' : 'FAILED: ' + JSON.stringify(result));
+}
+
+/* --- Test 3: DUPLICATE COMMAND REPLAY --- */
+function testDuplicateReplay(services) {
+  const { store } = services;
+  const taskId = 'T-g04-replay', jobId = 'J-g04-replay', cmdId = 'CMD-g04-replay-001';
+  const ownerId = 'PERSON-tanya';
+
+  enableFn01(store);
+  upsertJob(store, buildJob(jobId, 'SS-DEV-G04-REPLAY', true, 'R1'));
+  upsertTask(store, buildTask(taskId, jobId, ownerId, 'S04-DEV-COMPLETE'));
+
+  const before = snapshotTask(store, taskId);
+  const command = makeCommand(cmdId, taskId, 1, 'Replay test - first call');
+  const proof = services.signProof(command);
+
+  // First call — should succeed
+  const first = services.runCommand(command, proof);
+  const afterFirst = snapshotTask(store, taskId);
+
+  // Second call — same command, same proof — should replay
+  const second = services.runCommand(command, proof);
+  const afterSecond = snapshotTask(store, taskId);
+
+  const events = store.list('TaskEvents').filter(e => e.task_id === taskId).length;
+  const audits = store.list('AuditEvents').filter(e => e.entity_id === taskId).length;
+  const journals = store.list('CommitJournal').filter(j => j.command_id === cmdId);
+
+  const pass = first && first.status === 'Committed' && first.committed === true &&
+    afterFirst && afterFirst.status === 'Complete' && afterFirst.version === 2 &&
+    second && second.status === 'Committed' && second.committed === true &&
+    afterSecond && afterSecond.status === 'Complete' && afterSecond.version === 2 &&
+    events === 1 && audits === 1 && journals.length === 1 && journals[0].state === 'Committed';
+
+  return makeResult('Duplicate command replay', taskId, jobId, cmdId, before, afterSecond,
+    events, audits, journals.length > 0 ? { state: journals[0].state, count: journals.length } : null,
+    'Committed replay, no duplicate writes',
+    first ? first.status + ' / ' + (second ? second.status : '?') : 'no result', pass,
+    pass ? 'First committed, second replayed result. Exactly one event/audit/journal.' :
+    'FAILED: first=' + JSON.stringify(first) + ' second=' + JSON.stringify(second));
+}
+
+/* --- Test 4: SAME COMMAND ID / DIFFERENT PAYLOAD REFUSAL --- */
+function testCommandMismatch(services) {
+  const { store } = services;
+  const taskId = 'T-g04-mismatch', jobId = 'J-g04-mismatch', cmdId = 'CMD-g04-mismatch-001';
+  const ownerId = 'PERSON-tanya';
+
+  enableFn01(store);
+  upsertJob(store, buildJob(jobId, 'SS-DEV-G04-MISMATCH', true, 'R1'));
+  upsertTask(store, buildTask(taskId, jobId, ownerId, 'S04-DEV-COMPLETE'));
+
+  const before = snapshotTask(store, taskId);
+
+  // First call — should succeed
+  const firstCmd = makeCommand(cmdId, taskId, 1, 'Original note');
+  const firstProof = services.signProof(firstCmd);
+  const first = services.runCommand(firstCmd, firstProof);
+
+  // Second call — same command_id, different note
+  const secondCmd = makeCommand(cmdId, taskId, 1, 'Changed note - should be refused');
+  const secondProof = services.signProof(secondCmd);
+  const second = services.runCommand(secondCmd, secondProof);
+
+  const after = snapshotTask(store, taskId);
+  const events = store.list('TaskEvents').filter(e => e.task_id === taskId).length;
+  const audits = store.list('AuditEvents').filter(e => e.entity_id === taskId).length;
+  const journals = store.list('CommitJournal').filter(j => j.command_id === cmdId);
+
+  const pass = first && first.status === 'Committed' &&
+    second && second.status === 'Failed' &&
+    (second.error === 'COMMAND_ID_CONFLICT' || second.error === 'TRUSTED_IDENTITY_REQUIRED') &&
+    after && after.version === 2 && events === 1 && audits === 1 &&
+    journals.length === 1 && journals[0].state === 'Committed';
+
+  return makeResult('Command ID mismatch refusal', taskId, jobId, cmdId, before, after,
+    events, audits, journals.length > 0 ? { state: journals[0].state, count: journals.length } : null,
+    'COMMAND_ID_CONFLICT or TRUSTED_IDENTITY_REQUIRED',
+    second ? second.error : 'no result', pass,
+    pass ? 'First committed, second refused. No duplicate writes.' :
+    'FAILED: first=' + JSON.stringify(first) + ' second=' + JSON.stringify(second));
+}
+
+/* --- Test 5: OUT-OF-PILOT REFUSAL --- */
+function testOutOfPilot(services) {
+  const { store } = services;
+  const taskId = 'T-g04-outside', jobId = 'J-g04-outside', cmdId = 'CMD-g04-outside-001';
+  const ownerId = 'PERSON-tanya';
+
+  enableFn01(store);
+  // Create a non-pilot job (pilot_job = false)
+  upsertJob(store, buildJob(jobId, 'SS-DEV-G04-OUTSIDE', false, 'R1'));
+  upsertTask(store, buildTask(taskId, jobId, ownerId, 'S04-DEV-COMPLETE'));
+
+  const before = snapshotTask(store, taskId);
+  const command = makeCommand(cmdId, taskId, 1, 'Outside pilot scope');
+  const proof = services.signProof(command);
+  const result = services.runCommand(command, proof);
+
+  const after = snapshotTask(store, taskId);
+  const events = store.list('TaskEvents').filter(e => e.task_id === taskId).length;
+  const audits = store.list('AuditEvents').filter(e => e.entity_id === taskId).length;
+  const journals = store.list('CommitJournal').filter(j => j.command_id === cmdId);
+
+  const expected = 'OUTSIDE_PILOT';
+  const pass = result && result.status === 'Failed' && !result.committed &&
+    result.error === expected && before.status === 'Open' && before.version === 1 &&
+    after && after.status === 'Open' && after.version === 1 &&
+    events === 0 && audits === 0;
+
+  return makeResult('Out-of-pilot refusal', taskId, jobId, cmdId, before, after,
+    events, audits, journals.length > 0 ? { state: journals[0].state, count: journals.length } : null,
+    expected, result ? result.error : 'no result', pass,
+    pass ? 'Correctly refused. No mutations.' : 'FAILED: ' + JSON.stringify(result));
+}
+
+/* --- Restore safe state --- */
+function restoreSafeState(store) {
+  disableFn01(store);
+  return { fn01_restored: true, fn01_mode: 'Disabled' };
+}
+
+module.exports = {
+  DEV_SHEET_ID,
+  buildJob, buildTask, upsertJob, upsertTask,
+  enableFn01, disableFn01, setFn01, getFn01,
+  makeCommand, snapshotTask, countByCommit, makeResult,
+  testDisabledMode, testStaleVersion, testDuplicateReplay,
+  testCommandMismatch, testOutOfPilot, restoreSafeState
+};

@@ -1,4 +1,4 @@
-# S01 tests
+# Foundation tests and acceptance register
 
 Run `npm test` with Node 22 or later. No dependencies/install, credentials, network or cloud resources are required. Tests exercise actual allowlist code and the probe wrapper with instrumented Mail/Calendar stubs. An approved capture or stubbed submission is not delivery evidence. T001–T112 are outside S01 and remain NOT RUN.
 
@@ -8,4 +8,12 @@ To capture a new local run, invoke Node's TAP reporter and record the command, U
 
 ## RA01 release planning
 
-Use [release-test-planning.md](release-test-planning.md), `original-case-register.csv`, `original-assertion-plan.csv` and `release-test-plan.csv` alongside the unchanged S01 `test-register.csv`. They retain all T001–T112 and add RT01–RT08 planned runs. All new rows are NOT RUN; original automated assertions stay outstanding even when a scoped manual variant later passes. S18 acceptance, S19 migration/training and S20 controlled release repeat for each release. No tests or functionality were executed/implemented by this planning update.
+Use [release-test-planning.md](release-test-planning.md), `original-case-register.csv`, `original-assertion-plan.csv` and `release-test-plan.csv` alongside `test-register.csv` (now also recording S02 cloud evidence). They retain all T001–T112 and add RT01–RT08 planned runs. All new rows are NOT RUN; original automated assertions stay outstanding even when a scoped manual variant later passes. S18 acceptance, S19 migration/training and S20 controlled release repeat for each release. No tests or functionality were executed/implemented by this planning update.
+
+## Current foundation verification
+
+The suite now covers S01, S02 schema/provisioner/Apps Script adapter and local S03 processor/recovery. S02 cloud validation passed: see `S02-CLOUD-20260905` in test-register.csv and [closure](../docs/S02-closure.md). S03 remains local, S04 is now implemented locally, and G01 remains blocked. The original T/RT registers describe full acceptance; component passes do not close them. The 2026-09-05 documentation audit ran `npm test`: 122/122 passed, no skips.
+
+## S04 local implementation verification
+
+`npm run test:s04` runs 93 tests for the durable Complete Task processor, signed actor provider, file restart/recovery, script-lock races, exact-schema Sheets adapter, .gs entry/runtime, package drift/parity and Pending/Committed/Failed controller. `npm test` passes all 215 tests (the 122 existing tests are retained). [Recorded local run](../docs/evidence/S04-local-run.json). No G04 cloud acceptance is claimed.

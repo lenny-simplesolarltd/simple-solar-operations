@@ -1,5 +1,7 @@
 # S01 audit — test environment and ownership
 
+> Historical scope/planning record. Current stage status and DEV authorisation boundaries are in [implementation-status.md](implementation-status.md): S01 PARTIAL, G01 BLOCKED, S02 COMPLETE IN DEV, S03 complete locally only, S04 LOCAL IMPLEMENTATION PASS / NOT CLOUD DEPLOYED. Earlier “unstarted”, “no S02” and strict wait-to-code statements below describe the original task, not current status. S02 Apply must not be repeated.
+
 Audit date: 2026-09-05. Scope: S01 only. Overall: PARTIAL locally; G01 BLOCKED.
 
 ## Authority and observed workspace
@@ -38,7 +40,7 @@ Architecture: AppSheet → structured Google Sheets → authoritative Apps Scrip
 6. Ben's company account can access project/system/integration inventory.
 7. Environment isolation, ownership, entitlement checks, inventory exports and setup registers above completed; retain environment register, ownership/access screenshots, automation inventory, allowed/blocked results and initial source version.
 
-The six explicit checks are split into seven rows in the gate because approved email and approved Calendar receipt are recorded separately. Supporting S01 completion conditions are also reported individually there. A local capture test cannot satisfy G01's real connector/identity requirements. S02 must wait for all G01 checks and S01 prerequisites to pass.
+The six explicit checks are split into seven rows in the gate because approved email and approved Calendar receipt are recorded separately. Supporting S01 completion conditions are also reported individually there. A local capture test cannot satisfy G01's real connector/identity requirements. The original strict progression rule is superseded for continued DEV coding by the current authorised boundary; outstanding G01 evidence still blocks release acceptance.
 
 ## Inputs, unknowns and dependencies
 

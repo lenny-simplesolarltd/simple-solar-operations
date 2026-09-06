@@ -1,0 +1,146 @@
+{
+  "evidence_type": "G04 core DEV cloud negative-test execution — user-supplied confirmation",
+  "execution_date": "2026-09-06",
+  "environment": "DEV",
+  "provenance": "User confirmed the following cloud state after pasting G04NegativeCore.gs and G04NegativeTests.js into the S04 backend project and executing each test function. No independent cloud execution was performed by the local agent.",
+
+  "cloud_resources": {
+    "dev_sheet_id": "1z7PNZtDdC4Z5eLbmTuQdqp0QpJSmuEvx3QvN3VyNTsc",
+    "s04_backend_script_id": "10WnsSnwVHG2c5oAhxj507W4bcD1f1VbgSvwaGCifEqQoHSh-msPkag2g"
+  },
+
+  "prior_state": {
+    "s04_happy_path": "PASS (T-open committed, evidence in S04-dev-cloud-happy-path.json)",
+    "fn01_before_tests": "Disabled/None/R1",
+    "prod_untouched": true
+  },
+
+  "tests": [
+    {
+      "name": "Disabled mode refusal",
+      "task_id": "T-g04-disabled",
+      "job_id": "J-g04-disabled",
+      "command_id": "CMD-g04-disabled-001",
+      "expected": "MODE_DENIED",
+      "actual": "MODE_DENIED",
+      "before_status": "Open",
+      "before_version": 1,
+      "after_status": "Open",
+      "after_version": 1,
+      "task_events": 0,
+      "audit_events": 0,
+      "commit_journal_rows": 0,
+      "pass": true,
+      "notes": "FN-01 Disabled; command correctly refused before any mutation."
+    },
+    {
+      "name": "Stale version refusal",
+      "task_id": "T-g04-stale",
+      "job_id": "J-g04-stale",
+      "command_id": "CMD-g04-stale-001",
+      "expected": "STALE_VERSION",
+      "actual": "STALE_VERSION",
+      "before_status": "Open",
+      "before_version": 1,
+      "after_status": "Open",
+      "after_version": 1,
+      "task_events": 0,
+      "audit_events": 0,
+      "commit_journal_rows": 0,
+      "pass": true,
+      "notes": "FN-01 enabled; task at version 1, submitted with expected_version=99. Correctly refused."
+    },
+    {
+      "name": "Duplicate command replay",
+      "task_id": "T-g04-replay",
+      "job_id": "J-g04-replay",
+      "command_id": "CMD-g04-replay-001",
+      "expected": "Committed/idempotent replay",
+      "first_result": "Committed",
+      "replay_result": "Committed",
+      "before_status": "Open",
+      "before_version": 1,
+      "after_status": "Complete",
+      "after_version": 2,
+      "task_events": 1,
+      "audit_events": 1,
+      "commit_journal_rows": 1,
+      "commit_journal_state": "Committed",
+      "pass": true,
+      "notes": "First call committed. Replay returned identical result. Exactly one event/audit/journal row. Version advanced once only."
+    },
+    {
+      "name": "Same command ID / changed payload",
+      "task_id": "T-g04-mismatch",
+      "job_id": "J-g04-mismatch",
+      "command_id": "CMD-g04-mismatch-001",
+      "expected": "COMMAND_ID_CONFLICT",
+      "first_result": "Committed",
+      "second_result": "COMMAND_ID_CONFLICT",
+      "before_status": "Open",
+      "before_version": 1,
+      "after_status": "Complete",
+      "after_version": 2,
+      "task_events": 1,
+      "audit_events": 1,
+      "commit_journal_rows": 1,
+      "commit_journal_state": "Committed",
+      "pass": true,
+      "notes": "First call committed with original note. Second call with same command_id but changed note correctly refused. No duplicate writes."
+    },
+    {
+      "name": "Out-of-pilot refusal",
+      "task_id": "T-g04-outside",
+      "job_id": "J-g04-outside",
+      "command_id": "CMD-g04-outside-001",
+      "expected": "OUTSIDE_PILOT",
+      "actual": "OUTSIDE_PILOT",
+      "before_status": "Open",
+      "before_version": 1,
+      "after_status": "Open",
+      "after_version": 1,
+      "task_events": 0,
+      "audit_events": 0,
+      "commit_journal_rows": 0,
+      "pass": true,
+      "notes": "FN-01 enabled; non-pilot job (pilot_job=false). Correctly refused."
+    }
+  ],
+
+  "cleanup": {
+    "restoreG04SafeState_executed": true,
+    "fn01_final_mode": "Disabled",
+    "fn01_final_scope": "None",
+    "fn01_final_release": "R1",
+    "prod_untouched": true
+  },
+
+  "summary": {
+    "tests_run": 5,
+    "tests_passed": 5,
+    "tests_failed": 0,
+    "g04_core_control_pack": "PASS"
+  },
+
+  "remaining_unexecuted_g04_scenarios": [
+    "Inactive actor denial (actor exists but active=false)",
+    "No-role denial (actor has zero active PersonRoles)",
+    "Installer role denial (actor has Installer role, no CompleteTask permission)",
+    "Forged/spoofed proof rejection (tampered signature, wrong email, wrong audience)",
+    "Expired proof rejection",
+    "Proof reuse across different commands",
+    "Concurrent submissions (two commands targeting same task simultaneously)",
+    "Write-interruption recovery at each of the 6 checkpoint positions",
+    "Row capacity exhaustion behaviour",
+    "Mac/phone client device tests",
+    "Protected file access tests",
+    "AppSheet Security Filter verification",
+    "User-switch / session-change behaviour",
+    "Bridge UI: network-loss retry, challenge expiry, wrong-user challenge"
+  ],
+
+  "s04_status": "DEV CLOUD HAPPY PATH: PASS",
+  "g04_status": "CORE DEV CLOUD CONTROL PACK: PASS (5/5 negative tests). Full G04 not passed; 14 broader scenarios remain unexecuted in cloud.",
+  "prod_status": "UNTOUCHED",
+  "s01_g01_status": "UNCHANGED (S01 PARTIAL, G01 BLOCKED)"
+}

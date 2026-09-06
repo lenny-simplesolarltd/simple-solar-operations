@@ -1,0 +1,32 @@
+<!doctype html>
+<html><head><base target="_top"><meta name="viewport" content="width=device-width, initial-scale=1">
+<style>body{font:16px system-ui;max-width:36rem;margin:2rem auto;padding:1rem}textarea{width:100%;min-height:6rem}button{padding:.8rem;margin-top:1rem}#status{white-space:pre-wrap}</style></head>
+<body>
+<h1>Complete DEV task</h1>
+<p>Signed in as <strong id="email"><?= model.email ?></strong></p>
+<p>Task: <strong><?= model.task_id ?></strong> · Expected version: <?= model.expected_version ?></p>
+<p>This action applies only to an approved synthetic DEV task.</p>
+<input type="hidden" id="challenge" value="<?= model.challenge ?>">
+<label for="note">Completion note</label><textarea id="note" maxlength="2000"><?= model.note ?></textarea>
+<button id="complete">Confirm completion</button><p id="status" role="status" aria-live="polite"></p>
+<script>
+const button = document.getElementById('complete'), note = document.getElementById('note'), status = document.getElementById('status');
+let started = false;
+button.onclick = function() {
+  button.disabled = true; note.disabled = true; started = true;
+  status.textContent = 'Pending — waiting for a confirmed result.';
+  google.script.run.withSuccessHandler(function(result) {
+    if (result.status === 'Committed' && result.committed === true) {
+      status.textContent = 'Committed. Task completed. Return to AppSheet and sync.';
+      button.textContent = 'Completed';
+    } else {
+      status.textContent = result.status + ': ' + (result.error || 'Result unconfirmed') + '. Keep this page open.';
+      button.textContent = 'Retry same command'; button.disabled = result.error === 'RECOVERY_REQUIRED';
+    }
+  }).withFailureHandler(function() {
+    status.textContent = 'Pending — connection uncertain. Retry the same command; do not open a new action.';
+    button.textContent = 'Retry same command'; button.disabled = false;
+  }).submitS04BridgeCommand(document.getElementById('challenge').value, note.value);
+};
+window.onbeforeunload = function() { if (started && button.textContent !== 'Completed') return 'A command may still be pending.'; };
+</script></body></html>

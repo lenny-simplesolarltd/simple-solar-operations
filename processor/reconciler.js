@@ -69,5 +69,5 @@ function reconcileOutbox(outbox, externalStateChecker) {
 }
 
 if (typeof module !== 'undefined') {
-  module.exports = { createReconciler, recoverUncommitted, reconcileOutbox };
+  module.exports = { createReconciler, recoverUncommitted, reconcileOutbox, checkApplicationStatus };
 }

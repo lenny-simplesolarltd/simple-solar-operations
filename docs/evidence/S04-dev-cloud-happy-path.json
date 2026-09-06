@@ -1,0 +1,123 @@
+{
+  "evidence_type": "S04 DEV cloud happy-path execution — user-supplied confirmation",
+  "execution_date": "2026-09-06",
+  "environment": "DEV",
+  "provenance": "User confirmed the following cloud state after running the S04 fixture tooling, enabling FN-01, and completing the synthetic task through the deployed bridge/backend. No independent cloud execution was performed by the local agent. Exact cloud timestamps, source hashes, and screenshots were not independently captured.",
+
+  "cloud_resources": {
+    "dev_sheet_id": "1z7PNZtDdC4Z5eLbmTuQdqp0QpJSmuEvx3QvN3VyNTsc",
+    "s04_backend_script_id": "10WnsSnwVHG2c5oAhxj507W4bcD1f1VbgSvwaGCifEqQoHSh-msPkag2g",
+    "s04_bridge_script_id": "1Df0xQT_jfvEnk6ukv2drHGRNY3N-XVeRpRUwH9UaaQod1qCcwU1d17gc",
+    "approved_test_user": "lenny@simplesolarltd.co.uk"
+  },
+
+  "fixture_state_before": {
+    "person_used": "PERSON-tanya",
+    "person_email": "lenny@simplesolarltd.co.uk",
+    "active_role": "Office (PROLE-tanya-office)",
+    "permission_rule": "PERM-office-tasks (Office, CompleteTask, Tasks, All, allowed=true)",
+    "synthetic_job_id": "J-s04-pilot",
+    "synthetic_job_job_id": "SS-DEV-S04-* (explicit synthetic, cannot be mistaken for real)",
+    "synthetic_task_id": "T-open",
+    "fn01_enabled_for_test": true,
+    "fn01_mode": "Automated",
+    "fn01_authorised_job_scope": "Pilot",
+    "fn01_target_release": "R1",
+    "fn01_restored_after_test": true,
+    "fn01_restored_mode": "Disabled",
+    "fn01_restored_scope": "None"
+  },
+
+  "command": {
+    "command_id": "CMD-1d463de2-264d-44cd-b78f-70aa14f0ed8a",
+    "action": "COMPLETE_TASK",
+    "task_id": "T-open",
+    "expected_version": 1,
+    "payload": {
+      "completion_note": "Synthetic S04 DEV completion"
+    }
+  },
+
+  "commit": {
+    "commit_id": "S04-e0e910ac76b4c016989f215cfe1afa818fb2505bacea7e3c403cf834392a1832",
+    "state": "Committed"
+  },
+
+  "cloud_mutations_verified": {
+    "task_update": {
+      "table": "Tasks",
+      "id": "T-open",
+      "status": "Complete",
+      "version": 2,
+      "completed_by": "PERSON-tanya",
+      "completion_note": "Synthetic S04 DEV completion",
+      "commit_id": "S04-e0e910ac76b4c016989f215cfe1afa818fb2505bacea7e3c403cf834392a1832"
+    },
+    "task_event": {
+      "table": "TaskEvents",
+      "count": 1,
+      "action": "COMPLETED",
+      "actor": "PERSON-tanya",
+      "commit_id": "S04-e0e910ac76b4c016989f215cfe1afa818fb2505bacea7e3c403cf834392a1832"
+    },
+    "audit_event": {
+      "table": "AuditEvents",
+      "count": 1,
+      "action": "COMPLETE_TASK",
+      "initiating_actor": "PERSON-tanya",
+      "correlation_id": "CMD-1d463de2-264d-44cd-b78f-70aa14f0ed8a",
+      "commit_id": "S04-e0e910ac76b4c016989f215cfe1afa818fb2505bacea7e3c403cf834392a1832"
+    },
+    "commit_journal": {
+      "table": "CommitJournal",
+      "count": 1,
+      "state": "Committed",
+      "command_id": "CMD-1d463de2-264d-44cd-b78f-70aa14f0ed8a",
+      "commit_id": "S04-e0e910ac76b4c016989f215cfe1afa818fb2505bacea7e3c403cf834392a1832"
+    },
+    "no_other_mutations": true,
+    "all_records_share_commit_id": true
+  },
+
+  "bridge_ui_observed": "Committed. Task completed. Return to AppSheet and sync.",
+
+  "happy_path_result": "PASS",
+  "happy_path_notes": [
+    "Exactly one Tasks row updated: Open → Complete, version 1 → 2",
+    "Exactly one TaskEvents row created: COMPLETED by PERSON-tanya",
+    "Exactly one AuditEvents row created: COMPLETE_TASK by PERSON-tanya",
+    "Exactly one CommitJournal row created: Committed state",
+    "All four records share the same commit_id",
+    "Initiating actor correctly resolved to PERSON-tanya (not app owner, not editable field)",
+    "Bridge displayed Committed confirmation",
+    "FN-01 enabled only for test duration; restored to Disabled/None immediately after",
+    "PROD untouched",
+    "No outbound email/calendar/external calls"
+  ],
+
+  "remaining_g04_tests": [
+    "Duplicate command replay (same ID + same request → replay result without new writes)",
+    "Changed payload with same command ID → COMMAND_ID_CONFLICT",
+    "Cross-actor replay denied",
+    "Stale version rejection",
+    "Disabled mode rejection",
+    "Manual mode rejection",
+    "Outside-pilot rejection",
+    "Non-synthetic task rejection",
+    "Blocked/revision-required/cancelled task rejection",
+    "Unsatisfied dependency rejection",
+    "Permission denial (installer, no-role, inactive)",
+    "Spoofed identity/proof rejection",
+    "Concurrent command serialisation",
+    "Write interruption recovery (all 6 checkpoints)",
+    "Row capacity exhaustion behaviour",
+    "Mac/phone client tests",
+    "Protected file access tests",
+    "AppSheet Security Filter verification"
+  ],
+
+  "g04_status": "NOT PASSED — happy path only; negative/replay/authorization/concurrency tests remain NOT RUN",
+  "s04_dev_cloud_status": "HAPPY PATH PASS — first end-to-end cloud transaction confirmed",
+  "prod_status": "UNTOUCHED",
+  "s01_g01_status": "UNCHANGED (S01 PARTIAL, G01 BLOCKED)"
+}

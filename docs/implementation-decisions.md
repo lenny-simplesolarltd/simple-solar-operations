@@ -1,5 +1,7 @@
 # Confirmed implementation and release-planning decisions
 
+> Historical scope/planning record. Current stage status and DEV authorisation boundaries are in [implementation-status.md](implementation-status.md): S01 PARTIAL, G01 BLOCKED, S02 COMPLETE IN DEV, S03 complete locally only, S04 LOCAL IMPLEMENTATION PASS / NOT CLOUD DEPLOYED. Earlier “unstarted”, “no S02” and strict wait-to-code statements below describe the original task, not current status. S02 Apply must not be repeated.
+
 ## DEC-001 — staged functional rollout (historical)
 
 Status: **SUPERSEDED for release order/allocation and strict stage sequencing by DEC-002 / RA01**. Historical decision owner: **Ben / Simple Solar**. Recorded: 2026-09-05. Source: Ben / Simple Solar business clarification supplied by the user in this project conversation.

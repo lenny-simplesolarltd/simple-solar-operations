@@ -1,0 +1,1085 @@
+TAP version 13
+# Subtest: Companies headers resolve through enumeration
+ok 1 - Companies headers resolve through enumeration
+  ---
+  duration_ms: 2.4725
+  ...
+# Subtest: People headers resolve through enumeration
+ok 2 - People headers resolve through enumeration
+  ---
+  duration_ms: 1.250333
+  ...
+# Subtest: Jobs headers resolve through enumeration
+ok 3 - Jobs headers resolve through enumeration
+  ---
+  duration_ms: 0.776959
+  ...
+# Subtest: Apps Script validation reads all 60 tables without named lookup, active sheet or writes
+ok 4 - Apps Script validation reads all 60 tables without named lookup, active sheet or writes
+  ---
+  duration_ms: 5.8725
+  ...
+# Subtest: missing tab returns null/empty data and explicit header error
+ok 5 - missing tab returns null/empty data and explicit header error
+  ---
+  duration_ms: 1.227542
+  ...
+# Subtest: diagnostic retains successful header reads despite named lookup failures and stays read-only
+ok 6 - diagnostic retains successful header reads despite named lookup failures and stays read-only
+  ---
+  duration_ms: 1.046791
+  ...
+# Subtest: diagnostic identifies failure at getSheets
+ok 7 - diagnostic identifies failure at getSheets
+  ---
+  duration_ms: 1.032542
+  ...
+# Subtest: diagnostic identifies failure at getName
+ok 8 - diagnostic identifies failure at getName
+  ---
+  duration_ms: 1.038042
+  ...
+# Subtest: diagnostic identifies failure at getSheetId
+ok 9 - diagnostic identifies failure at getSheetId
+  ---
+  duration_ms: 1.233791
+  ...
+# Subtest: diagnostic identifies failure at getLastColumn
+ok 10 - diagnostic identifies failure at getLastColumn
+  ---
+  duration_ms: 1.149375
+  ...
+# Subtest: diagnostic identifies failure at getRange
+ok 11 - diagnostic identifies failure at getRange
+  ---
+  duration_ms: 1.383375
+  ...
+# Subtest: diagnostic identifies failure at getValues
+ok 12 - diagnostic identifies failure at getValues
+  ---
+  duration_ms: 0.922084
+  ...
+# Subtest: S02SchemaData.js embedded schema matches schema/tables.json exactly
+ok 13 - S02SchemaData.js embedded schema matches schema/tables.json exactly
+  ---
+  duration_ms: 3.7205
+  ...
+# Subtest: S02SeedData.js embedded seed matches schema/config-seed.json exactly
+ok 14 - S02SeedData.js embedded seed matches schema/config-seed.json exactly
+  ---
+  duration_ms: 0.938042
+  ...
+# Subtest: S02_SCHEMA_VERSION constant matches schema version
+ok 15 - S02_SCHEMA_VERSION constant matches schema version
+  ---
+  duration_ms: 0.259333
+  ...
+# Subtest: embedded schema is valid JSON (round-trip)
+ok 16 - embedded schema is valid JSON (round-trip)
+  ---
+  duration_ms: 1.16925
+  ...
+# Subtest: no S02_SCHEMA or S02_CONFIG_SEED reference in provisioner
+ok 17 - no S02_SCHEMA or S02_CONFIG_SEED reference in provisioner
+  ---
+  duration_ms: 0.148
+  ...
+# Subtest: S02ProvisionerCore.js exposes S02Provisioner global with provisionSchema and validateSchema
+ok 18 - S02ProvisionerCore.js exposes S02Provisioner global with provisionSchema and validateSchema
+  ---
+  duration_ms: 0.497833
+  ...
+# Subtest: S02ProvisionerCore.js has no Node.js runtime dependencies
+ok 19 - S02ProvisionerCore.js has no Node.js runtime dependencies
+  ---
+  duration_ms: 0.283625
+  ...
+# Subtest: S02ProvisionerCore.js matches schema/provisioner.js exactly
+ok 20 - S02ProvisionerCore.js matches schema/provisioner.js exactly
+  ---
+  duration_ms: 0.125667
+  ...
+# Subtest: S02ProvisionerCore.js uses only ES3-compatible syntax (no const/let/arrow/for-of)
+ok 21 - S02ProvisionerCore.js uses only ES3-compatible syntax (no const/let/arrow/for-of)
+  ---
+  duration_ms: 0.472958
+  ...
+# Subtest: canonical schema/provisioner.js also exposes S02Provisioner global
+ok 22 - canonical schema/provisioner.js also exposes S02Provisioner global
+  ---
+  duration_ms: 0.523916
+  ...
+# Subtest: provisioner core functions identically via global and require
+ok 23 - provisioner core functions identically via global and require
+  ---
+  duration_ms: 3.182417
+  ...
+# Subtest: S02Provisioner.js adapter uses _findSheetByName, not getSheetByName
+ok 24 - S02Provisioner.js adapter uses _findSheetByName, not getSheetByName
+  ---
+  duration_ms: 0.134208
+  ...
+# Subtest: S02Provisioner.js: only runS02HeaderDiagnostic contains getSheetByName
+ok 25 - S02Provisioner.js: only runS02HeaderDiagnostic contains getSheetByName
+  ---
+  duration_ms: 0.1025
+  ...
+# Subtest: EMAIL: allowed capture succeeds without a transport call
+ok 26 - EMAIL: allowed capture succeeds without a transport call
+  ---
+  duration_ms: 0.624417
+  ...
+# Subtest: EMAIL: mixed approved and unapproved recipients refused before transport
+ok 27 - EMAIL: mixed approved and unapproved recipients refused before transport
+  ---
+  duration_ms: 0.236292
+  ...
+# Subtest: CALENDAR: allowed capture succeeds without a transport call
+ok 28 - CALENDAR: allowed capture succeeds without a transport call
+  ---
+  duration_ms: 0.052625
+  ...
+# Subtest: CALENDAR: mixed approved and unapproved recipients refused before transport
+ok 29 - CALENDAR: mixed approved and unapproved recipients refused before transport
+  ---
+  duration_ms: 0.0985
+  ...
+# Subtest: CC and BCC cannot bypass allowlist
+ok 30 - CC and BCC cannot bypass allowlist
+  ---
+  duration_ms: 0.407083
+  ...
+# Subtest: reject display names, lists, wildcards, whitespace and header injection
+ok 31 - reject display names, lists, wildcards, whitespace and header injection
+  ---
+  duration_ms: 0.131167
+  ...
+# Subtest: bare mailbox case normalization works without alias or domain matching
+ok 32 - bare mailbox case normalization works without alias or domain matching
+  ---
+  duration_ms: 0.05775
+  ...
+# Subtest: missing configuration, invalid environments and PROD fail closed
+ok 33 - missing configuration, invalid environments and PROD fail closed
+  ---
+  duration_ms: 0.072084
+  ...
+# Subtest: PROBE requires explicit enablement
+ok 34 - PROBE requires explicit enablement
+  ---
+  duration_ms: 0.231541
+  ...
+# Subtest: calendar target is independently restricted
+ok 35 - calendar target is independently restricted
+  ---
+  duration_ms: 0.273875
+  ...
+# Subtest: reject unsupported channels and undeclared routing fields
+ok 36 - reject unsupported channels and undeclared routing fields
+  ---
+  duration_ms: 0.144459
+  ...
+# Subtest: EMAIL: probe wrapper submits through stub only and does not claim receipt
+ok 37 - EMAIL: probe wrapper submits through stub only and does not claim receipt
+  ---
+  duration_ms: 0.820833
+  ...
+# Subtest: EMAIL: wrapper refuses unapproved destination with no side effect
+ok 38 - EMAIL: wrapper refuses unapproved destination with no side effect
+  ---
+  duration_ms: 0.322459
+  ...
+# Subtest: CALENDAR: probe wrapper submits through stub only and does not claim receipt
+ok 39 - CALENDAR: probe wrapper submits through stub only and does not claim receipt
+  ---
+  duration_ms: 0.374542
+  ...
+# Subtest: CALENDAR: wrapper refuses unapproved destination with no side effect
+ok 40 - CALENDAR: wrapper refuses unapproved destination with no side effect
+  ---
+  duration_ms: 0.27425
+  ...
+# Subtest: wrapper refuses wrong project and non-owned calendar
+ok 41 - wrapper refuses wrong project and non-owned calendar
+  ---
+  duration_ms: 0.5995
+  ...
+# Subtest: duplicate command with same content returns original result
+ok 42 - duplicate command with same content returns original result
+  ---
+  duration_ms: 1.840667
+  ...
+# Subtest: same command_id with different content is rejected
+ok 43 - same command_id with different content is rejected
+  ---
+  duration_ms: 0.202417
+  ...
+# Subtest: stale version is rejected
+ok 44 - stale version is rejected
+  ---
+  duration_ms: 0.131541
+  ...
+# Subtest: matching version passes
+ok 45 - matching version passes
+  ---
+  duration_ms: 0.105875
+  ...
+# Subtest: installer cannot complete tasks (no permission)
+ok 46 - installer cannot complete tasks (no permission)
+  ---
+  duration_ms: 0.125833
+  ...
+# Subtest: unknown actor is rejected
+ok 47 - unknown actor is rejected
+  ---
+  duration_ms: 0.44275
+  ...
+# Subtest: deactivated actor is rejected
+ok 48 - deactivated actor is rejected
+  ---
+  duration_ms: 0.111
+  ...
+# Subtest: Disabled function is rejected
+ok 49 - Disabled function is rejected
+  ---
+  duration_ms: 0.065542
+  ...
+# Subtest: Manual function is rejected for automated execution
+ok 50 - Manual function is rejected for automated execution
+  ---
+  duration_ms: 0.291
+  ...
+# Subtest: pilot-only function rejects non-pilot job
+ok 51 - pilot-only function rejects non-pilot job
+  ---
+  duration_ms: 0.311791
+  ...
+# Subtest: pilot-only function accepts pilot job
+ok 52 - pilot-only function accepts pilot job
+  ---
+  duration_ms: 0.150417
+  ...
+# Subtest: interrupted commit: FULLY_APPLIED is safe to commit
+ok 53 - interrupted commit: FULLY_APPLIED is safe to commit
+  ---
+  duration_ms: 0.128125
+  ...
+# Subtest: interrupted commit: NOT_APPLIED is safe to discard
+ok 54 - interrupted commit: NOT_APPLIED is safe to discard
+  ---
+  duration_ms: 0.048125
+  ...
+# Subtest: interrupted commit: PARTIALLY_APPLIED requires manual review
+ok 55 - interrupted commit: PARTIALLY_APPLIED requires manual review
+  ---
+  duration_ms: 0.0515
+  ...
+# Subtest: task with same instance_key is not duplicated
+ok 56 - task with same instance_key is not duplicated
+  ---
+  duration_ms: 0.138916
+  ...
+# Subtest: task with different parameters creates separate instance
+ok 57 - task with different parameters creates separate instance
+  ---
+  duration_ms: 0.066416
+  ...
+# Subtest: audit event is recorded for each committed command
+ok 58 - audit event is recorded for each committed command
+  ---
+  duration_ms: 0.074084
+  ...
+# Subtest: outbox item with same idempotency_key is not duplicated
+ok 59 - outbox item with same idempotency_key is not duplicated
+  ---
+  duration_ms: 0.139042
+  ...
+# Subtest: transient failure retries with backoff
+ok 60 - transient failure retries with backoff
+  ---
+  duration_ms: 0.098958
+  ...
+# Subtest: max retries escalates to NEEDS_REVIEW
+ok 61 - max retries escalates to NEEDS_REVIEW
+  ---
+  duration_ms: 0.056
+  ...
+# Subtest: uncertain outcome creates review task
+ok 62 - uncertain outcome creates review task
+  ---
+  duration_ms: 0.053333
+  ...
+# Subtest: audit events are immutable (no editing)
+ok 63 - audit events are immutable (no editing)
+  ---
+  duration_ms: 0.054625
+  ...
+# Subtest: health check records last success
+ok 64 - health check records last success
+  ---
+  duration_ms: 0.061042
+  ...
+# Subtest: lock prevents concurrent access
+ok 65 - lock prevents concurrent access
+  ---
+  duration_ms: 0.033583
+  ...
+# Subtest: lock can be released and re-acquired
+ok 66 - lock can be released and re-acquired
+  ---
+  duration_ms: 0.034
+  ...
+# Subtest: commit journal follows state transitions
+ok 67 - commit journal follows state transitions
+  ---
+  duration_ms: 0.042334
+  ...
+# Subtest: malformed command is rejected at envelope validation
+ok 68 - malformed command is rejected at envelope validation
+  ---
+  duration_ms: 0.037125
+  ...
+# Subtest: task completion transitions state and records event
+ok 69 - task completion transitions state and records event
+  ---
+  duration_ms: 0.08925
+  ...
+# Subtest: cannot complete already completed task
+ok 70 - cannot complete already completed task
+  ---
+  duration_ms: 0.048375
+  ...
+# Subtest: backoff increases exponentially with jitter
+ok 71 - backoff increases exponentially with jitter
+  ---
+  duration_ms: 0.086209
+  ...
+# Subtest: valid command goes through full pipeline: validate → actor → perm → mode → lock → journal → audit
+ok 72 - valid command goes through full pipeline: validate → actor → perm → mode → lock → journal → audit
+  ---
+  duration_ms: 0.162958
+  ...
+# Subtest: command envelope requires all mandatory fields
+ok 73 - command envelope requires all mandatory fields
+  ---
+  duration_ms: 0.046959
+  ...
+# Subtest: admin role passes permission checks but does not bypass ReleaseMode or locking
+ok 74 - admin role passes permission checks but does not bypass ReleaseMode or locking
+  ---
+  duration_ms: 0.1025
+  ...
+# Subtest: dry run reports all actions without modifying sheet
+ok 75 - dry run reports all actions without modifying sheet
+  ---
+  duration_ms: 2.867083
+  ...
+# Subtest: dry run reports which columns would be added
+ok 76 - dry run reports which columns would be added
+  ---
+  duration_ms: 0.4225
+  ...
+# Subtest: refuses non-DEV environment
+ok 77 - refuses non-DEV environment
+  ---
+  duration_ms: 0.2395
+  ...
+# Subtest: refuses sheet identity mismatch
+ok 78 - refuses sheet identity mismatch
+  ---
+  duration_ms: 0.092875
+  ...
+# Subtest: refuses missing configuredSheetId
+ok 79 - refuses missing configuredSheetId
+  ---
+  duration_ms: 0.070666
+  ...
+# Subtest: idempotent: running twice does not duplicate tabs
+ok 80 - idempotent: running twice does not duplicate tabs
+  ---
+  duration_ms: 1.72425
+  ...
+# Subtest: idempotent: does not duplicate columns
+ok 81 - idempotent: does not duplicate columns
+  ---
+  duration_ms: 0.996834
+  ...
+# Subtest: idempotent: does not duplicate seed rows
+ok 82 - idempotent: does not duplicate seed rows
+  ---
+  duration_ms: 1.038833
+  ...
+# Subtest: seeds Companies, Contacts, People, Products, etc.
+ok 83 - seeds Companies, Contacts, People, Products, etc.
+  ---
+  duration_ms: 0.923292
+  ...
+# Subtest: seed rows have NOT_CONFIGURED for unknown values
+ok 84 - seed rows have NOT_CONFIGURED for unknown values
+  ---
+  duration_ms: 0.732459
+  ...
+# Subtest: applies text format to TEXT columns
+ok 85 - applies text format to TEXT columns
+  ---
+  duration_ms: 0.611583
+  ...
+# Subtest: removes S01_Setup placeholder after successful provisioning
+ok 86 - removes S01_Setup placeholder after successful provisioning
+  ---
+  duration_ms: 0.610292
+  ...
+# Subtest: does not remove non-placeholder Sheet1
+ok 87 - does not remove non-placeholder Sheet1
+  ---
+  duration_ms: 0.473625
+  ...
+# Subtest: validateSchema reports correct counts
+ok 88 - validateSchema reports correct counts
+  ---
+  duration_ms: 2.100541
+  ...
+# Subtest: validateSchema detects missing tabs
+ok 89 - validateSchema detects missing tabs
+  ---
+  duration_ms: 0.160625
+  ...
+# Subtest: validateSchema detects missing columns
+ok 90 - validateSchema detects missing columns
+  ---
+  duration_ms: 0.101875
+  ...
+# Subtest: validateSchema detects missing primary keys
+ok 91 - validateSchema detects missing primary keys
+  ---
+  duration_ms: 0.069458
+  ...
+# Subtest: all tables in seed_order exist in schema
+ok 92 - all tables in seed_order exist in schema
+  ---
+  duration_ms: 0.060333
+  ...
+# Subtest: provisioner preserves existing data when adding columns
+ok 93 - provisioner preserves existing data when adding columns
+  ---
+  duration_ms: 0.488542
+  ...
+# Subtest: assertDevOnly rejects PROD, TEST, missing, null
+ok 94 - assertDevOnly rejects PROD, TEST, missing, null
+  ---
+  duration_ms: 0.266708
+  ...
+# Subtest: validateSchema with 60 fully provisioned tables returns success
+ok 95 - validateSchema with 60 fully provisioned tables returns success
+  ---
+  duration_ms: 1.49525
+  ...
+# Subtest: validateSchema detects all 60 primary key columns
+ok 96 - validateSchema detects all 60 primary key columns
+  ---
+  duration_ms: 1.298083
+  ...
+# Subtest: validateSchema populates seed_row_counts for seeded tables
+ok 97 - validateSchema populates seed_row_counts for seeded tables
+  ---
+  duration_ms: 1.17275
+  ...
+# Subtest: validateSchema text_format_missing populated when applicable
+ok 98 - validateSchema text_format_missing populated when applicable
+  ---
+  duration_ms: 1.324625
+  ...
+# Subtest: validateSchema reports missing table by its actual name, not array index
+ok 99 - validateSchema reports missing table by its actual name, not array index
+  ---
+  duration_ms: 1.243625
+  ...
+# Subtest: validateSchema performs zero writes (read-only)
+ok 100 - validateSchema performs zero writes (read-only)
+  ---
+  duration_ms: 1.235042
+  ...
+# Subtest: validateSchema with empty sheet (no tabs) reports all 60 missing
+ok 101 - validateSchema with empty sheet (no tabs) reports all 60 missing
+  ---
+  duration_ms: 0.074167
+  ...
+# Subtest: validateSchema with only directory tables reports correct missing count
+ok 102 - validateSchema with only directory tables reports correct missing count
+  ---
+  duration_ms: 0.276541
+  ...
+# Subtest: validateSchema schema.tables is used as array, not object keys
+ok 103 - validateSchema schema.tables is used as array, not object keys
+  ---
+  duration_ms: 1.294875
+  ...
+# Subtest: validateSchema duplicate_primary_keys array is always present
+ok 104 - validateSchema duplicate_primary_keys array is always present
+  ---
+  duration_ms: 1.070666
+  ...
+# Subtest: validateSchema never passes a numeric sheet name to any adapter method
+ok 105 - validateSchema never passes a numeric sheet name to any adapter method
+  ---
+  duration_ms: 1.41575
+  ...
+# Subtest: provisionSchema never passes a numeric sheet name to any adapter method
+ok 106 - provisionSchema never passes a numeric sheet name to any adapter method
+  ---
+  duration_ms: 0.766792
+  ...
+# Subtest: S04 UI persists Pending and prevents duplicate taps until committed
+ok 107 - S04 UI persists Pending and prevents duplicate taps until committed
+  ---
+  duration_ms: 0.660375
+  ...
+# Subtest: S04 UI restart after uncertain transport retries the identical stored command
+ok 108 - S04 UI restart after uncertain transport retries the identical stored command
+  ---
+  duration_ms: 0.403875
+  ...
+# Subtest: S04 UI failed command stays visible; no false committed response can hide task
+ok 109 - S04 UI failed command stays visible; no false committed response can hide task
+  ---
+  duration_ms: 0.161
+  ...
+# Subtest: S04 local runtime writes real schema rows through locked enumeration adapter and replays
+ok 110 - S04 local runtime writes real schema rows through locked enumeration adapter and replays
+  ---
+  duration_ms: 8.308375
+  ...
+# Subtest: S04 packaged .gs entry writes real schema rows through locked enumeration adapter and replays
+ok 111 - S04 packaged .gs entry writes real schema rows through locked enumeration adapter and replays
+  ---
+  duration_ms: 3.284416
+  ...
+# Subtest: S04 runtime refuses no identity secret before workbook access
+ok 112 - S04 runtime refuses no identity secret before workbook access
+  ---
+  duration_ms: 0.706167
+  ...
+# Subtest: S04 runtime refuses PROD config before workbook access
+ok 113 - S04 runtime refuses PROD config before workbook access
+  ---
+  duration_ms: 0.538833
+  ...
+# Subtest: S04 runtime refuses wrong configured project before workbook access
+ok 114 - S04 runtime refuses wrong configured project before workbook access
+  ---
+  duration_ms: 0.859875
+  ...
+# Subtest: S04 runtime refuses wrong configured sheet before workbook access
+ok 115 - S04 runtime refuses wrong configured sheet before workbook access
+  ---
+  duration_ms: 0.610041
+  ...
+# Subtest: S04 runtime rejects identity spoof without trusting app owner
+ok 116 - S04 runtime rejects identity spoof without trusting app owner
+  ---
+  duration_ms: 0.768833
+  ...
+# Subtest: S04 package respects persisted Disabled mode
+ok 117 - S04 package respects persisted Disabled mode
+  ---
+  duration_ms: 1.125208
+  ...
+# Subtest: S04 package re-reads persisted version after actual script lock
+ok 118 - S04 package re-reads persisted version after actual script lock
+  ---
+  duration_ms: 1.365667
+  ...
+# Subtest: S04 packaged sheet recovery after flush 1
+ok 119 - S04 packaged sheet recovery after flush 1
+  ---
+  duration_ms: 2.891125
+  ...
+# Subtest: S04 packaged sheet recovery after flush 2
+ok 120 - S04 packaged sheet recovery after flush 2
+  ---
+  duration_ms: 2.346958
+  ...
+# Subtest: S04 packaged sheet recovery after flush 3
+ok 121 - S04 packaged sheet recovery after flush 3
+  ---
+  duration_ms: 2.015458
+  ...
+# Subtest: S04 packaged sheet recovery after flush 4
+ok 122 - S04 packaged sheet recovery after flush 4
+  ---
+  duration_ms: 2.586959
+  ...
+# Subtest: S04 packaged sheet recovery after flush 5
+ok 123 - S04 packaged sheet recovery after flush 5
+  ---
+  duration_ms: 2.212083
+  ...
+# Subtest: S04 packaged sheet recovery after flush 6
+ok 124 - S04 packaged sheet recovery after flush 6
+  ---
+  duration_ms: 2.177833
+  ...
+# Subtest: S04 sheet reads normalise boolean strings and dates without truthiness
+ok 125 - S04 sheet reads normalise boolean strings and dates without truthiness
+  ---
+  duration_ms: 0.245125
+  ...
+# Subtest: S04 sheet adapter rejects malformed headers and duplicate IDs
+ok 126 - S04 sheet adapter rejects malformed headers and duplicate IDs
+  ---
+  duration_ms: 0.344958
+  ...
+# Subtest: S04 store forbids system configuration writes and event edits
+ok 127 - S04 store forbids system configuration writes and event edits
+  ---
+  duration_ms: 0.146375
+  ...
+# Subtest: S04 package rejects unavailable row capacity without inserting rows
+ok 128 - S04 package rejects unavailable row capacity without inserting rows
+  ---
+  duration_ms: 1.092
+  ...
+# Subtest: S04 standalone manifest contains only reviewed Sheets scope
+ok 129 - S04 standalone manifest contains only reviewed Sheets scope
+  ---
+  duration_ms: 0.109959
+  ...
+# Subtest: S04 completes task, increments version, persists exactly attributed events and journal result
+ok 130 - S04 completes task, increments version, persists exactly attributed events and journal result
+  ---
+  duration_ms: 7.289708
+  ...
+# Subtest: S04 denies unknown actor without writes
+ok 131 - S04 denies unknown actor without writes
+  ---
+  duration_ms: 1.0525
+  ...
+# Subtest: S04 denies inactive actor without writes
+ok 132 - S04 denies inactive actor without writes
+  ---
+  duration_ms: 0.875208
+  ...
+# Subtest: S04 denies no active roles without writes
+ok 133 - S04 denies no active roles without writes
+  ---
+  duration_ms: 1.198792
+  ...
+# Subtest: S04 denies installer without writes
+ok 134 - S04 denies installer without writes
+  ---
+  duration_ms: 1.458916
+  ...
+# Subtest: S04 denies Disabled mode without writes
+ok 135 - S04 denies Disabled mode without writes
+  ---
+  duration_ms: 1.464584
+  ...
+# Subtest: S04 denies Manual mode without writes
+ok 136 - S04 denies Manual mode without writes
+  ---
+  duration_ms: 1.3145
+  ...
+# Subtest: S04 denies unknown mode without writes
+ok 137 - S04 denies unknown mode without writes
+  ---
+  duration_ms: 1.909
+  ...
+# Subtest: S04 denies outside pilot without writes
+ok 138 - S04 denies outside pilot without writes
+  ---
+  duration_ms: 2.147042
+  ...
+# Subtest: S04 denies missing job without writes
+ok 139 - S04 denies missing job without writes
+  ---
+  duration_ms: 1.624459
+  ...
+# Subtest: S04 denies unknown scope without writes
+ok 140 - S04 denies unknown scope without writes
+  ---
+  duration_ms: 1.270791
+  ...
+# Subtest: S04 denies All scope without writes
+ok 141 - S04 denies All scope without writes
+  ---
+  duration_ms: 1.433833
+  ...
+# Subtest: S04 denies wrong release without writes
+ok 142 - S04 denies wrong release without writes
+  ---
+  duration_ms: 1.310416
+  ...
+# Subtest: S04 denies string pilot false without writes
+ok 143 - S04 denies string pilot false without writes
+  ---
+  duration_ms: 1.725083
+  ...
+# Subtest: S04 denies non-synthetic task without writes
+ok 144 - S04 denies non-synthetic task without writes
+  ---
+  duration_ms: 1.566541
+  ...
+# Subtest: S04 denies blocked task without writes
+ok 145 - S04 denies blocked task without writes
+  ---
+  duration_ms: 1.430625
+  ...
+# Subtest: S04 denies revision required without writes
+ok 146 - S04 denies revision required without writes
+  ---
+  duration_ms: 1.279334
+  ...
+# Subtest: S04 denies cancelled task without writes
+ok 147 - S04 denies cancelled task without writes
+  ---
+  duration_ms: 1.272
+  ...
+# Subtest: S04 denies dependency without writes
+ok 148 - S04 denies dependency without writes
+  ---
+  duration_ms: 1.492292
+  ...
+# Subtest: S04 denies PROD without writes
+ok 149 - S04 denies PROD without writes
+  ---
+  duration_ms: 0.655625
+  ...
+# Subtest: S04 denies wrong sheet without writes
+ok 150 - S04 denies wrong sheet without writes
+  ---
+  duration_ms: 0.596333
+  ...
+# Subtest: S04 denies wrong actual sheet without writes
+ok 151 - S04 denies wrong actual sheet without writes
+  ---
+  duration_ms: 0.594208
+  ...
+# Subtest: S04 denies wrong project without writes
+ok 152 - S04 denies wrong project without writes
+  ---
+  duration_ms: 0.615375
+  ...
+# Subtest: S04 denies missing project without writes
+ok 153 - S04 denies missing project without writes
+  ---
+  duration_ms: 0.566541
+  ...
+# Subtest: S04 denies no trusted provider without writes
+ok 154 - S04 denies no trusted provider without writes
+  ---
+  duration_ms: 0.586083
+  ...
+# Subtest: S04 denies explicit permission denial without writes
+ok 155 - S04 denies explicit permission denial without writes
+  ---
+  duration_ms: 1.136209
+  ...
+# Subtest: S04 denies invalid permission boolean without writes
+ok 156 - S04 denies invalid permission boolean without writes
+  ---
+  duration_ms: 1.156791
+  ...
+# Subtest: S04 rejects spoofed actor_email
+ok 157 - S04 rejects spoofed actor_email
+  ---
+  duration_ms: 0.606958
+  ...
+# Subtest: S04 rejects spoofed role in payload
+ok 158 - S04 rejects spoofed role in payload
+  ---
+  duration_ms: 0.591792
+  ...
+# Subtest: S04 rejects missing task
+ok 159 - S04 rejects missing task
+  ---
+  duration_ms: 1.006292
+  ...
+# Subtest: S04 rejects already completed
+ok 160 - S04 rejects already completed
+  ---
+  duration_ms: 1.128334
+  ...
+# Subtest: S04 rejects stale version
+ok 161 - S04 rejects stale version
+  ---
+  duration_ms: 0.991375
+  ...
+# Subtest: S04 rejects missing version
+ok 162 - S04 rejects missing version
+  ---
+  duration_ms: 0.63375
+  ...
+# Subtest: S04 rejects other action
+ok 163 - S04 rejects other action
+  ---
+  duration_ms: 0.596917
+  ...
+# Subtest: S04 rejects missing payload
+ok 164 - S04 rejects missing payload
+  ---
+  duration_ms: 0.553
+  ...
+# Subtest: S04 rejects invalid command id
+ok 165 - S04 rejects invalid command id
+  ---
+  duration_ms: 0.608625
+  ...
+# Subtest: S04 null envelope safely rejected
+ok 166 - S04 null envelope safely rejected
+  ---
+  duration_ms: 0.583041
+  ...
+# Subtest: S04 persisted admin rule permits active admin
+ok 167 - S04 persisted admin rule permits active admin
+  ---
+  duration_ms: 2.815958
+  ...
+# Subtest: S04 ignores inactive elevated role; People.role alone never grants access
+ok 168 - S04 ignores inactive elevated role; People.role alone never grants access
+  ---
+  duration_ms: 1.25625
+  ...
+# Subtest: S04 permission Assigned scope checks owner/backup
+ok 169 - S04 permission Assigned scope checks owner/backup
+  ---
+  duration_ms: 3.464916
+  ...
+# Subtest: S04 restart replays persisted result without mutation/events
+ok 170 - S04 restart replays persisted result without mutation/events
+  ---
+  duration_ms: 2.8875
+  ...
+# Subtest: S04 changed payload with unchanged client hash conflicts after restart
+ok 171 - S04 changed payload with unchanged client hash conflicts after restart
+  ---
+  duration_ms: 3.135959
+  ...
+# Subtest: S04 changed client hash alone does not change canonical request
+ok 172 - S04 changed client hash alone does not change canonical request
+  ---
+  duration_ms: 2.73875
+  ...
+# Subtest: S04 cross-actor replay denied
+ok 173 - S04 cross-actor replay denied
+  ---
+  duration_ms: 2.671917
+  ...
+# Subtest: S04 overlapping command is locked out; same-version loser is stale
+ok 174 - S04 overlapping command is locked out; same-version loser is stale
+  ---
+  duration_ms: 3.124084
+  ...
+# Subtest: S04 re-reads version after lock acquisition
+ok 175 - S04 re-reads version after lock acquisition
+  ---
+  duration_ms: 1.152667
+  ...
+# Subtest: S04 re-resolves active roles under lock
+ok 176 - S04 re-resolves active roles under lock
+  ---
+  duration_ms: 1.079
+  ...
+# Subtest: S04 restart recovery after durable checkpoint 1
+ok 177 - S04 restart recovery after durable checkpoint 1
+  ---
+  duration_ms: 3.695958
+  ...
+# Subtest: S04 restart recovery after durable checkpoint 2
+ok 178 - S04 restart recovery after durable checkpoint 2
+  ---
+  duration_ms: 3.73175
+  ...
+# Subtest: S04 restart recovery after durable checkpoint 3
+ok 179 - S04 restart recovery after durable checkpoint 3
+  ---
+  duration_ms: 3.132208
+  ...
+# Subtest: S04 restart recovery after durable checkpoint 4
+ok 180 - S04 restart recovery after durable checkpoint 4
+  ---
+  duration_ms: 3.162
+  ...
+# Subtest: S04 restart recovery after durable checkpoint 5
+ok 181 - S04 restart recovery after durable checkpoint 5
+  ---
+  duration_ms: 2.926667
+  ...
+# Subtest: S04 restart recovery after durable checkpoint 6
+ok 182 - S04 restart recovery after durable checkpoint 6
+  ---
+  duration_ms: 2.82925
+  ...
+# Subtest: S04 lost prepared-write acknowledgement before persistence safely retried
+ok 183 - S04 lost prepared-write acknowledgement before persistence safely retried
+  ---
+  duration_ms: 2.897875
+  ...
+# Subtest: S04 partial event corruption requires manual recovery
+ok 184 - S04 partial event corruption requires manual recovery
+  ---
+  duration_ms: 3.644583
+  ...
+# Subtest: S04 signed trusted provider validates cryptographically bound actor
+ok 185 - S04 signed trusted provider validates cryptographically bound actor
+  ---
+  duration_ms: 0.337792
+  ...
+# Subtest: S04 proof tampering denied: email
+ok 186 - S04 proof tampering denied: email
+  ---
+  duration_ms: 0.198
+  ...
+# Subtest: S04 proof tampering denied: audience
+ok 187 - S04 proof tampering denied: audience
+  ---
+  duration_ms: 0.045208
+  ...
+# Subtest: S04 proof tampering denied: signature
+ok 188 - S04 proof tampering denied: signature
+  ---
+  duration_ms: 0.047375
+  ...
+# Subtest: S04 proof tampering denied: request_hash
+ok 189 - S04 proof tampering denied: request_hash
+  ---
+  duration_ms: 0.03725
+  ...
+# Subtest: S04 proof tampering denied: issued_at
+ok 190 - S04 proof tampering denied: issued_at
+  ---
+  duration_ms: 0.072916
+  ...
+# Subtest: S04 proof tampering denied: expires_at
+ok 191 - S04 proof tampering denied: expires_at
+  ---
+  duration_ms: 0.042667
+  ...
+# Subtest: S04 missing issuer secret denies
+ok 192 - S04 missing issuer secret denies
+  ---
+  duration_ms: 0.045625
+  ...
+# Subtest: S04 expired proof denies
+ok 193 - S04 expired proof denies
+  ---
+  duration_ms: 0.049042
+  ...
+# Subtest: S04 proof cannot be reused for another command
+ok 194 - S04 proof cannot be reused for another command
+  ---
+  duration_ms: 0.08075
+  ...
+# Subtest: S04 generated package matches local sources and has no CommonJS runtime calls
+ok 195 - S04 generated package matches local sources and has no CommonJS runtime calls
+  ---
+  duration_ms: 2.191917
+  ...
+# Subtest: S04 packaged/local processor behavior parity
+ok 196 - S04 packaged/local processor behavior parity
+  ---
+  duration_ms: 7.717375
+  ...
+# Subtest: S04 orphan deterministic event prevents a new task mutation
+ok 197 - S04 orphan deterministic event prevents a new task mutation
+  ---
+  duration_ms: 1.184208
+  ...
+# Subtest: S04 missing/duplicate mode rows fail closed
+ok 198 - S04 missing/duplicate mode rows fail closed
+  ---
+  duration_ms: 2.537542
+  ...
+# Subtest: S04 duplicate normalised People email fails closed
+ok 199 - S04 duplicate normalised People email fails closed
+  ---
+  duration_ms: 1.091458
+  ...
+# Subtest: SS-XXXX-XXXX format and uniqueness
+ok 200 - SS-XXXX-XXXX format and uniqueness
+  ---
+  duration_ms: 2.889458
+  ...
+# Subtest: collision retry exhausts after 20 attempts
+ok 201 - collision retry exhausts after 20 attempts
+  ---
+  duration_ms: 0.74725
+  ...
+# Subtest: text columns preserve leading zeros and long numbers
+ok 202 - text columns preserve leading zeros and long numbers
+  ---
+  duration_ms: 0.069958
+  ...
+# Subtest: postcode and MPAN fields are declared as TEXT
+ok 203 - postcode and MPAN fields are declared as TEXT
+  ---
+  duration_ms: 0.058875
+  ...
+# Subtest: every table has appropriate audit columns
+ok 204 - every table has appropriate audit columns
+  ---
+  duration_ms: 0.162
+  ...
+# Subtest: all foreign keys reference existing tables and columns
+ok 205 - all foreign keys reference existing tables and columns
+  ---
+  duration_ms: 0.365916
+  ...
+# Subtest: every table has exactly one primary key column
+ok 206 - every table has exactly one primary key column
+  ---
+  duration_ms: 0.130667
+  ...
+# Subtest: unique job_id is TEXT, not numeric
+ok 207 - unique job_id is TEXT, not numeric
+  ---
+  duration_ms: 0.046875
+  ...
+# Subtest: money columns are INTEGER pence
+ok 208 - money columns are INTEGER pence
+  ---
+  duration_ms: 0.636792
+  ...
+# Subtest: Jobs has RA01 pilot and release scope columns
+ok 209 - Jobs has RA01 pilot and release scope columns
+  ---
+  duration_ms: 0.297292
+  ...
+# Subtest: ReleaseModes table covers RA01 per-function tracking
+ok 210 - ReleaseModes table covers RA01 per-function tracking
+  ---
+  duration_ms: 0.098167
+  ...
+# Subtest: config seed references valid tables and IDs
+ok 211 - config seed references valid tables and IDs
+  ---
+  duration_ms: 0.176833
+  ...
+# Subtest: no table uses row numbers or auto-increment as primary key
+ok 212 - no table uses row numbers or auto-increment as primary key
+  ---
+  duration_ms: 0.061625
+  ...
+# Subtest: child tables reference valid parent tables
+ok 213 - child tables reference valid parent tables
+  ---
+  duration_ms: 0.049292
+  ...
+# Subtest: schema version is declared
+ok 214 - schema version is declared
+  ---
+  duration_ms: 0.026875
+  ...
+# Subtest: config seed uses NOT_CONFIGURED for unknown values
+ok 215 - config seed uses NOT_CONFIGURED for unknown values
+  ---
+  duration_ms: 0.060958
+  ...
+1..215
+# tests 215
+# suites 0
+# pass 215
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 185.803833

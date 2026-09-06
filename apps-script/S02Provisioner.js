@@ -2,7 +2,8 @@
  * Deploy to the DEV Sheet-bound Apps Script project alongside:
  *   OutboundGuard.js, S01Probe.js, S02ProvisionerCore.js,
  *   S02SchemaData.js, S02SeedData.js
- * Zero-arg functions: runS02DryRun, runS02Apply, runS02Validate.
+ * Zero-arg functions: runS02DryRun, runS02Apply, runS02Validate,
+ *   runS02HeaderDiagnostic.
  * Schema/seed embedded in S02SchemaData.js and S02SeedData.js.
  * Core logic in S02ProvisionerCore.js (exposes global S02Provisioner).
  * Only S01_CONFIG remains in Script Properties.
@@ -28,7 +29,6 @@ function _loadProvisionerConfig() {
     throw new Error('S02_PROVISIONER_REFUSED: sheet identity mismatch. Expected ' + configuredSheetId + ', got ' + sheetId);
   }
 
-  // Schema and config seed are embedded in companion .gs files
   var schema = getS02SchemaDefinition();
   var configSeed = getS02ConfigSeed();
 
@@ -48,13 +48,9 @@ function _loadProvisionerConfig() {
 function runS02DryRun() {
   var cfg = _loadProvisionerConfig();
   var adapter = new AppsScriptSheetAdapter();
-
   var result = S02Provisioner.provisionSchema(cfg.schema, cfg.configSeed, adapter, {
-    dryRun: true,
-    environment: cfg.config.environment,
-    configuredSheetId: cfg.configuredSheetId
+    dryRun: true, environment: cfg.config.environment, configuredSheetId: cfg.configuredSheetId
   });
-
   console.log(JSON.stringify(result, null, 2));
   return result;
 }
@@ -62,13 +58,9 @@ function runS02DryRun() {
 function runS02Apply() {
   var cfg = _loadProvisionerConfig();
   var adapter = new AppsScriptSheetAdapter();
-
   var result = S02Provisioner.provisionSchema(cfg.schema, cfg.configSeed, adapter, {
-    dryRun: false,
-    environment: cfg.config.environment,
-    configuredSheetId: cfg.configuredSheetId
+    dryRun: false, environment: cfg.config.environment, configuredSheetId: cfg.configuredSheetId
   });
-
   console.log(JSON.stringify(result, null, 2));
   return result;
 }
@@ -76,7 +68,6 @@ function runS02Apply() {
 function runS02Validate() {
   var cfg = _loadProvisionerConfig();
   var adapter = new AppsScriptSheetAdapter();
-
   var result = S02Provisioner.validateSchema(cfg.schema, cfg.configSeed, adapter);
   console.log(JSON.stringify(result, null, 2));
   return result;
@@ -89,73 +80,94 @@ function runS02HeaderDiagnostic() {
   var result = {
     spreadsheet_id: ss.getId(),
     spreadsheet_name: ss.getName(),
-    total_sheets: ss.getSheets().length,
+    get_sheets_ok: false,
+    enumerated_sheet_count: 0,
     configured_sheet_id: cfg.configuredSheetId,
     tests: []
   };
 
+  // Prove enumeration works
+  var allSheets;
+  try {
+    allSheets = ss.getSheets();
+    result.get_sheets_ok = true;
+    result.enumerated_sheet_count = allSheets.length;
+  } catch (e) {
+    result.get_sheets_error = e.message;
+    console.log(JSON.stringify(result, null, 2));
+    return result;
+  }
+
   var testTabs = ['Companies', 'People', 'Jobs'];
   for (var i = 0; i < testTabs.length; i++) {
     var tabName = testTabs[i];
-    var test = { tab: tabName };
+    var test = {
+      tab: tabName,
+      get_sheets_ok: result.get_sheets_ok,
+      enumerated_sheet_count: result.enumerated_sheet_count,
+      enumerated_lookup_found: false,
+      range_ok: false,
+      header_read_ok: false
+    };
 
+    // --- Path A: Enumerated lookup (getSheets + iterate) ---
     try {
-      // Step 1: getActiveSpreadsheet
-      var ssFresh = SpreadsheetApp.getActiveSpreadsheet();
-      test.ss_fresh = !!ssFresh;
-      test.ss_fresh_id = ssFresh ? ssFresh.getId() : null;
-
-      // Step 2: getSheetByName
-      var sheet = ssFresh.getSheetByName(tabName);
-      test.sheet_found = !!sheet;
-
-      if (!sheet) {
-        test.error = 'getSheetByName returned null';
-        result.tests.push(test);
-        continue;
+      var enumSheet = null;
+      for (var j = 0; j < allSheets.length; j++) {
+        var candidateName;
+        try { candidateName = allSheets[j].getName(); } catch(e) {
+          throw new Error('sheets[' + j + '].getName failed: ' + e.message);
+        }
+        if (candidateName === tabName) { enumSheet = allSheets[j]; break; }
       }
+      test.enumerated_lookup_found = !!enumSheet;
 
-      // Step 3: sheet metadata
-      try { test.sheet_name = sheet.getName(); } catch(e) { test.name_error = e.message; }
-      try { test.sheet_id = sheet.getSheetId(); } catch(e) { test.sheetId_error = e.message; }
-      try { test.sheet_index = sheet.getIndex(); } catch(e) { test.index_error = e.message; }
+      if (!enumSheet) {
+        test.enumerated_error = 'not found in getSheets() enumeration';
+      } else {
+        try { test.enumerated_sheet_name = enumSheet.getName(); } catch(e) { test.enumerated_name_error = e.message; }
+        try { test.enumerated_sheet_id = enumSheet.getSheetId(); } catch(e) { test.enumerated_sheetId_error = e.message; }
 
-      // Step 4: getLastColumn
-      try {
-        test.last_column = sheet.getLastColumn();
-      } catch(e) {
-        test.error = 'getLastColumn failed: ' + e.message;
-        result.tests.push(test);
-        continue;
+        try {
+          test.last_column = enumSheet.getLastColumn();
+        } catch(e) {
+          test.last_column_error = e.message;
+        }
+
+        if (test.last_column > 0) {
+          try {
+            var range = enumSheet.getRange(1, 1, 1, test.last_column);
+            test.range_ok = true;
+            try {
+              var values = range.getValues();
+              test.values_rows = values.length;
+              test.values_cols = values[0] ? values[0].length : 0;
+              test.first_header = values[0] ? String(values[0][0] || '') : '';
+              test.header_read_ok = true;
+            } catch(e) {
+              test.getValues_error = e.message;
+            }
+          } catch(e) {
+            test.getRange_error = e.message;
+          }
+        }
       }
-
-      // Step 5: getRange
-      try {
-        var range = sheet.getRange(1, 1, 1, test.last_column);
-        test.range_ok = true;
-      } catch(e) {
-        test.error = 'getRange(1,1,1,' + test.last_column + ') failed: ' + e.message;
-        result.tests.push(test);
-        continue;
-      }
-
-      // Step 6: getValues
-      try {
-        var values = range.getValues();
-        test.values_rows = values.length;
-        test.values_cols = values[0] ? values[0].length : 0;
-        test.first_cell = values[0] ? String(values[0][0] || '') : '';
-      } catch(e) {
-        test.error = 'getValues failed: ' + e.message;
-        result.tests.push(test);
-        continue;
-      }
-
-      test.success = true;
     } catch(e) {
-      test.error = 'unexpected: ' + (e.message || String(e));
+      test.enumerated_error = e.message;
     }
 
+    // --- Path B: getSheetByName (isolated, must not affect Path A) ---
+    try {
+      var byNameSheet = ss.getSheetByName(tabName);
+      test.getSheetByName_found = !!byNameSheet;
+      if (byNameSheet) {
+        try { test.getSheetByName_sheet_name = byNameSheet.getName(); } catch(e) {}
+      }
+    } catch(e) {
+      test.getSheetByName_error = e.message;
+    }
+
+    test.success = test.enumerated_lookup_found === true && test.header_read_ok === true;
     result.tests.push(test);
   }
 
@@ -163,14 +175,26 @@ function runS02HeaderDiagnostic() {
   return result;
 }
 
-/* Apps Script Sheet adapter — implements the sheetAdapter interface using SpreadsheetApp.
- * Must be bound to the target spreadsheet.
- * Re-acquires the spreadsheet reference per-operation to avoid stale state
- * after programmatic sheet deletion (original S01_Setup gid=0 removed). */
+/* --- Enumerated sheet lookup ---
+ * getSheetByName is suspected of failing in the DEV context.
+ * Enumeration count succeeds; cloud header reads still need verification.
+ * Use this helper for all normal sheet lookups. */
+
+function _findSheetByName(ss, tabName) {
+  var sheets = ss.getSheets();
+  for (var i = 0; i < sheets.length; i++) {
+    if (sheets[i].getName() === tabName) {
+      return sheets[i];
+    }
+  }
+  return null;
+}
+
+/* Apps Script Sheet adapter.
+ * All sheet lookups use _findSheetByName (getSheets enumeration)
+ * to avoid depending on the suspect named lookup. */
 
 var AppsScriptSheetAdapter = function() {
-  // Do NOT cache this.ss in constructor — re-acquire per operation
-  // to avoid stale reference after sheets are added/deleted.
 
   this._getSs = function() {
     return SpreadsheetApp.getActiveSpreadsheet();
@@ -186,7 +210,7 @@ var AppsScriptSheetAdapter = function() {
 
   this.createTab = function(name) {
     var ss = this._getSs();
-    var existing = ss.getSheetByName(name);
+    var existing = _findSheetByName(ss, name);
     if (existing) return;
     ss.insertSheet(name);
   };
@@ -196,8 +220,8 @@ var AppsScriptSheetAdapter = function() {
       var ss = this._getSs();
       if (!ss) throw new Error('getActiveSpreadsheet returned null');
 
-      var sheet = ss.getSheetByName(tabName);
-      if (!sheet) throw new Error('getSheetByName returned null for "' + tabName + '"');
+      var sheet = _findSheetByName(ss, tabName);
+      if (!sheet) throw new Error('sheet not found via enumeration: "' + tabName + '"');
 
       try { var sheetName = sheet.getName(); } catch(e) { throw new Error('getName failed: ' + e.message); }
 
@@ -220,7 +244,7 @@ var AppsScriptSheetAdapter = function() {
 
   this.setHeaders = function(tabName, headers) {
     var ss = this._getSs();
-    var sheet = ss.getSheetByName(tabName);
+    var sheet = _findSheetByName(ss, tabName);
     if (!sheet) throw new Error('Tab not found: ' + tabName);
     var range = sheet.getRange(1, 1, 1, headers.length);
     range.setValues([headers]);
@@ -228,14 +252,14 @@ var AppsScriptSheetAdapter = function() {
 
   this.freezeHeaderRow = function(tabName) {
     var ss = this._getSs();
-    var sheet = ss.getSheetByName(tabName);
+    var sheet = _findSheetByName(ss, tabName);
     if (!sheet) return;
     sheet.setFrozenRows(1);
   };
 
   this.applyTextFormat = function(tabName, columnNames) {
     var ss = this._getSs();
-    var sheet = ss.getSheetByName(tabName);
+    var sheet = _findSheetByName(ss, tabName);
     if (!sheet) return;
     var headers = this.getHeaders(tabName);
     for (var i = 0; i < columnNames.length; i++) {
@@ -256,7 +280,7 @@ var AppsScriptSheetAdapter = function() {
 
   this.getData = function(tabName) {
     var ss = this._getSs();
-    var sheet = ss.getSheetByName(tabName);
+    var sheet = _findSheetByName(ss, tabName);
     if (!sheet) return [];
     var lastRow = sheet.getLastRow();
     var lastCol = sheet.getLastColumn();
@@ -267,7 +291,7 @@ var AppsScriptSheetAdapter = function() {
 
   this.insertRow = function(tabName, values) {
     var ss = this._getSs();
-    var sheet = ss.getSheetByName(tabName);
+    var sheet = _findSheetByName(ss, tabName);
     if (!sheet) throw new Error('Tab not found: ' + tabName);
     var lastRow = sheet.getLastRow();
     var targetRow = lastRow + 1;
@@ -277,14 +301,14 @@ var AppsScriptSheetAdapter = function() {
 
   this.deleteTab = function(tabName) {
     var ss = this._getSs();
-    var sheet = ss.getSheetByName(tabName);
+    var sheet = _findSheetByName(ss, tabName);
     if (!sheet) return;
     ss.deleteSheet(sheet);
   };
 
   this.checkTextFormat = function(tabName, columnNames) {
     var ss = this._getSs();
-    var sheet = ss.getSheetByName(tabName);
+    var sheet = _findSheetByName(ss, tabName);
     if (!sheet) return { notFormatted: columnNames };
     var headers = this.getHeaders(tabName);
     var notFormatted = [];
@@ -297,7 +321,6 @@ var AppsScriptSheetAdapter = function() {
         }
       }
       if (colIdx >= 0) {
-        // Only check format if there are data rows (row 2+)
         var lastRow = sheet.getLastRow();
         if (lastRow >= 2) {
           var range = sheet.getRange(2, colIdx + 1);

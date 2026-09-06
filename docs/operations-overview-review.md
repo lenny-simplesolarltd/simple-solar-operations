@@ -1,5 +1,7 @@
 # Management/staff overview review
 
+> Historical scope/planning record. Current stage status and DEV authorisation boundaries are in [implementation-status.md](implementation-status.md): S01 PARTIAL, G01 BLOCKED, S02 COMPLETE IN DEV, S03 complete locally only, S04 LOCAL IMPLEMENTATION PASS / NOT CLOUD DEPLOYED. Earlier “unstarted”, “no S02” and strict wait-to-code statements below describe the original task, not current status. S02 Apply must not be repeated.
+
 Source: [New Operations System.pdf](../New%20Operations%20System.pdf), **Our new operations system**, 5 September 2026, pages 1–2. Supplied by Ben / Simple Solar; full text and both rendered pages reviewed on 5 September 2026. Authority: supporting business context only. See [reference index](reference-index.md) for the authoritative documents and source checksum.
 
 ## Clarified end-user outcome
