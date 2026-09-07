@@ -1,0 +1,155 @@
+/* S20 production release preparation and phased-cutover simulation.
+ * DEV-only, read-only and fail-closed. It cannot execute a production cutover. */
+'use strict';
+
+const S20_DEV_SHEET_ID = '1z7PNZtDdC4Z5eLbmTuQdqp0QpJSmuEvx3QvN3VyNTsc';
+const S20_RELEASES = ['R1', 'R2', 'R3', 'R4'];
+const S20_AUTH_STATUSES = ['AUTHORIZED_FOR_CUTOVER', 'BLOCKED', 'NOT_EVALUATED', 'FAIL'];
+const S20_CONFIG_STATUSES = ['CONFIGURED', 'NOT_CONFIGURED', 'INVALID'];
+
+function _s20Now() { return new Date().toISOString(); }
+function _s20Copy(x) { return JSON.parse(JSON.stringify(x)); }
+function _s20GuardStore(store) {
+  if (!store || !store.getSheetId || store.getSheetId() !== S20_DEV_SHEET_ID ||
+      !store.getEnvironment || store.getEnvironment() !== 'DEV')
+    throw new Error('S20_REFUSED: exact DEV sheet/environment required');
+}
+
+function _s20FunctionPlan() {
+  return [
+    ['FN-01','R1','Office core/intake/tasks/planners/calls/issues','Automated'],
+    ['FN-02','R2','Calendar entries','Automated'], ['FN-03','R2','Orders and merchant messages','Automated'],
+    ['FN-04','R2','Scaffold commitments','Automated'], ['FN-05','R2','Panel stock balances/movements','Automated'],
+    ['FN-06','R3','Installer app/forms access','Automated'], ['FN-07','R3','Commissioning receipt/review','Automated'],
+    ['FN-08','R3','Handover','Automated'], ['FN-09','R4','Invoices and payment reconciliation','Automated'],
+    ['FN-10','R4','Phoenix evidence/upload/chase','Manual'], ['FN-11','R1','GHL progression/messages','Manual'],
+    ['FN-12','R4','Accounting/reporting','Automated'], ['FN-13','R4','Archive','Automated'],
+    ['FN-14','R1','Automated backup/restore and health monitoring','Automated'],
+    ['FN-15','R1','Bank deposit confirmation','Manual'], ['FN-16','R1','Daily authorisation/health and outage review','Manual'],
+    ['FN-17','R1','GHL cancellation','Manual'], ['FN-18','R1','Manual missing-form reminder','Manual'],
+    ['FN-19','R1','Operational completion approval','Manual'], ['FN-20','R1','Customer and installer notices','Manual']
+  ].map(function (x) { return { function_id:x[0], release:x[1], function_name:x[2], expected_current_mode:'Disabled', expected_current_scope:'None', target_mode:x[3], target_scope:'Pilot' }; });
+}
+
+function _s20RequiredConfig(release) {
+  var common = ['prod_sheet_id','prod_apps_script_id','prod_appsheet_id','prod_evidence_folder_id','prod_backup_folder_id','timezone','company_accounts','responsible_owner','fallback_owner','pilot_job_scope'];
+  var extra = {
+    R1:['jotform_mappings','ghl_configuration','staff_accounts'],
+    R2:['calendar_ids','merchant_details','scaffolder_details'],
+    R3:['commissioning_assets','installer_accounts'],
+    R4:['xero_configuration','ghl_configuration','phoenix_rules','reporting_policy','archive_destination']
+  };
+  return common.concat(extra[release] || []);
+}
+
+function _s20ConfigurationContract(values) {
+  values = values || {};
+  var keys = [];
+  for (var r=0;r<S20_RELEASES.length;r++) keys = keys.concat(_s20RequiredConfig(S20_RELEASES[r]));
+  keys = keys.filter(function (k,i,a) { return a.indexOf(k) === i; });
+  var result = {};
+  keys.forEach(function (key) {
+    var v = values[key];
+    if (v && typeof v === 'object' && S20_CONFIG_STATUSES.indexOf(v.status) !== -1) result[key] = _s20Copy(v);
+    else result[key] = { status:'NOT_CONFIGURED', value:null, evidence:null };
+  });
+  return result;
+}
+
+function _s20Ids(list) {
+  if (!Array.isArray(list)) return [];
+  return list.map(function (x) { return typeof x === 'string' ? x : (x.id || x.acceptance_id || x.requirement || 'unknown'); });
+}
+
+/* Narrow compatibility boundary for current and corrected S19 contracts. */
+function _s20AdaptS19(summary, release) {
+  var h = summary && summary.handoff ? summary.handoff[release] : null;
+  h = h || (summary && summary[release]) || {};
+  function group(name, legacyBlocked, legacyNotRun) {
+    var g = h[name] || {};
+    return {
+      blocked:_s20Ids(g.blocked || h[legacyBlocked]), not_run:_s20Ids(g.not_run || h[legacyNotRun]),
+      failed:_s20Ids(g.failed || h[name + '_failed'])
+    };
+  }
+  return {
+    status:h.status || h.handoff_readiness || (summary && summary['overall_' + release.toLowerCase()]) || 'NOT_EVALUATED',
+    acceptance:group('acceptance','s18_blockers','s18_not_run'),
+    migration:group('migration','migration_blockers','migration_not_run'),
+    training:group('training','training_blockers','training_not_run'),
+    cutover:group('cutover','cutover_blockers','cutover_not_run'),
+    creator_map:h.creator_map || (summary && summary.creator_map) || null,
+    pilot_scope:h.pilot_scope || null,
+    fallback_plan:h.fallback_plan || null
+  };
+}
+
+function _s20ReleasePlan(release) {
+  if (S20_RELEASES.indexOf(release) === -1) throw new Error('S20_RELEASE: invalid release ' + release);
+  var functions = _s20FunctionPlan().filter(function (f) { return f.release === release; });
+  return {
+    release:release, owner:'Release operator (named in signoff)', functions:functions,
+    dependencies:release === 'R1' ? [] : S20_RELEASES.slice(0, S20_RELEASES.indexOf(release)),
+    configuration_requirements:_s20RequiredConfig(release),
+    preflight:['Freeze release candidate/version','Confirm S18 effective release gate','Confirm S19 READY_FOR_S20','Validate production configuration','Confirm pre-cutover backup and recovery route','Confirm training and staff ownership','Confirm explicit Pilot scope','Validate creator freeze/switch evidence','Confirm non-destructive fallback','Obtain release signoff'],
+    cutover:['Freeze/stop old creator','Verify old creator stopped','Deploy approved version','Verify schema and configuration','Apply approved function modes','Apply Pilot scope only','Activate only approved functions','Verify first controlled job','Reconcile external references'],
+    post_cutover:['Run health check','Review tasks','Review outbox and uncertain outcomes','Audit first job','Obtain staff confirmation','Reconcile external systems','Record release evidence','Decide continue, hold, or fallback'],
+    stop_conditions:['S18 not passed','S19 not READY_FOR_S20','Missing signoff','Production ID mismatch','Unexpected ReleaseMode state','Old creator still active','Backup unavailable','Pilot scope undefined','Critical health result','RecoveryRequired commit','Uncertain external side effect','Required integration unconfigured','First-job verification failure'],
+    fallback:['Stop new creator','Return affected functions to approved Disabled/Manual state','Preserve all created records and audit history','Preserve external IDs','Reconcile uncertain external effects','Continue affected jobs manually','Record incident and reason','Require new authorization before retry']
+  };
+}
+
+function _s20EvaluateRelease(release, context) {
+  context = context || {};
+  var plan = _s20ReleasePlan(release), blockers = [], notRun = [], failures = [];
+  function add(bucket, code, detail) { bucket.push({ code:code, detail:detail }); }
+  var s18 = context.s18 && context.s18.readiness ? context.s18.readiness[release] : null;
+  if (!s18) add(notRun,'S18_MISSING','S18 release result absent');
+  else {
+    if (s18.readiness !== 'READY_FOR_CONTROLLED_PILOT' && s18.readiness !== 'PASS') add(s18.readiness === 'NOT_EVALUATED' ? notRun : blockers,'S18_STATUS','S18 status=' + s18.readiness);
+    if ((s18.blocked || 0) > 0 || _s20Ids(s18.blockers).length) add(blockers,'S18_BLOCKED','Required S18 blockers remain');
+    if ((s18.not_run || 0) > 0 || _s20Ids(s18.not_run_items).length) add(notRun,'S18_NOT_RUN','Required S18 checks not run');
+    if ((s18.fail || 0) > 0 || _s20Ids(s18.failed).length) add(failures,'S18_FAIL','Required S18 checks failed');
+  }
+  var s19 = _s20AdaptS19(context.s19, release);
+  if (s19.status !== 'READY_FOR_S20') add(s19.status === 'NOT_EVALUATED' ? notRun : blockers,'S19_STATUS','S19 status=' + s19.status);
+  ['acceptance','migration','training','cutover'].forEach(function (g) {
+    if (s19[g].blocked.length) add(blockers,'S19_' + g.toUpperCase() + '_BLOCKED',s19[g].blocked.join(', '));
+    if (s19[g].not_run.length) add(notRun,'S19_' + g.toUpperCase() + '_NOT_RUN',s19[g].not_run.join(', '));
+    if (s19[g].failed.length) add(failures,'S19_' + g.toUpperCase() + '_FAIL',s19[g].failed.join(', '));
+  });
+  var config = _s20ConfigurationContract(context.production_config);
+  plan.configuration_requirements.forEach(function (k) {
+    if (config[k].status === 'INVALID') add(failures,'CONFIG_INVALID',k);
+    else if (config[k].status !== 'CONFIGURED') add(blockers,'CONFIG_MISSING',k);
+  });
+  if (!context.signoff || context.signoff.status !== 'APPROVED' || !context.signoff.approver) add(blockers,'SIGNOFF_MISSING','Recorded release decision and approver required');
+  if (!context.backup || context.backup.status !== 'VERIFIED' || !context.backup.reference || context.backup.recovery_verified !== true) add(blockers,'BACKUP_MISSING','Verified backup reference and recovery route required');
+  var scope = context.pilot_scope || s19.pilot_scope;
+  if (!scope || !Array.isArray(scope.job_ids) || scope.job_ids.length === 0) add(blockers,'PILOT_SCOPE_UNDEFINED','Explicit non-empty pilot job scope required');
+  if (!context.fallback || context.fallback.status !== 'APPROVED' || context.fallback.destructive === true) add(blockers,'FALLBACK_INVALID','Approved non-destructive fallback required');
+  var cs = context.creator_state || {};
+  if (!cs.old_creator || !cs.new_creator || cs.old_active !== false || cs.new_active !== false || cs.old_stopped_verified !== true) add(blockers,'CREATOR_SWITCH_UNSAFE','Old and new creators must be defined, inactive, and old stop verified before activation');
+  var modes = context.release_modes || [];
+  plan.functions.forEach(function (f) {
+    var m = modes.filter(function (x) { return x.function_id === f.function_id; })[0];
+    if (!m || m.mode !== f.expected_current_mode || m.authorised_job_scope !== f.expected_current_scope) add(blockers,'RELEASE_MODE_UNEXPECTED',f.function_id + ' must currently be Disabled/None');
+    if (!m || !m.approved_version) add(blockers,'MODE_APPROVAL_MISSING',f.function_id + ' approved version required');
+  });
+  var status = failures.length ? 'FAIL' : blockers.length ? 'BLOCKED' : notRun.length ? 'NOT_EVALUATED' : 'AUTHORIZED_FOR_CUTOVER';
+  return { release:release, authorization:status, blockers:blockers, not_run:notRun, failures:failures, proposed_transitions:plan.functions, plan:plan, configuration:config, external_calls:0, writes:0, production_changes:0 };
+}
+
+function _s20ReleaseSummary(store, s18Summary, s19Summary, preparation) {
+  _s20GuardStore(store);
+  var result = { generated_at:_s20Now(), environment:'DEV', simulation_only:true, releases:{}, external_calls:0, writes:0, production_changes:0 };
+  for (var i=0;i<S20_RELEASES.length;i++) {
+    var rel=S20_RELEASES[i], ctx=_s20Copy((preparation && preparation[rel]) || {});
+    ctx.s18=s18Summary; ctx.s19=s19Summary;
+    result.releases[rel]=_s20EvaluateRelease(rel,ctx);
+    result['overall_' + rel.toLowerCase()]=result.releases[rel].authorization;
+  }
+  return result;
+}
+
+if (typeof module !== 'undefined') module.exports = { S20_DEV_SHEET_ID,S20_RELEASES,S20_AUTH_STATUSES,S20_CONFIG_STATUSES,_s20GuardStore,_s20FunctionPlan,_s20RequiredConfig,_s20ConfigurationContract,_s20AdaptS19,_s20ReleasePlan,_s20EvaluateRelease,_s20ReleaseSummary };

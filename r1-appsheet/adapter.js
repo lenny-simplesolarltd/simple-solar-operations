@@ -1,0 +1,87 @@
+/* R1 AppSheet command/read boundary. DEV only; AppSheet is never authoritative. */
+'use strict';
+
+const R1A_DEV_SHEET_ID = '1z7PNZtDdC4Z5eLbmTuQdqp0QpJSmuEvx3QvN3VyNTsc';
+const R1A_READS = ['OFFICE_HOME','JOB_OVERVIEW','OPERATIONAL_QUEUE','RELEASE_MODE_STATUS','SYSTEM_STATUS','AUDIT_HISTORY','ACTION_AVAILABILITY','TASK_ACTION_AVAILABILITY'];
+const R1A_COMMANDS = ['COMPLETE_TASK','APPROVE_BOOKING','RECORD_CALL','CREATE_ISSUE','REASSIGN_ISSUE','TRANSITION_ISSUE','PLAN_WORK_PACKAGE','MOVE_WORK_PACKAGE','CHANGE_INSTALLER','CANCEL_JOB','REINSTATE_JOB','SOLD_INTAKE','BOOKING_INTAKE'];
+
+function _r1aCopy(v) { return JSON.parse(JSON.stringify(v)); }
+function _r1aRefuse(code) { var e=new Error(code); e.code=code; throw e; }
+function _r1aObject(v) { return v && typeof v==='object' && !Array.isArray(v); }
+function _r1aKeys(v, allowed) { if(!_r1aObject(v) || Object.keys(v).some(function(k){return allowed.indexOf(k)<0;})) _r1aRefuse('R1A_INVALID_FIELDS'); }
+function _r1aText(v) { return typeof v==='string' && v.trim().length>0; }
+
+function _r1aActor(store,email) {
+  if(!_r1aText(email)) _r1aRefuse('R1A_AUTHENTICATED_EMAIL_REQUIRED');
+  var normalized=email.trim().toLowerCase();
+  var people=store.list('People').filter(function(p){return _r1aText(p.email)&&p.email.trim().toLowerCase()===normalized;});
+  if(people.length!==1) _r1aRefuse('R1A_UNKNOWN_OR_DUPLICATE_ACTOR');
+  var person=people[0]; if(person.active!==true) _r1aRefuse('R1A_INACTIVE_ACTOR');
+  var roles=store.list('PersonRoles').filter(function(r){return r.person_id===person.id&&r.active===true;}).map(function(r){return r.role;});
+  if(!roles.length) _r1aRefuse('R1A_NO_ACTIVE_ROLE');
+  return {id:person.id,email:normalized,roles:roles};
+}
+function _r1aAdmin(a){return a.roles.indexOf('Admin')>=0||a.roles.indexOf('Manager')>=0;}
+function _r1aOffice(a){return _r1aAdmin(a)||a.roles.indexOf('Office')>=0||a.roles.indexOf('VariationApprover')>=0;}
+function _r1aGuard(options){
+  if(!options||!options.store||!options.config||options.config.environment!=='DEV'||options.config.sheetId!==R1A_DEV_SHEET_ID||options.store.getSheetId()!==R1A_DEV_SHEET_ID||options.store.getEnvironment()!=='DEV') _r1aRefuse('R1A_DEV_ONLY');
+  return _r1aActor(options.store,options.actorEmail());
+}
+function _r1aJob(store,id){var j=store.get('Jobs',id);if(!j)_r1aRefuse('R1A_JOB_NOT_FOUND');if(j.pilot_job!==true||j.release_scope!=='R1')_r1aRefuse('R1A_OUTSIDE_PILOT');return j;}
+function _r1aAssigned(store,a,jobId){
+  if(_r1aAdmin(a))return true;
+  return store.list('Tasks').some(function(t){return t.job_id===jobId&&(t.owner_id===a.id||t.backup_id===a.id);})||
+    store.list('Issues').some(function(i){return i.job_id===jobId&&(i.responsible_person_id===a.id||i.office_owner_id===a.id);})||
+    store.list('Jobs').some(function(j){return j.id===jobId&&j.salesperson_id===a.id;});
+}
+function _r1aAuthorizeJob(store,a,id){var j=_r1aJob(store,id);if(!_r1aAssigned(store,a,id))_r1aRefuse('R1A_JOB_ACCESS_DENIED');return j;}
+function _r1aMode(store,id,wanted){var rows=store.list('ReleaseModes').filter(function(r){return r.function_id===id;});if(rows.length!==1)_r1aRefuse('R1A_MODE_MISSING');var m=rows[0];if(m.target_release!=='R1'||m.authorised_job_scope!=='Pilot'||m.mode!==wanted)_r1aRefuse('R1A_MODE_DENIED');return m;}
+function _r1aVersion(row,expected){if(!Number.isSafeInteger(expected)||expected<1||Number(row.version)!==expected)_r1aRefuse('R1A_STALE_VERSION');}
+function _r1aFilterTasks(store,a,items){return (items||[]).filter(function(t){return (t.owner_id===a.id||t.backup_id===a.id||_r1aAdmin(a))&&(!t.job_id||(store.get('Jobs',t.job_id)||{}).pilot_job===true);});}
+
+function _r1aCreate(options){
+  var store=options.store, reads=options.reads||{}, services=options.services||{};
+  function read(input){
+    var a=_r1aGuard(options); _r1aKeys(input,['read_type','job_id','task_id','queue','as_of']);
+    if(R1A_READS.indexOf(input.read_type)<0)_r1aRefuse('R1A_UNKNOWN_READ');
+    if(!_r1aOffice(a))_r1aRefuse('R1A_ROLE_DENIED');
+    var out;
+    if(input.read_type==='OFFICE_HOME'){
+      out=reads.officeHome(store,{as_of:input.as_of});
+      ['overdue','due_today','due_soon','booking_review'].forEach(function(k){out[k]=_r1aFilterTasks(store,a,out[k]);});
+      out.unresolved_issues=(out.unresolved_issues||[]).filter(function(i){return _r1aAssigned(store,a,i.job_id);});
+      out.overdue_count=out.overdue.length;out.due_today_count=out.due_today.length;out.due_soon_count=out.due_soon.length;out.booking_review_count=out.booking_review.length;out.unresolved_issues_count=out.unresolved_issues.length;
+    } else if(input.read_type==='JOB_OVERVIEW'){_r1aAuthorizeJob(store,a,input.job_id);out=reads.jobOverview(store,input.job_id);
+    } else if(input.read_type==='OPERATIONAL_QUEUE'){out=reads.operationalQueue(store,input.queue);out.tasks=_r1aFilterTasks(store,a,out.tasks||[]);out.count=out.tasks.length;
+    } else if(input.read_type==='RELEASE_MODE_STATUS'){if(!_r1aAdmin(a))_r1aRefuse('R1A_ROLE_DENIED');out=reads.releaseModes(store);
+    } else if(input.read_type==='SYSTEM_STATUS'){if(!_r1aAdmin(a)&&a.roles.indexOf('Office')<0)_r1aRefuse('R1A_ROLE_DENIED');out=reads.systemStatus(store);
+    } else if(input.read_type==='AUDIT_HISTORY'){_r1aAuthorizeJob(store,a,input.job_id);out=reads.auditHistory(store,input.job_id);
+    } else if(input.read_type==='ACTION_AVAILABILITY'){_r1aAuthorizeJob(store,a,input.job_id);out=reads.actionAvailability(store,input.job_id);
+    } else {var t=store.get('Tasks',input.task_id);if(!t)_r1aRefuse('R1A_TASK_NOT_FOUND');if(t.job_id)_r1aAuthorizeJob(store,a,t.job_id);else if(t.owner_id!==a.id&&!_r1aAdmin(a))_r1aRefuse('R1A_TASK_ACCESS_DENIED');out=reads.taskActionAvailability(store,input.task_id);}
+    return {ok:true,read_type:input.read_type,actor_id:a.id,data:_r1aCopy(out)};
+  }
+  function command(input){
+    var a=_r1aGuard(options);_r1aKeys(input,['command_id','command_type','job_id','task_id','issue_id','work_package_id','expected_version','payload']);
+    if(!_r1aText(input.command_id))_r1aRefuse('R1A_COMMAND_ID_REQUIRED');
+    if(R1A_COMMANDS.indexOf(input.command_type)<0)_r1aRefuse('R1A_UNKNOWN_COMMAND');
+    if(!_r1aOffice(a))_r1aRefuse('R1A_ROLE_DENIED');
+    var service=services[input.command_type];
+    if(typeof service!=='function')_r1aRefuse('R1A_COMMAND_UNSUPPORTED');
+    if(input.command_type==='COMPLETE_TASK'){
+      var task=store.get('Tasks',input.task_id);if(!task)_r1aRefuse('R1A_TASK_NOT_FOUND');
+      if(task.job_id)_r1aAuthorizeJob(store,a,task.job_id);else if(task.owner_id!==a.id&&!_r1aAdmin(a))_r1aRefuse('R1A_TASK_ACCESS_DENIED');
+      _r1aMode(store,'FN-01','Automated');_r1aVersion(task,input.expected_version);
+    } else if(input.command_type==='SOLD_INTAKE'||input.command_type==='BOOKING_INTAKE') {
+      _r1aRefuse('R1A_INTAKE_POLICY_NOT_APPROVED');
+    } else {
+      _r1aAuthorizeJob(store,a,input.job_id);_r1aMode(store,'FN-01','Automated');
+      var row=input.issue_id?store.get('Issues',input.issue_id):input.work_package_id?store.get('WorkPackages',input.work_package_id):store.get('Jobs',input.job_id);
+      if(row&&input.expected_version!==undefined)_r1aVersion(row,input.expected_version);
+    }
+    var result=service({request:_r1aCopy(input),actor:a,store:store});
+    return {ok:true,command_type:input.command_type,actor_id:a.id,result:_r1aCopy(result)};
+  }
+  return {read:read,command:command};
+}
+
+if(typeof module!=='undefined')module.exports={R1A_DEV_SHEET_ID,R1A_READS,R1A_COMMANDS,_r1aActor,_r1aCreate};
