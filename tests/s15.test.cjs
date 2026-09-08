@@ -74,9 +74,9 @@ test('S15 12: recovery refuses concurrent entity edits; no silent overwrite',()=
 test('S15 13: all modes preflight; restore refuses unexpected state and is rerunnable',()=>{
  const s=store();setModes(s,false);s.update('ReleaseModes','RM-FN20',{target_release:'R2'});const before=copy(s.tables);assert.throws(()=>setModes(s,true),/unexpected/);assert.deepEqual(s.tables,before);assert.throws(()=>setModes(s,false),/unexpected/);s.update('ReleaseModes','RM-FN20',{target_release:'R1'});setModes(s,true);cancel(s);setModes(s,false);setModes(s,false);for(const id of core.S15_ENABLED){const r=s.list('ReleaseModes').find(r=>r.function_id===id);assert.equal(r.mode,'Disabled');assert.equal(r.authorised_job_scope,'None');assert.equal(r.target_release,'R1');}assert.throws(()=>cancel(s),/pilot mode/);
 });
-test('S15 14: exact DEV, synthetic job, role and downstream release refusal',()=>{
- for(const alter of [s=>s.getSheetId=()=>'wrong',s=>s.getEnvironment=()=>'TEST',s=>s.update('Jobs','J-s15-clean',{pilot_job:false}),s=>s.update('Jobs','J-s15-clean',{source_system:'S13'}),s=>s.update('People','PERSON-s15-office',{role:'Installer'}),s=>s.update('ReleaseModes','RM-FN09',{target_release:'R1'})]){const s=store();alter(s);const before=copy(s.tables);assert.throws(()=>cancel(s),/S15_REFUSED/);assert.deepEqual(s.tables,before);}
- for(const release of ['R1','R2','R3','R4']){const s=store();s.update('Jobs','J-s15-clean',{release_scope:release});assert.equal(cancel(s).ok,true);}
+test('S15 14: exact DEV, ordinary R1 pilot, role and downstream release refusal',()=>{
+ for(const alter of [s=>s.getSheetId=()=>'wrong',s=>s.getEnvironment=()=>'TEST',s=>s.update('Jobs','J-s15-clean',{pilot_job:false}),s=>s.update('Jobs','J-s15-clean',{release_scope:'R2'}),s=>s.update('People','PERSON-s15-office',{role:'Installer'}),s=>s.update('ReleaseModes','RM-FN09',{target_release:'R1'})]){const s=store();alter(s);const before=copy(s.tables);assert.throws(()=>cancel(s),/S15_REFUSED/);assert.deepEqual(s.tables,before);}
+ const ordinary=store();ordinary.update('Jobs','J-s15-clean',{source_system:'S13'});assert.equal(cancel(ordinary).ok,true);
 });
 test('S15 15: London dates cover date-only, ISO, Date and BST rollover',()=>{
  assert.equal(date('2026-11-01'),'2026-11-01');assert.equal(date(new Date('2026-07-01T23:30:00Z')),'2026-07-02');assert.equal(date('2026-07-01T23:30:00Z'),'2026-07-02');assert.throws(()=>date(new Date('invalid')),/DATE_INVALID/);assert.throws(()=>date('2026-02-30'),/DATE_INVALID/);

@@ -26,7 +26,7 @@ const S10_TERMINAL_ISSUES = new Set(['Resolved', 'Closed']);
 function _s10AssertScope(jobId, store, functionIds) {
   if (!store.getSheetId || store.getSheetId() !== S10_DEV_SHEET_ID || !store.getEnvironment || store.getEnvironment() !== 'DEV') throw new Error('S10_REFUSED: DEV only / wrong sheet');
   const job = store.get('Jobs', jobId);
-  if (!job || job.pilot_job !== true || job.release_scope !== 'R1' || !/^S10/.test(job.source_system || '')) throw new Error('S10_REFUSED: synthetic S10 R1 pilot job required');
+  if (!job || job.pilot_job !== true || job.release_scope !== 'R1') throw new Error('S10_REFUSED: R1 pilot job required');
   for (const id of functionIds) {
     const rows = store.list('ReleaseModes').filter(r => r.function_id === id);
     if (rows.length !== 1 || rows[0].target_release !== 'R1' || rows[0].authorised_job_scope !== 'Pilot') throw new Error('S10_REFUSED: '+id+' must be Pilot/R1');

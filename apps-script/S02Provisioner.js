@@ -180,7 +180,7 @@ function runS02HeaderDiagnostic() {
  * Enumeration count succeeds; cloud header reads still need verification.
  * Use this helper for all normal sheet lookups. */
 
-function _findSheetByName(ss, tabName) {
+function _s02FindSheetByName(ss, tabName) {
   var sheets = ss.getSheets();
   for (var i = 0; i < sheets.length; i++) {
     if (sheets[i].getName() === tabName) {
@@ -191,7 +191,7 @@ function _findSheetByName(ss, tabName) {
 }
 
 /* Apps Script Sheet adapter.
- * All sheet lookups use _findSheetByName (getSheets enumeration)
+ * All sheet lookups use _s02FindSheetByName (getSheets enumeration)
  * to avoid depending on the suspect named lookup. */
 
 var AppsScriptSheetAdapter = function() {
@@ -210,7 +210,7 @@ var AppsScriptSheetAdapter = function() {
 
   this.createTab = function(name) {
     var ss = this._getSs();
-    var existing = _findSheetByName(ss, name);
+    var existing = _s02FindSheetByName(ss, name);
     if (existing) return;
     ss.insertSheet(name);
   };
@@ -220,7 +220,7 @@ var AppsScriptSheetAdapter = function() {
       var ss = this._getSs();
       if (!ss) throw new Error('getActiveSpreadsheet returned null');
 
-      var sheet = _findSheetByName(ss, tabName);
+      var sheet = _s02FindSheetByName(ss, tabName);
       if (!sheet) throw new Error('sheet not found via enumeration: "' + tabName + '"');
 
       try { var sheetName = sheet.getName(); } catch(e) { throw new Error('getName failed: ' + e.message); }
@@ -244,7 +244,7 @@ var AppsScriptSheetAdapter = function() {
 
   this.setHeaders = function(tabName, headers) {
     var ss = this._getSs();
-    var sheet = _findSheetByName(ss, tabName);
+    var sheet = _s02FindSheetByName(ss, tabName);
     if (!sheet) throw new Error('Tab not found: ' + tabName);
     var range = sheet.getRange(1, 1, 1, headers.length);
     range.setValues([headers]);
@@ -252,14 +252,14 @@ var AppsScriptSheetAdapter = function() {
 
   this.freezeHeaderRow = function(tabName) {
     var ss = this._getSs();
-    var sheet = _findSheetByName(ss, tabName);
+    var sheet = _s02FindSheetByName(ss, tabName);
     if (!sheet) return;
     sheet.setFrozenRows(1);
   };
 
   this.applyTextFormat = function(tabName, columnNames) {
     var ss = this._getSs();
-    var sheet = _findSheetByName(ss, tabName);
+    var sheet = _s02FindSheetByName(ss, tabName);
     if (!sheet) return;
     var headers = this.getHeaders(tabName);
     for (var i = 0; i < columnNames.length; i++) {
@@ -280,7 +280,7 @@ var AppsScriptSheetAdapter = function() {
 
   this.getData = function(tabName) {
     var ss = this._getSs();
-    var sheet = _findSheetByName(ss, tabName);
+    var sheet = _s02FindSheetByName(ss, tabName);
     if (!sheet) return [];
     var lastRow = sheet.getLastRow();
     var lastCol = sheet.getLastColumn();
@@ -291,7 +291,7 @@ var AppsScriptSheetAdapter = function() {
 
   this.insertRow = function(tabName, values) {
     var ss = this._getSs();
-    var sheet = _findSheetByName(ss, tabName);
+    var sheet = _s02FindSheetByName(ss, tabName);
     if (!sheet) throw new Error('Tab not found: ' + tabName);
     var lastRow = sheet.getLastRow();
     var targetRow = lastRow + 1;
@@ -301,14 +301,14 @@ var AppsScriptSheetAdapter = function() {
 
   this.deleteTab = function(tabName) {
     var ss = this._getSs();
-    var sheet = _findSheetByName(ss, tabName);
+    var sheet = _s02FindSheetByName(ss, tabName);
     if (!sheet) return;
     ss.deleteSheet(sheet);
   };
 
   this.checkTextFormat = function(tabName, columnNames) {
     var ss = this._getSs();
-    var sheet = _findSheetByName(ss, tabName);
+    var sheet = _s02FindSheetByName(ss, tabName);
     if (!sheet) return { notFormatted: columnNames };
     var headers = this.getHeaders(tabName);
     var notFormatted = [];

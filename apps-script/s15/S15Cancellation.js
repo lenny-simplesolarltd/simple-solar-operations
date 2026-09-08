@@ -35,7 +35,7 @@ function _s15ModesSnapshot(store) {
 function _s15Scope(store,input) {
   _s15GuardStore(store);
   const job=store.get('Jobs',input.job_id), modes=_s15ModesSnapshot(store);
-  if (!job || job.pilot_job!==true || !/^S15-fixture$/.test(job.source_system||'') || !/^J-s15-/.test(job.id) || !['R1','R2','R3','R4'].includes(job.release_scope)) throw new Error('S15_REFUSED: synthetic S15 pilot required');
+  if (!job || job.pilot_job!==true || job.release_scope!=='R1') throw new Error('S15_REFUSED: R1 pilot required');
   for (const id of S15_ENABLED) if(modes[id].mode!==S15_FUNCTIONS[id][1] || modes[id].scope!=='Pilot') throw new Error('S15_REFUSED: '+id+' pilot mode');
   const actor=store.get('People',input.actor);
   const roles=store.list('PersonRoles').filter(r=>r.person_id===input.actor&&r.active===true).map(r=>r.role);
@@ -79,8 +79,9 @@ function _s15Plan(input,store,kind) {
     ops.push({table,id:row.id,before:_s15Copy(row),patch:after});
   }
   function insert(table,row) {ops.push({table,id:row.id,before:null,insert:row});}
-  const owner=store.list('People').filter(p=>p.active===true&&p.role==='Office'&&p.id==='PERSON-s15-office')[0];
-  if(!owner) throw new Error('S15_NOT_CONFIGURED: synthetic office owner');
+  const officeIds=store.list('PersonRoles').filter(r=>r.active===true&&['Office','Admin','Manager'].includes(r.role)).map(r=>r.person_id).concat(store.list('People').filter(p=>p.active===true&&['Office','Admin','Manager'].includes(p.role)).map(p=>p.id));
+  const owner=store.get('People',input.actor)||store.list('People').filter(p=>p.active===true&&officeIds.includes(p.id))[0];
+  if(!owner||owner.active!==true||!officeIds.includes(owner.id)) throw new Error('S15_NOT_CONFIGURED: active office owner');
   function task(code,table,id,title,blocking) {
     const tpl=store.list('TaskTemplates').find(t=>t.template_code===code&&t.active===true);
     if(!tpl) throw new Error('S15_NOT_CONFIGURED: '+code);

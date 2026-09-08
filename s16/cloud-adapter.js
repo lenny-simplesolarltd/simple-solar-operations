@@ -55,6 +55,16 @@ function _s16CloudStore() {
       sh.getRange(idx + 2, 1, 1, h.length).setValues([row.map(_s16Cell)]);
       SpreadsheetApp.flush();
     },
+    delete: function (name, id) {
+      var sh = _s16Sheet(ss, name), h = S16_HEADERS[name];
+      var values = sh.getRange(2, 1, Math.max(1, sh.getLastRow() - 1), h.length).getValues();
+      var indices = [];
+      values.forEach(function (r, i) { if (r[0] === id) indices.push(i); });
+      if (indices.length !== 1) throw new Error('S16_SCHEMA: delete row ' + id + ' (found ' + indices.length + ')');
+      // Clear row — set all cells to empty. list() filters rows without id.
+      sh.getRange(indices[0] + 2, 1, 1, h.length).setValues([h.map(function () { return ''; })]);
+      SpreadsheetApp.flush();
+    },
     withLock: function (fn) {
       var lock = LockService.getScriptLock();
       if (!lock.tryLock(5000)) throw new Error('S16_BUSY');
@@ -79,4 +89,6 @@ function runS16FixtureDryRun() { return _s16Result('S16 dry run', function () { 
 function runS16FixtureApply() { return _s16Result('S16 fixture apply', function () { var s = _s16CloudStore(); return s.withLock(function () { _s16Seed(s); return { ok: true }; }); }); }
 function runS16FixtureValidate() { return _s16Result('S16 fixture validate', function () { var s = _s16CloudStore(), data = _s16FixtureRows(); function verifyRows(rows, expectedCreatedBy) { for (var t in rows) { if (!rows.hasOwnProperty(t)) continue; for (var i = 0; i < rows[t].length; i++) { var r = rows[t][i]; var v = _s16VerifyRow(s, t, r.id, expectedCreatedBy); if (!v.ok) throw new Error('S16_FIXTURE: ' + t + '/' + r.id + ' — ' + v.detail); } } } /* Shared: no created_by check (canonical, seeded by prior stages). Owned: require S16. */ verifyRows(data.shared, null); verifyRows(data.owned, 'S16'); return { ok: true }; }); }
 function runS16EnableFunctionsForSyntheticTest() { return _s16Result('S16 enable', function () { return _s16SetModes(_s16CloudStore(), true); }); }
+function runS16ResetFixture() { return _s16Result('S16 reset fixture', function () { return _s16ResetFixture(_s16CloudStore()); }); }
+function runS16DiagnoseModes() { return _s16Result('S16 diagnose modes', function () { var s = _s16CloudStore(); var rows = s.list('ReleaseModes'); var fn13 = rows.filter(function (r) { return r.function_id === 'FN-13'; }); var fn14 = rows.filter(function (r) { return r.function_id === 'FN-14'; }); var fn16 = rows.filter(function (r) { return r.function_id === 'FN-16'; }); return { ok: true, fn13_count: fn13.length, fn13: fn13.map(function (r) { return { id: r.id, mode: r.mode, scope: r.authorised_job_scope, target_release: r.target_release, planned_target_mode: r.planned_target_mode }; }), fn14_count: fn14.length, fn14: fn14.map(function (r) { return { id: r.id, mode: r.mode, scope: r.authorised_job_scope, target_release: r.target_release }; }), fn16_count: fn16.length, fn16: fn16.map(function (r) { return { id: r.id, mode: r.mode, scope: r.authorised_job_scope, target_release: r.target_release }; }) }; }); }
 function runS16HappyPathTest() { return _s16Result('S16 happy path', function () { return _s16Smoke(_s16CloudStore(), typeof S16_HEALTH_EXPORTS !== 'undefined' ? S16_HEALTH_EXPORTS : { _s16HealthStatus: _s16HealthStatus, _s16BackupManifest: _s16BackupManifest, _s16ValidateBackup: _s16ValidateBackup, _s16RestorePlan: _s16RestorePlan, _s16ArchiveEligibility: _s16ArchiveEligibility, _s16ArchiveJob: _s16ArchiveJob, _s16ReopenArchivedJob: _s16ReopenArchivedJob, _s16SystemTasks: _s16SystemTasks, _s16SetModes: _s16SetModes }); }); }

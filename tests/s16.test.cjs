@@ -24,6 +24,11 @@ function makeStore() {
       assert.ok(r, n + '/' + id);
       Object.assign(r, copy(p));
     },
+    delete(n, id) {
+      const idx = tables[n].findIndex(r => r.id === id);
+      assert.ok(idx !== -1, n + '/' + id + ' not found');
+      tables[n].splice(idx, 1);
+    },
     withLock(fn) { assert.equal(held, false, 'lock contention'); held = true; try { return fn(); } finally { held = false; } }
   };
   for (const r of seed.ReleaseModes) s.insert('ReleaseModes', { ...r, version: 1 });
@@ -369,9 +374,41 @@ test('S16 26: date handling parity — Date objects, strings, invalid', () => {
   assert.equal(core._s16AddMonths('2025-02-01', 6), '2025-08-01');
   assert.equal(core._s16AddMonths('2025-08-01', -6), '2025-02-01');
   assert.equal(core._s16MonthsBetween('2025-02-01', '2025-08-01'), 6);
+  assert.equal(core._s16Timestamp(new Date('2026-09-07T11:00:00.123Z')), '2026-09-07T11:00:00.123Z');
+  assert.equal(core._s16IsTrue('TRUE'), true);
+  assert.equal(core._s16IsTrue(false), false);
 });
 
-test('S16 27: namespace compatibility — all bundles parse, S16 globals namespaced', () => {
+test('S16 27: backup validation tolerates Sheet Date on ReportSnapshots.created_at', () => {
+  const s = makeStore();
+  const b = core._s16BackupManifest(s, { command_id: 'S16-TEST-SHEET-DATE', actor: 'PERSON-s16-office' });
+  const snap = s.tables.ReportSnapshots.find(r => r.id === b.backup_id);
+  const totals = JSON.parse(snap.totals_json);
+  // Simulate Apps Script Sheet readback: truncate ms and return Date object
+  snap.created_at = new Date(totals.created_at.slice(0, 19) + '.000Z');
+  const v = core._s16ValidateBackup(s, b.backup_id);
+  assert.equal(v.valid, true, JSON.stringify(v));
+  assert.equal(v.checksum_match, true);
+  assert.equal(v.manifest_created_at, totals.created_at);
+  const r = core._s16RestorePlan(s, b.backup_id, { actor: 'PERSON-s16-office', reason: 'Sheet Date restore plan' });
+  assert.equal(r.dry_run, true);
+  assert.equal(r.blocked, true);
+  assert.equal(r.source_manifest.created_at, totals.created_at);
+});
+
+test('S16 28: health status sorts prior checks when checked_at is Sheet Date', () => {
+  const s = makeStore();
+  add(s, 'HealthChecks', {
+    id: 'HC-OLD', integration: 'S16-system', checked_at: new Date('2026-01-01T10:00:00.000Z'),
+    outcome: 'Healthy', last_success: '2026-01-01T10:00:00.000Z', error_code: null,
+    next_action_task_id: null, created_at: '2026-01-01T10:00:00.000Z', commit_id: 'HC-OLD'
+  });
+  const h = core._s16HealthStatus(s);
+  assert.ok(['Healthy', 'Degraded'].includes(h.overall));
+  assert.equal(h.last_health_check, '2026-01-01T10:00:00.000Z');
+});
+
+test('S16 29: namespace compatibility — all bundles parse, S16 globals namespaced', () => {
   const files = fs.readdirSync('apps-script', { recursive: true }).filter(f => /\.(gs|js)$/.test(f));
   const prior = files.filter(f => !f.startsWith('s16/')).map(f => fs.readFileSync('apps-script/' + f, 'utf8')).join('\n');
   const s16 = fs.readFileSync('apps-script/s16/S16Health.js', 'utf8');
@@ -381,7 +418,7 @@ test('S16 27: namespace compatibility — all bundles parse, S16 globals namespa
   assert.doesNotMatch(s16, /CalendarApp|UrlFetchApp|fetch\(|deleteRow|deleteSheet|GmailApp|MailApp|DriveApp|https:\/\//);
 });
 
-test('S16 28: zero-arg DEV smoke with real header adapter reruns', () => {
+test('S16 30: zero-arg DEV smoke with real header adapter reruns', () => {
   const ctx = vm.createContext({ console: { log() { } }, Intl, Date });
   const grids = {};
   vm.runInContext(fs.readFileSync('apps-script/s16/S16Health.js', 'utf8'), ctx);
@@ -412,9 +449,153 @@ test('S16 28: zero-arg DEV smoke with real header adapter reruns', () => {
     const r = ctx[fn]();
     assert.equal(r.pass, true, fn + ': ' + JSON.stringify(r));
   }
+  // After first happy path, simulate Sheet Date on HealthChecks + ReportSnapshots and rerun validation path
+  const hcIdx = grids.HealthChecks[0].indexOf('checked_at');
+  for (let i = 1; i < grids.HealthChecks.length; i++) {
+    const v = grids.HealthChecks[i][hcIdx];
+    if (typeof v === 'string' && v) grids.HealthChecks[i][hcIdx] = new Date(v);
+  }
+  const createdIdx = grids.ReportSnapshots[0].indexOf('created_at');
+  for (let i = 1; i < grids.ReportSnapshots.length; i++) {
+    const v = grids.ReportSnapshots[i][createdIdx];
+    if (typeof v === 'string' && v) grids.ReportSnapshots[i][createdIdx] = new Date(v.slice(0, 19) + '.000Z');
+  }
+  assert.equal(ctx.runS16EnableFunctionsForSyntheticTest().pass, true);
+  const again = ctx.runS16HappyPathTest();
+  assert.equal(again.pass, true, 'Sheet Date happy path rerun: ' + JSON.stringify(again));
+  assert.equal(ctx.restoreS16SafeState().pass, true);
+
+  // Reset fixture, re-seed, fresh proof — backup_valid/restore_blocked must not be "skipped-replay"
+  assert.equal(ctx.runS16ResetFixture().pass, true, 'reset fixture');
+  assert.equal(ctx.runS16EnableFunctionsForSyntheticTest().pass, true, 're-enable after reset');
+  assert.equal(ctx.runS16FixtureApply().pass, true, 're-apply after reset');
+  assert.equal(ctx.runS16FixtureValidate().pass, true, 're-validate after reset');
+  const fresh = ctx.runS16HappyPathTest();
+  assert.equal(fresh.pass, true, 'fresh proof happy path: ' + JSON.stringify(fresh));
+  assert.equal(fresh.detail.backup_valid, true, 'fresh backup_valid must be true, got: ' + fresh.detail.backup_valid);
+  assert.equal(fresh.detail.restore_blocked, true, 'fresh restore_blocked must be true, got: ' + fresh.detail.restore_blocked);
+  assert.equal(fresh.detail.archived, true, 'fresh archived must be true, got: ' + fresh.detail.archived);
+  assert.equal(fresh.detail.reopened, true, 'fresh reopened must be true, got: ' + fresh.detail.reopened);
+  assert.equal(fresh.detail.sys_tasks, 2, 'fresh sys_tasks must be 2, got: ' + fresh.detail.sys_tasks);
+  assert.equal(fresh.detail.external_calls, 0);
+  assert.equal(ctx.restoreS16SafeState().pass, true);
+
   // Header/environment refusal
   grids.Jobs[0][1] = 'bad';
   assert.equal(ctx.runS16FixtureApply().pass, false);
   ctx.PropertiesService = { getScriptProperties: () => ({ getProperty: () => JSON.stringify({ environment: 'TEST' }) }) };
   assert.equal(ctx.restoreS16SafeState().pass, false);
+});
+
+test('S16 31: reset fixture deletes S16 fixture rows and smoke artifacts', () => {
+  const s = makeStore();
+  // Verify fixture rows exist
+  assert.ok(s.get('Jobs', 'J-s16-old'));
+  assert.ok(s.get('Jobs', 'J-s16-recent'));
+  assert.ok(s.get('Jobs', 'J-s16-opentask'));
+  assert.ok(s.get('Tasks', 'TASK-s16-opentask'));
+  assert.ok(s.get('People', 'PERSON-s16-office'));
+  assert.ok(s.get('People', 'PERSON-s16-ben'));
+  // Run smoke to create artifacts
+  const result = fixture._s16Smoke(s, core);
+  assert.equal(result.pass, true);
+  // Verify artifacts exist
+  assert.ok(s.get('ReportSnapshots', 'BACKUP-S16-SMOKE-BACKUP'));
+  assert.ok(s.get('ArchiveIndex', 'ARCHIVE-S16-SMOKE-ARCHIVE'));
+  // Reset
+  const reset = fixture._s16ResetFixture(s);
+  assert.equal(reset.ok, true);
+  assert.ok(reset.count > 0, 'should delete at least some rows');
+  // Verify fixture rows are gone
+  assert.equal(s.get('Jobs', 'J-s16-old'), null);
+  assert.equal(s.get('Jobs', 'J-s16-recent'), null);
+  assert.equal(s.get('Jobs', 'J-s16-opentask'), null);
+  assert.equal(s.get('Tasks', 'TASK-s16-opentask'), null);
+  assert.equal(s.get('People', 'PERSON-s16-office'), null);
+  assert.equal(s.get('People', 'PERSON-s16-ben'), null);
+  // Verify smoke artifacts are gone
+  assert.equal(s.get('ReportSnapshots', 'BACKUP-S16-SMOKE-BACKUP'), null);
+  assert.equal(s.get('ArchiveIndex', 'ARCHIVE-S16-SMOKE-ARCHIVE'), null);
+  // Verify non-S16 rows survive (ReleaseModes from seed)
+  const modes = s.list('ReleaseModes');
+  assert.ok(modes.length >= 3, 'ReleaseModes should survive reset');
+});
+
+test('S16 32: fresh-proof smoke after reset yields backup_valid=true, restore_blocked=true, archived=true', () => {
+  const s = makeStore();
+  // First smoke run creates artifacts
+  const first = fixture._s16Smoke(s, core);
+  assert.equal(first.pass, true);
+  // Reset
+  fixture._s16ResetFixture(s);
+  // Re-seed fixture (modes already enabled from makeStore)
+  fixture._s16Seed(s);
+  // Fresh smoke run — must produce fresh (non-replay) results
+  const fresh = fixture._s16Smoke(s, core);
+  assert.equal(fresh.pass, true, JSON.stringify(fresh));
+  assert.equal(fresh.detail.backup_valid, true, 'backup_valid must be true on fresh run');
+  assert.equal(fresh.detail.restore_blocked, true, 'restore_blocked must be true on fresh run');
+  assert.equal(fresh.detail.archived, true, 'archived must be true on fresh run');
+  assert.equal(fresh.detail.reopened, true, 'reopened must be true on fresh run');
+  assert.equal(fresh.detail.sys_tasks, 2, 'sys_tasks must be 2 on fresh run');
+  assert.equal(fresh.detail.external_calls, 0, 'external_calls must be 0');
+});
+
+test('S16 34: enable → scope check cycle matches cloud flow (disable, enable, scope, disable)', () => {
+  const s = makeStore();
+  // Simulate exact cloud sequence: restoreSafeState → enableFunctions → scope check
+  assert.equal(core._s16SetModes(s, false).ok, true, 'disable modes');
+  assert.equal(core._s16SetModes(s, true).ok, true, 'enable modes');
+  // _s16Scope should not throw
+  const modes = core._s16Scope(s);
+  assert.equal(modes['FN-13'].mode, 'Automated', 'FN-13 mode after enable');
+  assert.equal(modes['FN-13'].scope, 'Pilot', 'FN-13 scope after enable');
+  assert.equal(modes['FN-14'].mode, 'Automated', 'FN-14 mode after enable');
+  assert.equal(modes['FN-14'].scope, 'Pilot', 'FN-14 scope after enable');
+  assert.equal(modes['FN-16'].mode, 'Manual', 'FN-16 mode after enable');
+  assert.equal(modes['FN-16'].scope, 'Pilot', 'FN-16 scope after enable');
+  // Re-disable and verify
+  assert.equal(core._s16SetModes(s, false).ok, true, 're-disable modes');
+  assert.throws(() => core._s16Scope(s), /pilot mode required/);
+  // Re-enable from disabled state
+  assert.equal(core._s16SetModes(s, true).ok, true, 're-enable from disabled');
+  const modes2 = core._s16Scope(s);
+  assert.equal(modes2['FN-13'].mode, 'Automated');
+  assert.equal(modes2['FN-13'].scope, 'Pilot');
+});
+
+test('S16 33: reset does not touch non-S16 rows', () => {
+  const s = makeStore();
+  // Add a non-S16 job
+  add(s, 'Jobs', {
+    id: 'J-REAL-001', job_id: 'SS-REAL-001', customer_id: 'CUST-s16',
+    display_name: 'Real Operational Job', workflow_stage: 'InProgress',
+    created_at: '2026-01-01T00:00:00Z', created_by: 'S14', updated_at: '2026-01-01T00:00:00Z', updated_by: 'S14',
+    version: 1, source_system: 'S14', commit_id: 'S14'
+  });
+  // Add a non-S16 task
+  add(s, 'Tasks', {
+    id: 'TASK-REAL-001', job_id: 'J-REAL-001', template_code: 'BKG01',
+    instance_key: 'REAL-001', group: 'Booking', title: 'Real Task',
+    owner_id: 'PERSON-s16-office', status: 'Open',
+    created_rule_version: '1.0', source_system: 'S14',
+    created_at: '2026-01-01T00:00:00Z', created_by: 'S14', updated_at: '2026-01-01T00:00:00Z', updated_by: 'S14',
+    version: 1, commit_id: 'S14'
+  });
+  // Run smoke to create artifacts
+  fixture._s16Smoke(s, core);
+  // Reset
+  fixture._s16ResetFixture(s);
+  // Non-S16 rows must survive
+  assert.ok(s.get('Jobs', 'J-REAL-001'), 'non-S16 job must survive');
+  assert.equal(s.get('Jobs', 'J-REAL-001').created_by, 'S14');
+  assert.ok(s.get('Tasks', 'TASK-REAL-001'), 'non-S16 task must survive');
+  assert.equal(s.get('Tasks', 'TASK-REAL-001').created_by, 'S14');
+  // S16 fixture rows must be gone
+  assert.equal(s.get('Jobs', 'J-s16-old'), null);
+  // ReleaseModes survive (from config-seed)
+  assert.ok(s.list('ReleaseModes').length >= 3);
+  // Shared templates survive (from seed, may be TPL-SYS01/SYS02)
+  const tpls = s.list('TaskTemplates');
+  assert.ok(tpls.length > 0, 'shared templates should survive');
 });

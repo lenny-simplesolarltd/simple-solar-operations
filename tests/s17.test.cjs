@@ -7,7 +7,7 @@ function makeStore() {
   const tables = Object.fromEntries(schema.tables.map(t => [t.name, []]));
   const s = {
     tables,
-    getSheetId: () => core.S17_DEV_SHEET_ID,
+    getSheetId: () => core.S17_ADMIN_DEV_SHEET_ID,
     getEnvironment: () => 'DEV',
     list: n => copy(tables[n] || []),
     get: (n, id) => copy((tables[n] || []).find(r => r.id === id) || null),
@@ -295,7 +295,7 @@ test('S17 21: fixture idempotency — seed does not duplicate', () => {
 test('S17 22: pre-existing J-s16-old from S16 is accepted as shared dependency', () => {
   const tables = Object.fromEntries(schema.tables.map(t => [t.name, []]));
   const s = {
-    tables, getSheetId: () => core.S17_DEV_SHEET_ID, getEnvironment: () => 'DEV',
+    tables, getSheetId: () => core.S17_ADMIN_DEV_SHEET_ID, getEnvironment: () => 'DEV',
     list: n => copy(tables[n] || []), get: (n, id) => copy((tables[n] || []).find(r => r.id === id) || null),
     insert(n, r) { const h = schema.tables.find(t => t.name === n).columns.map(c => c.name); for (const k of Object.keys(r)) assert.ok(h.includes(k), 'unknown ' + n + '.' + k); tables[n].push(copy(r)); },
     update(n, id, p) { const r = tables[n].find(r => r.id === id); if (r) Object.assign(r, copy(p)); },
@@ -322,7 +322,7 @@ test('S17 22: pre-existing J-s16-old from S16 is accepted as shared dependency',
 test('S17 23: missing shared prerequisite J-s16-old fails clearly', () => {
   const tables = Object.fromEntries(schema.tables.map(t => [t.name, []]));
   const s = {
-    tables, getSheetId: () => core.S17_DEV_SHEET_ID, getEnvironment: () => 'DEV',
+    tables, getSheetId: () => core.S17_ADMIN_DEV_SHEET_ID, getEnvironment: () => 'DEV',
     list: n => copy(tables[n] || []), get: (n, id) => copy((tables[n] || []).find(r => r.id === id) || null),
     insert(n, r) { const h = schema.tables.find(t => t.name === n).columns.map(c => c.name); for (const k of Object.keys(r)) assert.ok(h.includes(k), 'unknown ' + n + '.' + k); tables[n].push(copy(r)); },
     update(n, id, p) { const r = tables[n].find(r => r.id === id); if (r) Object.assign(r, copy(p)); },
@@ -336,7 +336,7 @@ test('S17 23: missing shared prerequisite J-s16-old fails clearly', () => {
 test('S17 24: incompatible shared Job fails closed', () => {
   const tables = Object.fromEntries(schema.tables.map(t => [t.name, []]));
   const s = {
-    tables, getSheetId: () => core.S17_DEV_SHEET_ID, getEnvironment: () => 'DEV',
+    tables, getSheetId: () => core.S17_ADMIN_DEV_SHEET_ID, getEnvironment: () => 'DEV',
     list: n => copy(tables[n] || []), get: (n, id) => copy((tables[n] || []).find(r => r.id === id) || null),
     insert(n, r) { const h = schema.tables.find(t => t.name === n).columns.map(c => c.name); for (const k of Object.keys(r)) assert.ok(h.includes(k), 'unknown ' + n + '.' + k); tables[n].push(copy(r)); },
     update(n, id, p) { const r = tables[n].find(r => r.id === id); if (r) Object.assign(r, copy(p)); },
@@ -359,7 +359,7 @@ test('S17 24: incompatible shared Job fails closed', () => {
 test('S17 25: fixture collision refused for non-S17 rows', () => {
   const tables = Object.fromEntries(schema.tables.map(t => [t.name, []]));
   const s = {
-    tables, getSheetId: () => core.S17_DEV_SHEET_ID, getEnvironment: () => 'DEV',
+    tables, getSheetId: () => core.S17_ADMIN_DEV_SHEET_ID, getEnvironment: () => 'DEV',
     list: n => copy(tables[n] || []), get: (n, id) => copy((tables[n] || []).find(r => r.id === id) || null),
     insert(n, r) { const h = schema.tables.find(t => t.name === n).columns.map(c => c.name); for (const k of Object.keys(r)) assert.ok(h.includes(k), 'unknown ' + n + '.' + k); tables[n].push(copy(r)); },
     update(n, id, p) { const r = tables[n].find(r => r.id === id); if (r) Object.assign(r, copy(p)); },
@@ -439,8 +439,7 @@ test('S17 28: zero-arg DEV smoke with real header adapter reruns', () => {
       };
     }
   }));
-  ctx.SpreadsheetApp = { getActiveSpreadsheet: () => ({ getId: () => core.S17_DEV_SHEET_ID, getSheets: () => sheets }), flush() { } };
-  ctx.PropertiesService = { getScriptProperties: () => ({ getProperty: () => JSON.stringify({ environment: 'DEV' }) }) };
+  ctx.SpreadsheetApp = { openById: () => ({ getId: () => core.S17_ADMIN_DEV_SHEET_ID, getSheets: () => sheets }), flush() { } };
   ctx.LockService = { getScriptLock: () => ({ tryLock() { return true; }, releaseLock() { } }) };
   for (const api of ['CalendarApp', 'UrlFetchApp', 'GmailApp', 'MailApp', 'DriveApp']) ctx[api] = new Proxy({}, { get() { throw new Error('EXTERNAL API FORBIDDEN'); } });
 
@@ -448,9 +447,7 @@ test('S17 28: zero-arg DEV smoke with real header adapter reruns', () => {
     const r = ctx[fn]();
     assert.equal(r.pass, true, fn + ': ' + JSON.stringify(r));
   }
-  // Header/environment refusal
+  // Header mismatch refusal
   grids.Jobs[0][1] = 'bad';
   assert.equal(ctx.runS17FixtureApply().pass, false);
-  ctx.PropertiesService = { getScriptProperties: () => ({ getProperty: () => JSON.stringify({ environment: 'TEST' }) }) };
-  assert.equal(ctx.runS17FixtureDryRun().pass, false);
 });

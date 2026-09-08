@@ -1,6 +1,6 @@
-# S16 implementation — 6 September 2026
+# S16 implementation — 7 September 2026
 
-**LOCAL IMPLEMENTATION PASS (24 tests); DEV CLOUD NOT YET RUN.** Health monitoring, backup manifest, archive eligibility + action, reopen from archive, restore planning (dry-run only). No real Drive/Calendar/Xero/GHL calls. No destructive restore.
+**LOCAL IMPLEMENTATION PASS (30 tests); DEV CLOUD HAPPY PATH NOT RUN against live Apps Script after Sheet Date checksum fix.** Health monitoring, backup manifest, archive eligibility + action, reopen from archive, restore planning (dry-run only). No real Drive/Calendar/Xero/GHL calls. No destructive restore. PROD untouched.
 
 ## Authoritative tables
 
@@ -32,7 +32,7 @@
 | FN-14 | Backup/restore + health monitoring | R1 | Automated/Pilot/R1 |
 | FN-16 | Daily authorisation/health review | R1 | Manual/Pilot/R1 |
 
-S16-enabled functions (must be Pilot mode): FN-14, FN-16.
+S16 smoke enables FN-13 + FN-14 + FN-16 together (archive + health/backup + daily review). Always restore to Disabled/None after smoke.
 
 ## Architecture
 
@@ -53,14 +53,14 @@ Checks performed:
 - Last health check presence (none → Warning)
 - ReleaseMode consistency (Disabled/scope mismatch → Critical)
 
-Records result in HealthChecks table with idempotent ID.
+Records result in HealthChecks table with idempotent ID. Prior `checked_at` values are normalized before sort so Sheet `Date` objects do not throw.
 
 ### 2. Backup manifest (`_s16BackupManifest`)
 
 Creates deterministic backup metadata stored in ReportSnapshots table:
 - Enumerates all 60 tables
 - Records row counts per table
-- Computes checksum hash over schema_version + counts + environment + sheet_id
+- Computes checksum hash over schema_version + counts + environment + sheet_id + created_at
 - Idempotent: `BACKUP-{command_id}` key prevents duplicates
 - No real Drive file creation (destination: NOT_CONFIGURED)
 
@@ -68,7 +68,7 @@ Creates deterministic backup metadata stored in ReportSnapshots table:
 
 Validates a backup manifest against current state:
 - Recomputes row counts (excluding the backup manifest row itself)
-- Recomputes checksum
+- Recomputes checksum using **`totals_json.created_at`** (stable string), never Sheet `ReportSnapshots.created_at` (may be Date / ms-truncated)
 - Reports count mismatches
 - Returns valid/invalid with details
 
@@ -122,10 +122,11 @@ Creates daily health review tasks:
 - SYS02: 16:30 end-of-day review
 - Deterministic instance_key prevents duplicates
 - Owner resolution: Tanya (Office) or Ben (Manager) from People table
+- Sheet boolean `TRUE`/`true` treated as active
 
 ### 9. ReleaseMode toggle (`_s16SetModes`)
 
-Enables/disables FN-14 and FN-16:
+Enables/disables FN-13, FN-14 and FN-16:
 - Guard: exact DEV sheet + environment
 - Lock-based concurrent safety
 - Validates starting state before transition
@@ -133,24 +134,25 @@ Enables/disables FN-14 and FN-16:
 
 ## Source files
 
-| File | Purpose | Lines |
-|---|---|---|
-| `s16/health.js` | Core health/backup/archive/restore engine | ~380 |
-| `s16/fixture.js` | Minimal synthetic fixture and smoke runner | ~270 |
-| `s16/cloud-adapter.js` | Cloud sheet enumeration adapter | ~90 |
+| File | Purpose |
+|---|---|
+| `s16/health.js` | Core health/backup/archive/restore engine |
+| `s16/fixture.js` | Minimal synthetic fixture and smoke runner |
+| `s16/cloud-adapter.js` | Cloud sheet enumeration adapter |
+| `apps-script/s16/S16Health.js` | Built DEV bundle (`npm run build:s16`) |
 
 ## Cloud smoke functions
 
 | Function | Purpose |
 |---|---|
-| `restoreS16SafeState()` | Disable S16 functions (FN-14, FN-16 → Disabled/None) |
+| `restoreS16SafeState()` | Disable S16 functions (FN-13/14/16 → Disabled/None) |
 | `runS16FixtureDryRun()` | Read-only preflight — validate headers, modes, existing data |
-| `runS16FixtureApply()` | Seed synthetic fixture (3 Jobs, 1 Task, 2 People, 2 TaskTemplates) |
-| `runS16FixtureValidate()` | Verify fixture rows exist with correct created_by |
-| `runS16EnableFunctionsForSyntheticTest()` | Enable FN-14, FN-16 → Pilot mode |
-| `runS16HappyPathTest()` | Full smoke: health, backup manifest, archive eligibility, archive, reopen, system tasks |
+| `runS16FixtureApply()` | Seed synthetic fixture (3 Jobs, 1 Task, 2 People, shared SYS templates) |
+| `runS16FixtureValidate()` | Verify fixture rows; shared templates skip created_by check |
+| `runS16EnableFunctionsForSyntheticTest()` | Enable FN-13/14/16 → Pilot mode |
+| `runS16HappyPathTest()` | Full smoke: health, backup manifest, validate, restore plan (blocked), archive eligibility, archive, reopen, system tasks |
 
-## Tests (24, all passing)
+## Tests (30, all passing)
 
 | # | Test |
 |---|---|
@@ -175,9 +177,19 @@ Enables/disables FN-14 and FN-16:
 | 19 | System tasks SYS01/SYS02 created with correct owners |
 | 20 | ReleaseMode refusal when disabled |
 | 21 | Wrong DEV sheet/environment refused |
-| 22 | Date handling parity — Date objects, strings, invalid |
-| 23 | Namespace compatibility — all bundles parse, S16 globals namespaced |
-| 24 | Zero-arg DEV smoke with real header adapter reruns |
+| 22 | Archive eligibility always returns blockers array even for missing job |
+| 23 | Shared canonical templates reused when pre-existing from prior stages |
+| 24 | Incompatible shared template fails closed |
+| 25 | Fixture validate accepts shared templates without created_by check |
+| 26 | Date handling parity — Date objects, strings, invalid |
+| 27 | Backup validation tolerates Sheet Date on ReportSnapshots.created_at |
+| 28 | Health status sorts prior checks when checked_at is Sheet Date |
+| 29 | Namespace compatibility — all bundles parse, S16 globals namespaced |
+| 30 | Zero-arg DEV smoke with real header adapter reruns (incl. Sheet Date) |
+
+## Defect fixed 7 Sep 2026 (blocking DEV happy path)
+
+Sheets return `Date` for timestamp cells. Backup validation previously hashed `manifest.created_at` from the row; after Sheet readback this could diverge from the string used at create time (ms truncation / Date serialisation). Fix: recompute checksum exclusively from `totals_json.created_at`. Health prior-check sort now normalizes timestamps before `localeCompare`.
 
 ## NOT_CONFIGURED
 
@@ -185,21 +197,25 @@ Enables/disables FN-14 and FN-16:
 |---|---|
 | Real Drive backup file creation | No Drive API in scope; manifest metadata only |
 | Destructive restore | Intentionally blocked — dry-run planning only |
-| Backup destination/folder | NOT_CONFIGURED — no real Drive folder IDs |
-| Restore into isolated environment | NOT_CONFIGURED — requires actual infrastructure |
+| Backup destination/folder IDs | NOT_CONFIGURED — no real Drive folder IDs |
+| Restore into isolated environment | NOT_CONFIGURED — requires approved TEST copy / infrastructure |
 | Restore timing measurement | NOT_CONFIGURED — no actual restore performed |
 | Connection owner reauthorisation | NOT_CONFIGURED — no external auth integration |
 | Independent monitoring route | NOT_CONFIGURED — requires external monitoring infrastructure |
 
-## DEV cloud smoke procedure
+## Safe DEV cloud steps (when Lenny pastes corrected bundle)
 
-1. Paste `apps-script/s16/S16Health.js` into DEV Apps Script project
-2. Run `restoreS16SafeState()` — verify FN-14/16 → Disabled/None
-3. Run `runS16FixtureDryRun()` — verify headers read, no existing fixture
-4. Run `runS16FixtureApply()` — seed synthetic fixture
-5. Run `runS16FixtureValidate()` — verify fixture rows exist
-6. Run `runS16EnableFunctionsForSyntheticTest()` — enable Pilot modes
-7. Run `runS16HappyPathTest()` — full smoke sequence
-8. Run `restoreS16SafeState()` — disable all functions
+May run against main DEV workbook (synthetic fixture only; restore remains dry-run):
+
+1. Paste rebuilt `apps-script/s16/S16Health.js` into DEV Apps Script project
+2. `restoreS16SafeState()`
+3. `runS16FixtureDryRun()`
+4. `runS16FixtureApply()` — already PASS historically; idempotent / shared-template safe
+5. `runS16FixtureValidate()`
+6. `runS16EnableFunctionsForSyntheticTest()`
+7. `runS16HappyPathTest()` — includes blocked restore plan; does **not** overwrite workbook from backup
+8. `restoreS16SafeState()` even if a prior step fails
+
+Do **not**: run destructive restore, invent Drive folder IDs, touch PROD, or restore into the main DEV workbook as a real rollback.
 
 No real Drive/Calendar/Xero/GHL calls. No PROD references. No destructive restore.

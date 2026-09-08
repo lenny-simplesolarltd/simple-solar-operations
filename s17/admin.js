@@ -4,7 +4,7 @@
  * No real Calendar/Xero/GHL/Drive calls. No destructive operations. */
 'use strict';
 
-const S17_DEV_SHEET_ID = '1z7PNZtDdC4Z5eLbmTuQdqp0QpJSmuEvx3QvN3VyNTsc';
+const S17_ADMIN_DEV_SHEET_ID = '1z7PNZtDdC4Z5eLbmTuQdqp0QpJSmuEvx3QvN3VyNTsc';
 
 /* --- Utilities --- */
 
@@ -31,7 +31,7 @@ function _s17Today() { return _s17Date(_s17Now().slice(0, 10)); }
 /* --- Guard --- */
 
 function _s17GuardStore(store) {
-  if (!store.getSheetId || store.getSheetId() !== S17_DEV_SHEET_ID || !store.getEnvironment || store.getEnvironment() !== 'DEV')
+  if (!store.getSheetId || store.getSheetId() !== S17_ADMIN_DEV_SHEET_ID || !store.getEnvironment || store.getEnvironment() !== 'DEV')
     throw new Error('S17_REFUSED: exact DEV sheet/environment required');
 }
 function _s17Scope(store) {
@@ -576,7 +576,7 @@ function _s17TaskActionAvailability(store, taskId) {
 
 if (typeof module !== 'undefined') {
   module.exports = {
-    S17_DEV_SHEET_ID,
+    S17_ADMIN_DEV_SHEET_ID,
     _s17Date, _s17Today, _s17GuardStore, _s17Scope,
     _s17OfficeToday, _s17JobOverview, _s17JobSearch,
     _s17OperationalQueue, _s17AdminReleaseModes, _s17AdminSystemStatus,

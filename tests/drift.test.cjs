@@ -241,7 +241,7 @@ test('provisioner core functions identically via global and require', () => {
 
 // --- Adapter safety: no getSheetByName in operational paths ---
 
-test('S02Provisioner.js adapter uses _findSheetByName, not getSheetByName', () => {
+test('S02Provisioner.js adapter uses _s02FindSheetByName, not getSheetByName', () => {
   const source = fs.readFileSync('apps-script/S02Provisioner.js', 'utf8');
 
   // The adapter starts at 'var AppsScriptSheetAdapter' and ends at the last '};'
@@ -254,11 +254,11 @@ test('S02Provisioner.js adapter uses _findSheetByName, not getSheetByName', () =
 
   // The adapter must NOT call getSheetByName
   assert.ok(!adapterCode.includes('.getSheetByName('),
-    'AppsScriptSheetAdapter must not call .getSheetByName() — use _findSheetByName');
+    'AppsScriptSheetAdapter must not call .getSheetByName() — use _s02FindSheetByName');
 
-  // The adapter must use _findSheetByName
-  assert.ok(adapterCode.includes('_findSheetByName'),
-    'AppsScriptSheetAdapter must use _findSheetByName for sheet lookups');
+  // The adapter must use _s02FindSheetByName
+  assert.ok(adapterCode.includes('_s02FindSheetByName'),
+    'AppsScriptSheetAdapter must use _s02FindSheetByName for sheet lookups');
 });
 
 test('S02Provisioner.js: only runS02HeaderDiagnostic contains getSheetByName', () => {
@@ -288,4 +288,47 @@ test('S02Provisioner.js: only runS02HeaderDiagnostic contains getSheetByName', (
   const afterCalls = (afterDiag.match(/\.getSheetByName\(/g) || []).length;
   assert.equal(afterCalls, 0,
     'No .getSheetByName() calls in adapter or helpers, found ' + afterCalls);
+});
+
+// --- Global namespace collision detection for Apps Script bound project ---
+
+test('apps-script bound project: zero duplicate top-level global identifiers', () => {
+  const files = fs.readdirSync('apps-script', { recursive: true })
+    .filter(f => /\.(js|gs)$/.test(f));
+
+  const nameToFiles = new Map();
+
+  for (const rel of files) {
+    const src = fs.readFileSync('apps-script/' + rel, 'utf8');
+    const lines = src.split('\n');
+    let depth = 0;
+
+    for (const line of lines) {
+      const trimmed = line.trim();
+      const openBraces = (trimmed.match(/\{/g) || []).length;
+      const closeBraces = (trimmed.match(/\}/g) || []).length;
+
+      if (depth === 0) {
+        const m = trimmed.match(/^(?:const|let|var)\s+(\w+)|^function\s+(\w+)/);
+        if (m) {
+          const name = m[1] || m[2];
+          if (!nameToFiles.has(name)) nameToFiles.set(name, []);
+          nameToFiles.get(name).push(rel);
+        }
+      }
+
+      depth += openBraces - closeBraces;
+    }
+  }
+
+  const collisions = [];
+  for (const [name, fileList] of nameToFiles) {
+    if (fileList.length > 1) collisions.push(name + ': ' + fileList.join(', '));
+  }
+
+  assert.equal(collisions.length, 0,
+    'Duplicate top-level global identifiers found in apps-script/ bound project:\n' +
+    collisions.join('\n') +
+    '\n\nEach .gs file shares one global namespace in Apps Script.\n' +
+    'Prefix identifiers with the stage name (S10_, _s10, etc.).');
 });

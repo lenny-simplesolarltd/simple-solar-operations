@@ -28,7 +28,7 @@ function _s04GuardEnvironment() {
 }
 
 /* --- Sheet helpers (enumeration-based) --- */
-function _findSheetByName(ss, tabName) {
+function _s04FindSheetByName(ss, tabName) {
   var sheets = ss.getSheets();
   for (var i = 0; i < sheets.length; i++) {
     if (sheets[i].getName() === tabName) return sheets[i];
@@ -52,7 +52,7 @@ function _createFixtureStore(ss) {
   };
 
   function _readTable(name) {
-    var sheet = _findSheetByName(ss, name);
+    var sheet = _s04FindSheetByName(ss, name);
     if (!sheet) return [];
     var headers = schemaColumns[name];
     if (!headers) return [];
@@ -75,7 +75,7 @@ function _createFixtureStore(ss) {
   }
 
   function _insertRow(name, rowData) {
-    var sheet = _findSheetByName(ss, name);
+    var sheet = _s04FindSheetByName(ss, name);
     if (!sheet) throw new Error('Tab not found: ' + name);
     var headers = schemaColumns[name];
     if (!headers) throw new Error('Unknown table: ' + name);
@@ -92,7 +92,7 @@ function _createFixtureStore(ss) {
   }
 
   function _updateRow(name, rowIndex, id, patch) {
-    var sheet = _findSheetByName(ss, name);
+    var sheet = _s04FindSheetByName(ss, name);
     if (!sheet) throw new Error('Tab not found: ' + name);
     var headers = schemaColumns[name];
     if (!headers) throw new Error('Unknown table: ' + name);
@@ -118,11 +118,11 @@ function _createFixtureStore(ss) {
     insertRow: _insertRow,
     updateRow: _updateRow,
     getLastRow: function(name) {
-      var sheet = _findSheetByName(ss, name);
+      var sheet = _s04FindSheetByName(ss, name);
       return sheet ? sheet.getLastRow() : 0;
     },
     getMaxRows: function(name) {
-      var sheet = _findSheetByName(ss, name);
+      var sheet = _s04FindSheetByName(ss, name);
       return sheet ? sheet.getMaxRows() : 0;
     }
   };

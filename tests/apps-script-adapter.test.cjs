@@ -67,7 +67,7 @@ test('Apps Script validation reads all 60 tables without named lookup, active sh
 
 test('missing tab returns null/empty data and explicit header error', () => {
   const { context, ss, adapter, calls } = fixture();
-  assert.equal(context._findSheetByName(ss, 'Missing'), null);
+  assert.equal(context._s02FindSheetByName(ss, 'Missing'), null);
   assert.equal(adapter.getData('Missing').length, 0);
   assert.throws(() => adapter.getHeaders('Missing'), /sheet not found via enumeration/);
   assert.deepEqual(Array.from(adapter.checkTextFormat('Missing', ['id']).notFormatted), ['id']);

@@ -176,7 +176,8 @@ function _s16ValidateSharedTemplate(existing, required) {
     var f = fields[i];
     if (existing[f] !== required[f]) mismatches.push(f + ': expected=' + required[f] + ' actual=' + existing[f]);
   }
-  if (existing.active !== true) mismatches.push('active: expected=true actual=' + existing.active);
+  if (!(existing.active === true || existing.active === 'TRUE' || existing.active === 'true' || existing.active === 1))
+    mismatches.push('active: expected=true actual=' + existing.active);
   return { compatible: mismatches.length === 0, mismatches: mismatches };
 }
 
@@ -318,4 +319,58 @@ function _s16Smoke(store, core) {
   };
 }
 
-if (typeof module !== 'undefined') module.exports = { _s16FixtureRows, _s16Seed, _s16VerifyRow, _s16Smoke };
+/* Reset all S16 synthetic fixture rows. DEV only. Never touches ordinary DEV data. */
+function _s16ResetFixture(store) {
+  // Scope guard: exact DEV sheet/environment required (via _s16Scope)
+  // Weaken to guard-only — modes may be disabled during reset, and that's intentional
+  if (typeof _s16GuardStore === 'function') _s16GuardStore(store);
+  // If store has withLock, use it
+  var doReset = function () {
+    var deleted = [];
+    // Fixture-owned rows
+    var fixtureIds = {
+      Jobs: ['J-s16-old', 'J-s16-recent', 'J-s16-opentask'],
+      Tasks: ['TASK-s16-opentask'],
+      People: ['PERSON-s16-office', 'PERSON-s16-ben']
+    };
+    for (var table in fixtureIds) {
+      if (!fixtureIds.hasOwnProperty(table)) continue;
+      for (var i = 0; i < fixtureIds[table].length; i++) {
+        var id = fixtureIds[table][i];
+        try {
+          var row = store.get(table, id);
+          if (row && row.created_by === 'S16') {
+            store.delete(table, id);
+            deleted.push(table + '/' + id);
+          }
+        } catch (e) { /* row may not exist — safe to skip */ }
+      }
+    }
+    // Smoke artifact rows — prefix-based
+    var artifactTables = ['ReportSnapshots', 'ArchiveIndex', 'AuditEvents', 'Tasks', 'HealthChecks'];
+    for (var j = 0; j < artifactTables.length; j++) {
+      var t = artifactTables[j];
+      var rows;
+      try { rows = store.list(t); } catch (e) { continue; }
+      for (var k = 0; k < rows.length; k++) {
+        var r = rows[k];
+        var shouldDelete = false;
+        if (t === 'ReportSnapshots' && r.id && /^BACKUP-S16-SMOKE-/.test(r.id)) shouldDelete = true;
+        if (t === 'ArchiveIndex' && r.id && /^ARCHIVE-S16-SMOKE-/.test(r.id)) shouldDelete = true;
+        if (t === 'AuditEvents' && r.id && /^AE-S16-ARCHIVE-S16-SMOKE|AE-S16-REOPEN-S16-SMOKE/.test(r.id)) shouldDelete = true;
+        if (t === 'Tasks' && r.id && /^TASK-S16-S16-SMOKE-SYS-/.test(r.id)) shouldDelete = true;
+        if (t === 'HealthChecks' && r.integration === 'S16-system') shouldDelete = true;
+        if (shouldDelete) {
+          try { store.delete(t, r.id); deleted.push(t + '/' + r.id); } catch (e) { /* skip */ }
+        }
+      }
+    }
+    return { ok: true, deleted: deleted, count: deleted.length };
+  };
+  if (typeof store.withLock === 'function') {
+    return store.withLock(function () { return doReset(); });
+  }
+  return doReset();
+}
+
+if (typeof module !== 'undefined') module.exports = { _s16FixtureRows, _s16Seed, _s16VerifyRow, _s16Smoke, _s16ResetFixture };

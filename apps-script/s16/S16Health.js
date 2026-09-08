@@ -17,6 +17,7 @@ const S16_ARCHIVE_MONTHS = 6;
 
 function _s16Copy(x) { return JSON.parse(JSON.stringify(x)); }
 function _s16Text(x) { return typeof x === 'string' && x.trim().length > 0; }
+function _s16IsTrue(value) { return value === true || value === 'TRUE' || value === 'true' || value === 1; }
 function _s16Date(value) {
   if (value === null || value === undefined || value === '') return null;
   if (Object.prototype.toString.call(value) === '[object Date]') {
@@ -31,6 +32,21 @@ function _s16Date(value) {
   var d = new Date(iso + 'T12:00:00Z');
   if (!isNaN(d.getTime()) && d.toISOString().slice(0, 10) === iso) return iso;
   throw new Error('S16_DATE_INVALID');
+}
+/* Normalize Sheet Date / ISO values for compare + hashing. Prefer totals_json strings for checksums. */
+function _s16Timestamp(value) {
+  if (value === null || value === undefined || value === '') return null;
+  if (Object.prototype.toString.call(value) === '[object Date]') {
+    if (isNaN(value.getTime())) throw new Error('S16_DATE_INVALID');
+    return value.toISOString();
+  }
+  var text = String(value).trim();
+  if (/^\d{4}-\d{2}-\d{2}T/.test(text)) {
+    var d = new Date(text);
+    if (isNaN(d.getTime())) throw new Error('S16_DATE_INVALID');
+    return d.toISOString();
+  }
+  return text;
 }
 function _s16Now() { return new Date().toISOString(); }
 function _s16Hash(obj) {
@@ -79,7 +95,7 @@ function _s16Scope(store) {
   for (var i = 0; i < S16_ENABLED.length; i++) {
     var id = S16_ENABLED[i];
     if (modes[id].mode !== S16_FUNCTIONS[id][1] || modes[id].scope !== 'Pilot')
-      throw new Error('S16_REFUSED: ' + id + ' pilot mode required');
+      throw new Error('S16_REFUSED: ' + id + ' pilot mode required (got mode=' + modes[id].mode + ' scope=' + modes[id].scope + ' need mode=' + S16_FUNCTIONS[id][1] + ' scope=Pilot)');
   }
   return modes;
 }
@@ -113,12 +129,16 @@ function _s16HealthStatus(store) {
   });
   if (failed.length > 0) warnings.push({ severity: 'Warning', component: 'Outbox', detail: failed.length + ' processing with retries', ids: failed.map(function (r) { return r.id; }) });
 
-  // Last health check
+  // Last health check (Sheet may return Date — never call localeCompare on Date)
   var lastCheck = null;
   var healthRows = store.list('HealthChecks').filter(function (h) { return h.integration === 'S16-system'; });
   if (healthRows.length > 0) {
-    healthRows.sort(function (a, b) { return b.checked_at.localeCompare(a.checked_at); });
-    lastCheck = healthRows[0].checked_at;
+    healthRows.sort(function (a, b) {
+      var aa = _s16Timestamp(a.checked_at) || '';
+      var bb = _s16Timestamp(b.checked_at) || '';
+      return bb.localeCompare(aa);
+    });
+    lastCheck = _s16Timestamp(healthRows[0].checked_at);
   }
   if (!lastCheck) warnings.push({ severity: 'Warning', component: 'HealthChecks', detail: 'No prior S16 system health check recorded' });
 
@@ -262,7 +282,8 @@ function _s16ValidateBackup(store, backupId) {
   var totals;
   try { totals = JSON.parse(manifest.totals_json); } catch (e) { throw new Error('S16_REVIEW: corrupt manifest totals'); }
 
-  if (!totals.checksum || !totals.record_counts || !totals.schema_version) throw new Error('S16_REVIEW: incomplete manifest');
+  if (!totals.checksum || !totals.record_counts || !totals.schema_version || !totals.created_at)
+    throw new Error('S16_REVIEW: incomplete manifest');
 
   // Recompute counts, excluding the backup manifest row itself from ReportSnapshots
   var currentCounts = {};
@@ -274,7 +295,9 @@ function _s16ValidateBackup(store, backupId) {
   // Exclude the backup manifest row from ReportSnapshots count
   if (currentCounts.ReportSnapshots > 0) currentCounts.ReportSnapshots -= 1;
 
-  var recomputedChecksum = _s16Hash({ schema_version: totals.schema_version, counts: currentCounts, environment: 'DEV', sheet_id: S16_DEV_SHEET_ID, created_at: manifest.created_at });
+  // Use totals_json.created_at (stable string), never Sheet Date from ReportSnapshots.created_at
+  var createdAt = totals.created_at;
+  var recomputedChecksum = _s16Hash({ schema_version: totals.schema_version, counts: currentCounts, environment: 'DEV', sheet_id: S16_DEV_SHEET_ID, created_at: createdAt });
 
   var countMismatches = [];
   for (var j = 0; j < tables.length; j++) {
@@ -289,7 +312,7 @@ function _s16ValidateBackup(store, backupId) {
     valid: valid,
     checksum_match: recomputedChecksum === totals.checksum,
     count_mismatches: countMismatches,
-    manifest_created_at: manifest.created_at,
+    manifest_created_at: createdAt,
     manifest_checksum: totals.checksum,
     recomputed_checksum: recomputedChecksum,
     environment: totals.environment,
@@ -323,7 +346,7 @@ function _s16RestorePlan(store, backupId, input) {
     reason: input.reason,
     validation: validation,
     source_manifest: {
-      created_at: manifest.created_at,
+      created_at: totals.created_at,
       total_rows: totals.total_rows,
       table_count: totals.tables_count,
       schema_version: totals.schema_version
@@ -476,7 +499,8 @@ function _s16ArchiveJob(store, input) {
     counts[t] = store.list(t).filter(function (r) { return r.job_id === job.id; }).length;
   }
 
-  var totalRelated = Object.values(counts).reduce(function (s, c) { return s + c; }, 0);
+  var totalRelated = 0;
+  for (var ck in counts) { if (counts.hasOwnProperty(ck)) totalRelated += counts[ck]; }
   var checksum = _s16Hash({ job_id: job.id, counts: counts, archived_at: now });
 
   var archiveEntry = {
@@ -633,17 +657,18 @@ function _s16SystemTasks(store, input) {
   var now = _s16Now();
   var tasks = [];
   var templates = store.list('TaskTemplates').filter(function (t) {
-    return t.active === true && ['SYS01', 'SYS02'].includes(t.template_code);
+    return _s16IsTrue(t.active) && ['SYS01', 'SYS02'].includes(t.template_code);
   });
 
   // Find owners
-  var tanya = store.list('People').filter(function (p) { return p.active === true && p.role === 'Office' && p.display_name && p.display_name.toLowerCase().indexOf('tanya') !== -1; })[0];
-  var ben = store.list('People').filter(function (p) { return p.active === true && p.role === 'Manager' && p.display_name && p.display_name.toLowerCase().indexOf('ben') !== -1; })[0];
+  var tanya = store.list('People').filter(function (p) { return _s16IsTrue(p.active) && p.role === 'Office' && p.display_name && p.display_name.toLowerCase().indexOf('tanya') !== -1; })[0];
+  var ben = store.list('People').filter(function (p) { return _s16IsTrue(p.active) && p.role === 'Manager' && p.display_name && p.display_name.toLowerCase().indexOf('ben') !== -1; })[0];
 
   for (var i = 0; i < templates.length; i++) {
     var tpl = templates[i];
     var owner = tpl.template_code === 'SYS01' ? (tanya || ben) : (tanya || ben);
     if (!owner) continue;
+    var backupPerson = (ben && ben.id !== owner.id) ? ben : ((tanya && tanya.id !== owner.id) ? tanya : null);
 
     var instanceKey = 'S16-' + input.command_id + '-' + tpl.template_code;
     var existingTask = store.list('Tasks').filter(function (t) {
@@ -664,7 +689,7 @@ function _s16SystemTasks(store, input) {
       group: 'System',
       title: tpl.title,
       owner_id: owner.id,
-      backup_id: input.actor,
+      backup_id: backupPerson ? backupPerson.id : null,
       related_entity_type: 'HealthChecks',
       related_entity_id: null,
       due_at: now,
@@ -699,7 +724,7 @@ function _s16SystemTasks(store, input) {
 if (typeof module !== 'undefined') {
   module.exports = {
     S16_DEV_SHEET_ID, S16_FUNCTIONS, S16_ENABLED, S16_ARCHIVE_MONTHS,
-    _s16Date, _s16AddMonths, _s16MonthsBetween, _s16Hash,
+    _s16Date, _s16Timestamp, _s16IsTrue, _s16AddMonths, _s16MonthsBetween, _s16Hash,
     _s16HealthStatus, _s16BackupManifest, _s16ValidateBackup, _s16RestorePlan,
     _s16ArchiveEligibility, _s16ArchiveJob, _s16ReopenArchivedJob,
     _s16SystemTasks, _s16SetModes, _s16Scope, _s16GuardStore
@@ -884,7 +909,8 @@ function _s16ValidateSharedTemplate(existing, required) {
     var f = fields[i];
     if (existing[f] !== required[f]) mismatches.push(f + ': expected=' + required[f] + ' actual=' + existing[f]);
   }
-  if (existing.active !== true) mismatches.push('active: expected=true actual=' + existing.active);
+  if (!(existing.active === true || existing.active === 'TRUE' || existing.active === 'true' || existing.active === 1))
+    mismatches.push('active: expected=true actual=' + existing.active);
   return { compatible: mismatches.length === 0, mismatches: mismatches };
 }
 
@@ -1026,7 +1052,61 @@ function _s16Smoke(store, core) {
   };
 }
 
-if (typeof module !== 'undefined') module.exports = { _s16FixtureRows, _s16Seed, _s16VerifyRow, _s16Smoke };
+/* Reset all S16 synthetic fixture rows. DEV only. Never touches ordinary DEV data. */
+function _s16ResetFixture(store) {
+  // Scope guard: exact DEV sheet/environment required (via _s16Scope)
+  // Weaken to guard-only — modes may be disabled during reset, and that's intentional
+  if (typeof _s16GuardStore === 'function') _s16GuardStore(store);
+  // If store has withLock, use it
+  var doReset = function () {
+    var deleted = [];
+    // Fixture-owned rows
+    var fixtureIds = {
+      Jobs: ['J-s16-old', 'J-s16-recent', 'J-s16-opentask'],
+      Tasks: ['TASK-s16-opentask'],
+      People: ['PERSON-s16-office', 'PERSON-s16-ben']
+    };
+    for (var table in fixtureIds) {
+      if (!fixtureIds.hasOwnProperty(table)) continue;
+      for (var i = 0; i < fixtureIds[table].length; i++) {
+        var id = fixtureIds[table][i];
+        try {
+          var row = store.get(table, id);
+          if (row && row.created_by === 'S16') {
+            store.delete(table, id);
+            deleted.push(table + '/' + id);
+          }
+        } catch (e) { /* row may not exist — safe to skip */ }
+      }
+    }
+    // Smoke artifact rows — prefix-based
+    var artifactTables = ['ReportSnapshots', 'ArchiveIndex', 'AuditEvents', 'Tasks', 'HealthChecks'];
+    for (var j = 0; j < artifactTables.length; j++) {
+      var t = artifactTables[j];
+      var rows;
+      try { rows = store.list(t); } catch (e) { continue; }
+      for (var k = 0; k < rows.length; k++) {
+        var r = rows[k];
+        var shouldDelete = false;
+        if (t === 'ReportSnapshots' && r.id && /^BACKUP-S16-SMOKE-/.test(r.id)) shouldDelete = true;
+        if (t === 'ArchiveIndex' && r.id && /^ARCHIVE-S16-SMOKE-/.test(r.id)) shouldDelete = true;
+        if (t === 'AuditEvents' && r.id && /^AE-S16-ARCHIVE-S16-SMOKE|AE-S16-REOPEN-S16-SMOKE/.test(r.id)) shouldDelete = true;
+        if (t === 'Tasks' && r.id && /^TASK-S16-S16-SMOKE-SYS-/.test(r.id)) shouldDelete = true;
+        if (t === 'HealthChecks' && r.integration === 'S16-system') shouldDelete = true;
+        if (shouldDelete) {
+          try { store.delete(t, r.id); deleted.push(t + '/' + r.id); } catch (e) { /* skip */ }
+        }
+      }
+    }
+    return { ok: true, deleted: deleted, count: deleted.length };
+  };
+  if (typeof store.withLock === 'function') {
+    return store.withLock(function () { return doReset(); });
+  }
+  return doReset();
+}
+
+if (typeof module !== 'undefined') module.exports = { _s16FixtureRows, _s16Seed, _s16VerifyRow, _s16Smoke, _s16ResetFixture };
 
 /* Header-checked enumeration adapter; shared ScriptLock for every S16 mutation. */
 function _s16CloudGuard() {
@@ -1085,6 +1165,16 @@ function _s16CloudStore() {
       sh.getRange(idx + 2, 1, 1, h.length).setValues([row.map(_s16Cell)]);
       SpreadsheetApp.flush();
     },
+    delete: function (name, id) {
+      var sh = _s16Sheet(ss, name), h = S16_HEADERS[name];
+      var values = sh.getRange(2, 1, Math.max(1, sh.getLastRow() - 1), h.length).getValues();
+      var indices = [];
+      values.forEach(function (r, i) { if (r[0] === id) indices.push(i); });
+      if (indices.length !== 1) throw new Error('S16_SCHEMA: delete row ' + id + ' (found ' + indices.length + ')');
+      // Clear row — set all cells to empty. list() filters rows without id.
+      sh.getRange(indices[0] + 2, 1, 1, h.length).setValues([h.map(function () { return ''; })]);
+      SpreadsheetApp.flush();
+    },
     withLock: function (fn) {
       var lock = LockService.getScriptLock();
       if (!lock.tryLock(5000)) throw new Error('S16_BUSY');
@@ -1109,4 +1199,6 @@ function runS16FixtureDryRun() { return _s16Result('S16 dry run', function () { 
 function runS16FixtureApply() { return _s16Result('S16 fixture apply', function () { var s = _s16CloudStore(); return s.withLock(function () { _s16Seed(s); return { ok: true }; }); }); }
 function runS16FixtureValidate() { return _s16Result('S16 fixture validate', function () { var s = _s16CloudStore(), data = _s16FixtureRows(); function verifyRows(rows, expectedCreatedBy) { for (var t in rows) { if (!rows.hasOwnProperty(t)) continue; for (var i = 0; i < rows[t].length; i++) { var r = rows[t][i]; var v = _s16VerifyRow(s, t, r.id, expectedCreatedBy); if (!v.ok) throw new Error('S16_FIXTURE: ' + t + '/' + r.id + ' — ' + v.detail); } } } /* Shared: no created_by check (canonical, seeded by prior stages). Owned: require S16. */ verifyRows(data.shared, null); verifyRows(data.owned, 'S16'); return { ok: true }; }); }
 function runS16EnableFunctionsForSyntheticTest() { return _s16Result('S16 enable', function () { return _s16SetModes(_s16CloudStore(), true); }); }
+function runS16ResetFixture() { return _s16Result('S16 reset fixture', function () { return _s16ResetFixture(_s16CloudStore()); }); }
+function runS16DiagnoseModes() { return _s16Result('S16 diagnose modes', function () { var s = _s16CloudStore(); var rows = s.list('ReleaseModes'); var fn13 = rows.filter(function (r) { return r.function_id === 'FN-13'; }); var fn14 = rows.filter(function (r) { return r.function_id === 'FN-14'; }); var fn16 = rows.filter(function (r) { return r.function_id === 'FN-16'; }); return { ok: true, fn13_count: fn13.length, fn13: fn13.map(function (r) { return { id: r.id, mode: r.mode, scope: r.authorised_job_scope, target_release: r.target_release, planned_target_mode: r.planned_target_mode }; }), fn14_count: fn14.length, fn14: fn14.map(function (r) { return { id: r.id, mode: r.mode, scope: r.authorised_job_scope, target_release: r.target_release }; }), fn16_count: fn16.length, fn16: fn16.map(function (r) { return { id: r.id, mode: r.mode, scope: r.authorised_job_scope, target_release: r.target_release }; }) }; }); }
 function runS16HappyPathTest() { return _s16Result('S16 happy path', function () { return _s16Smoke(_s16CloudStore(), typeof S16_HEALTH_EXPORTS !== 'undefined' ? S16_HEALTH_EXPORTS : { _s16HealthStatus: _s16HealthStatus, _s16BackupManifest: _s16BackupManifest, _s16ValidateBackup: _s16ValidateBackup, _s16RestorePlan: _s16RestorePlan, _s16ArchiveEligibility: _s16ArchiveEligibility, _s16ArchiveJob: _s16ArchiveJob, _s16ReopenArchivedJob: _s16ReopenArchivedJob, _s16SystemTasks: _s16SystemTasks, _s16SetModes: _s16SetModes }); }); }
