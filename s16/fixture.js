@@ -232,7 +232,7 @@ function _s16VerifyRow(store, table, id, expectedCreatedBy) {
   return { ok: true, table: table, id: id, created_by: row.created_by };
 }
 
-function _s16Smoke(store, core) {
+function _s16Smoke(store, core, config) {
   var h, b, a, r, v, eOld, eRecent, eOpen, a2, reopen, tasks;
   function fail(step, detail) { return { pass: false, step: step, detail: detail }; }
 
@@ -248,8 +248,8 @@ function _s16Smoke(store, core) {
   try { h = core._s16HealthStatus(store); } catch (e) { return fail('health', e.message || String(e)); }
   if (h.overall !== 'Healthy' && h.overall !== 'Degraded') return fail('health', 'Unexpected: ' + h.overall);
 
-  // 2. Backup manifest
-  try { b = core._s16BackupManifest(store, { command_id: 'S16-SMOKE-BACKUP', actor: 'PERSON-s16-office' }); } catch (e) { return fail('backup-manifest', e.message || String(e)); }
+  // 2. Backup manifest (optional DEV Drive when config.backupFolderId set; inject config.drive in tests)
+  try { b = core._s16BackupManifest(store, { command_id: 'S16-SMOKE-BACKUP', actor: 'PERSON-s16-office', config: config || null, drive: (config && config.drive) || null }); } catch (e) { return fail('backup-manifest', e.message || String(e)); }
   if (b.replay) {
     b.backup_id = b.manifest ? b.manifest.id : null;
     if (b.manifest && b.manifest.totals_json) {

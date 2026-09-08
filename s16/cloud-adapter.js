@@ -91,4 +91,47 @@ function runS16FixtureValidate() { return _s16Result('S16 fixture validate', fun
 function runS16EnableFunctionsForSyntheticTest() { return _s16Result('S16 enable', function () { return _s16SetModes(_s16CloudStore(), true); }); }
 function runS16ResetFixture() { return _s16Result('S16 reset fixture', function () { return _s16ResetFixture(_s16CloudStore()); }); }
 function runS16DiagnoseModes() { return _s16Result('S16 diagnose modes', function () { var s = _s16CloudStore(); var rows = s.list('ReleaseModes'); var fn13 = rows.filter(function (r) { return r.function_id === 'FN-13'; }); var fn14 = rows.filter(function (r) { return r.function_id === 'FN-14'; }); var fn16 = rows.filter(function (r) { return r.function_id === 'FN-16'; }); return { ok: true, fn13_count: fn13.length, fn13: fn13.map(function (r) { return { id: r.id, mode: r.mode, scope: r.authorised_job_scope, target_release: r.target_release, planned_target_mode: r.planned_target_mode }; }), fn14_count: fn14.length, fn14: fn14.map(function (r) { return { id: r.id, mode: r.mode, scope: r.authorised_job_scope, target_release: r.target_release }; }), fn16_count: fn16.length, fn16: fn16.map(function (r) { return { id: r.id, mode: r.mode, scope: r.authorised_job_scope, target_release: r.target_release }; }) }; }); }
-function runS16HappyPathTest() { return _s16Result('S16 happy path', function () { return _s16Smoke(_s16CloudStore(), typeof S16_HEALTH_EXPORTS !== 'undefined' ? S16_HEALTH_EXPORTS : { _s16HealthStatus: _s16HealthStatus, _s16BackupManifest: _s16BackupManifest, _s16ValidateBackup: _s16ValidateBackup, _s16RestorePlan: _s16RestorePlan, _s16ArchiveEligibility: _s16ArchiveEligibility, _s16ArchiveJob: _s16ArchiveJob, _s16ReopenArchivedJob: _s16ReopenArchivedJob, _s16SystemTasks: _s16SystemTasks, _s16SetModes: _s16SetModes }); }); }
+function _s16CloudConfig() {
+  var c = JSON.parse(PropertiesService.getScriptProperties().getProperty('S01_CONFIG') || 'null');
+  if (!c || c.environment !== 'DEV') throw new Error('S16_REFUSED: exact DEV sheet/environment required');
+  return c;
+}
+function runS16HappyPathTest() {
+  return _s16Result('S16 happy path', function () {
+    var c = _s16CloudConfig();
+    return _s16Smoke(_s16CloudStore(), typeof S16_HEALTH_EXPORTS !== 'undefined' ? S16_HEALTH_EXPORTS : { _s16HealthStatus: _s16HealthStatus, _s16BackupManifest: _s16BackupManifest, _s16ValidateBackup: _s16ValidateBackup, _s16RestorePlan: _s16RestorePlan, _s16ArchiveEligibility: _s16ArchiveEligibility, _s16ArchiveJob: _s16ArchiveJob, _s16ReopenArchivedJob: _s16ReopenArchivedJob, _s16SystemTasks: _s16SystemTasks, _s16SetModes: _s16SetModes }, c);
+  });
+}
+/* Focused DEV Drive backup smoke: enables modes, writes one backup artifact, restores modes. */
+function runS16DevBackupDriveSmoke() {
+  return _s16Result('S16 DEV backup Drive smoke', function () {
+    var c = _s16CloudConfig();
+    if (!c.backupFolderId || String(c.backupFolderId).trim() === '') throw new Error('S16_NOT_CONFIGURED: set S01_CONFIG.backupFolderId to the Shared Drive Backups folder ID');
+    var s = _s16CloudStore();
+    return s.withLock(function () {
+      _s16SetModes(s, true);
+      try {
+        var b = _s16BackupManifest(s, { command_id: 'S16-DEV-DRIVE-SMOKE', actor: 'PERSON-tanya', config: c });
+        var fileId = b.file_id || (b.manifest && b.manifest.file_id) || null;
+        if (!fileId) throw new Error('S16_BACKUP: expected Drive file_id after configured backup');
+        var v = null;
+        if (!b.replay) v = _s16ValidateBackup(s, b.backup_id || (b.manifest && b.manifest.id));
+        var restore = _s16RestorePlan(s, b.backup_id || b.manifest.id, { actor: 'PERSON-tanya', reason: 'Confirm dry-run still blocked after Drive backup' });
+        return {
+          ok: true,
+          backup_id: b.backup_id || b.manifest.id,
+          file_id: fileId,
+          destination: b.destination,
+          checksum: b.checksum,
+          replay: !!b.replay,
+          drive_created: !!b.drive_created,
+          validation_valid: v ? v.valid : 'skipped-replay',
+          restore_blocked: !!restore.blocked,
+          restore_dry_run: !!restore.dry_run
+        };
+      } finally {
+        _s16SetModes(s, false);
+      }
+    });
+  });
+}

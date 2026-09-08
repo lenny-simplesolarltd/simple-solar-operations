@@ -76,6 +76,8 @@ test('S16 04: backup manifest created deterministically', () => {
   assert.ok(b.total_rows > 0);
   assert.ok(b.table_count > 0);
   assert.match(b.destination, /NOT_CONFIGURED/);
+  assert.equal(b.file_id, null);
+  assert.equal(s.get('ReportSnapshots', b.backup_id).file_id, null);
   assert.ok(s.get('ReportSnapshots', b.backup_id));
 });
 
@@ -415,7 +417,10 @@ test('S16 29: namespace compatibility — all bundles parse, S16 globals namespa
   new vm.Script(prior + '\n' + s16);
   for (const m of s16.matchAll(/^(?:function|var|const|let)\s+([\w$]+)/gm))
     assert.match(m[1], /^(?:S16_|_s16|restoreS16|runS16)/);
-  assert.doesNotMatch(s16, /CalendarApp|UrlFetchApp|fetch\(|deleteRow|deleteSheet|GmailApp|MailApp|DriveApp|https:\/\//);
+  assert.doesNotMatch(s16, /CalendarApp|UrlFetchApp|fetch\(|deleteRow|deleteSheet|GmailApp|MailApp|https:\/\//);
+  /* DriveApp allowed only inside the injectable DEV Drive adapter (two getFolderById calls). */
+  assert.match(s16, /function _s16DriveApiDefault[\s\S]*DriveApp\.getFolderById/);
+  assert.equal((s16.match(/DriveApp\.getFolderById/g) || []).length, 2);
 });
 
 test('S16 30: zero-arg DEV smoke with real header adapter reruns', () => {
@@ -598,4 +603,174 @@ test('S16 33: reset does not touch non-S16 rows', () => {
   // Shared templates survive (from seed, may be TPL-SYS01/SYS02)
   const tpls = s.list('TaskTemplates');
   assert.ok(tpls.length > 0, 'shared templates should survive');
+});
+
+function makeFakeDrive() {
+  const files = Object.create(null);
+  return {
+    files,
+    findFileInFolder(folderId, fileName) {
+      const hit = files[folderId + '::' + fileName];
+      return hit ? { id: hit.id, name: hit.name } : null;
+    },
+    createFileInFolder(folderId, fileName, content) {
+      const key = folderId + '::' + fileName;
+      if (files[key]) throw new Error('duplicate Drive create');
+      const id = 'DRIVE-FILE-' + (Object.keys(files).length + 1);
+      files[key] = { id, name: fileName, content, folderId };
+      return { id, name: fileName };
+    }
+  };
+}
+
+test('S16 35: missing backupFolderId stays NOT_CONFIGURED with null file_id', () => {
+  const s = makeStore();
+  const drive = makeFakeDrive();
+  const b = core._s16BackupManifest(s, {
+    command_id: 'S16-TEST-NO-FOLDER',
+    actor: 'PERSON-s16-office',
+    config: { environment: 'DEV' },
+    drive
+  });
+  assert.equal(b.created, true);
+  assert.equal(b.file_id, null);
+  assert.match(b.destination, /NOT_CONFIGURED/);
+  assert.equal(Object.keys(drive.files).length, 0);
+});
+
+test('S16 36: DEV Drive backup populates file_id and preserves checksum', () => {
+  const s = makeStore();
+  const drive = makeFakeDrive();
+  const folderId = 'FOLDER-DEV-BACKUPS';
+  const b = core._s16BackupManifest(s, {
+    command_id: 'S16-TEST-DRIVE-OK',
+    actor: 'PERSON-s16-office',
+    config: { environment: 'DEV', backupFolderId: folderId },
+    drive
+  });
+  assert.equal(b.created, true);
+  assert.ok(b.file_id);
+  assert.equal(b.destination, 'DriveFolder:' + folderId);
+  assert.equal(b.drive_created, true);
+  const snap = s.get('ReportSnapshots', b.backup_id);
+  assert.equal(snap.file_id, b.file_id);
+  const totals = JSON.parse(snap.totals_json);
+  assert.equal(totals.checksum, b.checksum);
+  assert.equal(totals.destination, 'DriveFolder:' + folderId);
+  assert.match(totals.drive_file_name, /^S16-BACKUP-S16-TEST-DRIVE-OK\.json$/);
+  const artifact = JSON.parse(Object.values(drive.files)[0].content);
+  assert.equal(artifact.environment, 'DEV');
+  assert.equal(artifact.sheet_id, core.S16_DEV_SHEET_ID);
+  assert.equal(artifact.checksum, b.checksum);
+  assert.equal(artifact.backup_id, b.backup_id);
+  assert.ok(artifact.created_at);
+  assert.ok(!('script_properties' in artifact));
+  const v = core._s16ValidateBackup(s, b.backup_id);
+  assert.equal(v.valid, true);
+  assert.equal(v.checksum_match, true);
+  const restore = core._s16RestorePlan(s, b.backup_id, { actor: 'PERSON-s16-office', reason: 'Still blocked' });
+  assert.equal(restore.blocked, true);
+  assert.equal(restore.dry_run, true);
+});
+
+test('S16 37: Drive backup rerun is idempotent (no duplicate files)', () => {
+  const s = makeStore();
+  const drive = makeFakeDrive();
+  const input = {
+    command_id: 'S16-TEST-DRIVE-IDEM',
+    actor: 'PERSON-s16-office',
+    config: { environment: 'DEV', backupFolderId: 'FOLDER-DEV-BACKUPS' },
+    drive
+  };
+  const b1 = core._s16BackupManifest(s, input);
+  assert.equal(b1.drive_created, true);
+  assert.equal(Object.keys(drive.files).length, 1);
+  const before = copy(s.tables);
+  const b2 = core._s16BackupManifest(s, input);
+  assert.equal(b2.replay, true);
+  assert.equal(b2.created, false);
+  assert.equal(b2.file_id, b1.file_id);
+  assert.equal(Object.keys(drive.files).length, 1);
+  assert.deepEqual(s.tables, before);
+});
+
+test('S16 38: Drive failure does not set file_id or claim success', () => {
+  const s = makeStore();
+  const beforeSnaps = s.list('ReportSnapshots').length;
+  assert.throws(() => core._s16BackupManifest(s, {
+    command_id: 'S16-TEST-DRIVE-FAIL',
+    actor: 'PERSON-s16-office',
+    config: { environment: 'DEV', backupFolderId: 'FOLDER-DEV-BACKUPS' },
+    drive: {
+      findFileInFolder() { return null; },
+      createFileInFolder() { throw new Error('Shared Drive write denied'); }
+    }
+  }), /S16_BACKUP_DRIVE_FAILED/);
+  assert.equal(s.get('ReportSnapshots', 'BACKUP-S16-TEST-DRIVE-FAIL'), null);
+  assert.equal(s.list('ReportSnapshots').length, beforeSnaps);
+});
+
+test('S16 39: PROD Drive backup refused', () => {
+  const s = makeStore();
+  assert.throws(() => core._s16WriteDevBackupDriveFile(s, {
+    config: { environment: 'PROD', backupFolderId: 'FOLDER-PROD' },
+    drive: makeFakeDrive()
+  }, {
+    backup_id: 'BACKUP-X',
+    environment: 'DEV',
+    sheet_id: core.S16_DEV_SHEET_ID,
+    created_at: '2026-01-01T00:00:00.000Z',
+    checksum: 'abc'
+  }), /PROD/);
+});
+
+test('S16 40: Drive backup requires exact DEV environment and sheet in payload', () => {
+  const s = makeStore();
+  const drive = makeFakeDrive();
+  const base = {
+    backup_id: 'BACKUP-GUARD',
+    created_at: '2026-01-01T00:00:00.000Z',
+    checksum: 'abc'
+  };
+  assert.throws(() => core._s16WriteDevBackupDriveFile(s, {
+    config: { environment: 'TEST', backupFolderId: 'FOLDER-DEV-BACKUPS' },
+    drive
+  }, { ...base, environment: 'DEV', sheet_id: core.S16_DEV_SHEET_ID }), /environment is DEV/);
+  assert.throws(() => core._s16WriteDevBackupDriveFile(s, {
+    config: { environment: 'DEV', backupFolderId: 'FOLDER-DEV-BACKUPS' },
+    drive
+  }, { ...base, environment: 'DEV', sheet_id: 'WRONG-SHEET' }), /exact DEV sheet/);
+  s.getSheetId = () => 'WRONG-SHEET-ID';
+  assert.throws(() => core._s16BackupManifest(s, {
+    command_id: 'S16-TEST-SHEET-GUARD',
+    actor: 'PERSON-s16-office',
+    config: { environment: 'DEV', backupFolderId: 'FOLDER-DEV-BACKUPS' },
+    drive
+  }), /S16_REFUSED|DEV/);
+  s.getEnvironment = () => 'TEST';
+  s.getSheetId = () => core.S16_DEV_SHEET_ID;
+  assert.throws(() => core._s16BackupManifest(s, {
+    command_id: 'S16-TEST-ENV-GUARD',
+    actor: 'PERSON-s16-office',
+    config: { environment: 'DEV', backupFolderId: 'FOLDER-DEV-BACKUPS' },
+    drive
+  }), /S16_REFUSED|DEV/);
+});
+
+test('S16 41: Sheet-only row repaired with Drive file_id on configured rerun', () => {
+  const s = makeStore();
+  const b0 = core._s16BackupManifest(s, { command_id: 'S16-TEST-REPAIR', actor: 'PERSON-s16-office' });
+  assert.equal(b0.file_id, null);
+  const drive = makeFakeDrive();
+  const b1 = core._s16BackupManifest(s, {
+    command_id: 'S16-TEST-REPAIR',
+    actor: 'PERSON-s16-office',
+    config: { environment: 'DEV', backupFolderId: 'FOLDER-DEV-BACKUPS' },
+    drive
+  });
+  assert.equal(b1.replay, true);
+  assert.equal(b1.drive_repaired, true);
+  assert.ok(b1.file_id);
+  assert.equal(s.get('ReportSnapshots', b0.backup_id).file_id, b1.file_id);
+  assert.equal(JSON.parse(s.get('ReportSnapshots', b0.backup_id).totals_json).checksum, b0.checksum);
 });

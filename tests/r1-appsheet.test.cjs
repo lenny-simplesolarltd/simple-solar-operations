@@ -4,7 +4,7 @@ const copy=x=>structuredClone(x);
 function fixture(email='tanya@example.test'){
  const tables={People:[{id:'P-tanya',email:'tanya@example.test',active:true},{id:'P-hannah',email:'hannah@example.test',active:true},{id:'P-ben',email:'ben@example.test',active:true},{id:'P-installer',email:'installer@example.test',active:true},{id:'P-var',email:'var@example.test',active:true}],PersonRoles:[{person_id:'P-tanya',role:'Office',active:true},{person_id:'P-hannah',role:'Office',active:true},{person_id:'P-ben',role:'Admin',active:true},{person_id:'P-installer',role:'Installer',active:true},{person_id:'P-var',role:'VariationApprover',active:true}],Jobs:[{id:'J-1',pilot_job:true,release_scope:'R1',version:1,salesperson_id:null,workflow_stage:'Booked'},{id:'J-2',pilot_job:true,release_scope:'R1',version:1,salesperson_id:null},{id:'J-N',pilot_job:false,release_scope:'R1',version:1},{id:'J-OPC',pilot_job:true,release_scope:'R1',version:3,salesperson_id:null,workflow_stage:'Aftercare',operational_complete_at:null,archived_at:null},{id:'J-BKG',pilot_job:true,release_scope:'R1',version:2,salesperson_id:null,workflow_stage:'BookingInProgress',archived_at:null},{id:'J-DEP',pilot_job:true,release_scope:'R1',version:4,salesperson_id:null,workflow_stage:'Booked',deposit_bank_confirmed_at:null,archived_at:null}],Tasks:[{id:'T-1',job_id:'J-1',owner_id:'P-tanya',backup_id:null,version:2,status:'Open',revision_required:false,due_at:'2026-09-08'},{id:'T-H',job_id:'J-2',owner_id:'P-hannah',backup_id:null,version:1,status:'Open'},{id:'T-OPC',job_id:'J-OPC',owner_id:'P-tanya',backup_id:null,version:1,status:'Open'},{id:'T-BKG',job_id:'J-BKG',owner_id:'P-tanya',backup_id:null,version:1,status:'Open'},{id:'T-DEP',job_id:'J-DEP',owner_id:'P-tanya',backup_id:null,version:1,status:'Open'}],Issues:[{id:'I-1',job_id:'J-1',office_owner_id:'P-tanya',responsible_person_id:null,responsible_company_id:'CO-1',status:'Open',version:1}],WorkPackages:[{id:'WP-1',job_id:'J-1',planned_start:'2026-09-10',planned_end:'2026-09-11',revision:1,version:1}],InvoiceStages:[{id:'IS-J-DEP-deposit',job_id:'J-DEP',stage:'deposit',status:'Pending',version:1}],ReleaseModes:[{function_id:'FN-01',target_release:'R1',authorised_job_scope:'Pilot',mode:'Automated'},{function_id:'FN-11',target_release:'R1',authorised_job_scope:'Pilot',mode:'Manual'},{function_id:'FN-15',target_release:'R1',authorised_job_scope:'Pilot',mode:'Manual'},{function_id:'FN-17',target_release:'R1',authorised_job_scope:'Pilot',mode:'Manual'},{function_id:'FN-19',target_release:'R1',authorised_job_scope:'Pilot',mode:'Manual'},{function_id:'FN-20',target_release:'R1',authorised_job_scope:'Pilot',mode:'Manual'}],AuditEvents:[],TaskEvents:[],IssueEvents:[],CommitJournal:[],Calls:[],GHLTasks:[]};
  const store={getSheetId:()=>core.R1A_BOUND_DEV_SHEET_ID,getEnvironment:()=> 'DEV',list:n=>copy(tables[n]||[]),get:(n,id)=>copy((tables[n]||[]).find(x=>x.id===id)||null),insert:(n,r)=>{if((tables[n]||[]).some(x=>x.id===r.id))throw Error('duplicate');(tables[n]||(tables[n]=[])).push(copy(r));},update:(n,id,p)=>{const row=(tables[n]||[]).find(x=>x.id===id);if(!row)throw Error('missing');Object.assign(row,copy(p));},withLock:fn=>fn()};
- const reads={officeHome:()=>({overdue:copy(tables.Tasks),due_today:[],due_soon:[],booking_review:[],unresolved_issues:[],health_alerts:[]}),jobOverview:(s,id)=>({job_id:id}),operationalQueue:()=>({queue:'booking',count:2,tasks:copy(tables.Tasks)}),releaseModes:()=>copy(tables.ReleaseModes),systemStatus:()=>({ok:true}),auditHistory:(s,id)=>({job_id:id,events:copy(tables.AuditEvents)}),actionAvailability:(s,id)=>({job_id:id}),taskActionAvailability:(s,id)=>({task_id:id,actions:{complete:{available:true}}})};
+ const reads={officeHome:()=>({overdue:copy(tables.Tasks),due_today:[],due_soon:[],booking_review:[],unresolved_issues:[],health_alerts:[]}),jobSearch:(s,q)=>{const qq=String(q).toLowerCase();return tables.Jobs.filter(j=>(j.id||'').toLowerCase().indexOf(qq)>=0||(j.job_id||'').toLowerCase().indexOf(qq)>=0).map(j=>({id:j.id,job_id:j.job_id||j.id,display_name:j.display_name||j.id,workflow_stage:j.workflow_stage,release_scope:j.release_scope}));},jobOverview:(s,id)=>({job_id:id}),operationalQueue:(s,q)=>({queue:q,count:2,tasks:copy(tables.Tasks)}),releaseModes:()=>copy(tables.ReleaseModes),systemStatus:()=>({ok:true}),auditHistory:(s,id)=>({job_id:id,events:copy(tables.AuditEvents)}),actionAvailability:(s,id)=>({job_id:id}),taskActionAvailability:(s,id)=>({task_id:id,actions:{complete:{available:true}}})};
  const options={store,config:{environment:'DEV',sheetId:core.R1A_BOUND_DEV_SHEET_ID},actorEmail:()=>email,effectiveUserEmail:()=>'owner@example.test',reads,services:{}};
  return{tables,store,options,adapter:()=>core._r1aCreate(options)};
 }
@@ -33,7 +33,9 @@ test('Ben management reads work',()=>{const f=fixture('ben@example.test');assert
 test('intake remains policy-blocked even if a service is installed',()=>{const f=fixture();f.options.services.SOLD_INTAKE=()=>({});assert.throws(()=>f.adapter().command({command_id:'C-I',command_type:'SOLD_INTAKE',payload:{}}),/INTAKE_POLICY_NOT_APPROVED/)});
 test('unsupported fixture-scoped command fails closed',()=>assert.throws(()=>fixture().adapter().command(cmd()),/COMMAND_UNSUPPORTED/));
 test('unrelated job command refused',()=>{const f=fixture('hannah@example.test');f.options.services=serviceCore._r1sServices();assert.throws(()=>f.adapter().command(cmd()),/JOB_ACCESS_DENIED/)});
-test('action reads expose exact AppSheet command flags',()=>{const f=fixture();let a=f.adapter().read({read_type:'ACTION_AVAILABILITY',job_id:'J-1'}),t=f.adapter().read({read_type:'TASK_ACTION_AVAILABILITY',task_id:'T-1'});assert.deepEqual(Object.keys(a.data.appsheet_commands),['call_record','issue_update','planner_update','cancel_job','reinstate_job','deposit_confirm','operational_complete','booking_gates','sold_intake','booking_intake']);assert.equal(a.data.appsheet_commands.call_record.available,true);assert.equal(a.data.appsheet_commands.cancel_job.available,true);assert.equal(t.data.appsheet_commands.task_complete.available,true)});
+test('action reads expose exact AppSheet command flags',()=>{const f=fixture();let a=f.adapter().read({read_type:'ACTION_AVAILABILITY',job_id:'J-1'}),t=f.adapter().read({read_type:'TASK_ACTION_AVAILABILITY',task_id:'T-1'});assert.deepEqual(Object.keys(a.data.appsheet_commands),['call_record','issue_update','planner_update','cancel_job','reinstate_job','deposit_confirm','operational_complete','booking_gates','sold_intake','booking_intake']);assert.equal(a.data.appsheet_commands.call_record.available,true);assert.equal(a.data.appsheet_commands.cancel_job.available,true);assert.equal(a.data.appsheet_commands.deposit_confirm.available,false);assert.equal(a.data.appsheet_commands.deposit_confirm.reason,'ADMIN_OR_MANAGER_REQUIRED');assert.equal(a.data.appsheet_commands.sold_intake.reason,'INTAKE_POLICY_NOT_APPROVED');assert.equal(t.data.appsheet_commands.task_complete.available,true)});
+test('job search filters to assigned R1 pilot jobs and refuses blank query',()=>{const f=fixture();assert.throws(()=>f.adapter().read({read_type:'JOB_SEARCH',query:''}),/QUERY_REQUIRED/);const r=f.adapter().read({read_type:'JOB_SEARCH',query:'J-1'});assert.equal(r.data.count,1);assert.equal(r.data.results[0].id,'J-1');const h=fixture('hannah@example.test').adapter().read({read_type:'JOB_SEARCH',query:'J-1'});assert.equal(h.data.count,0);const nonPilot=f.adapter().read({read_type:'JOB_SEARCH',query:'J-N'});assert.equal(nonPilot.data.count,0)});
+test('operational queue allowlists R1 queues only and filters task visibility',()=>{const f=fixture();assert.throws(()=>f.adapter().read({read_type:'OPERATIONAL_QUEUE',queue:'materials'}),/QUEUE_NOT_IN_R1/);assert.throws(()=>f.adapter().read({read_type:'OPERATIONAL_QUEUE',queue:'archive'}),/QUEUE_NOT_IN_R1/);const r=f.adapter().read({read_type:'OPERATIONAL_QUEUE',queue:'booking'});assert.equal(r.data.queue,'booking');assert.equal(r.data.tasks.every(t=>t.owner_id==='P-tanya'||t.backup_id==='P-tanya'),true);assert.deepEqual(core.R1A_BOUND_QUEUES,['booking','calls','issues','payments','ghl','cancellation'])});
 test('call command delegates canonical S10 shape and suppresses external effects',()=>{const f=fixture();f.options.services=serviceCore._r1sServices();global._s10RecordCall=(x,s)=>{s.insert('Calls',{id:x.id,job_id:x.job_id,task_id:x.task_id,attempted_at:'2026-09-07T00:00:00Z',attempted_by:x.attempted_by,outcome:x.outcome});return{created:true,call:s.get('Calls',x.id)}};const r=f.adapter().command({command_id:'CALL-1',command_type:'CALL_RECORD',job_id:'J-1',task_id:'T-1',expected_version:2,payload:{type:'Customer',outcome:'NoAnswer',notes:'No reply'}});assert.equal(r.result.status,'Recorded');assert.equal(r.result.external_calls,0);assert.equal(f.tables.Calls[0].attempted_by,'P-tanya')});
 test('issue and planner commands delegate only allowlisted lifecycle fields',()=>{const f=fixture();f.options.services=serviceCore._r1sServices();global._s10ReassignIssue=(id,owner,actor,s)=>{s.update('Issues',id,{office_owner_id:owner,updated_by:actor,version:2});return s.get('Issues',id)};global._s11UpdatePlannedDates=(x,s)=>({status:'Updated',input:x,external_calls:0});let i=f.adapter().command({command_id:'ISS-1',command_type:'ISSUE_UPDATE',job_id:'J-1',issue_id:'I-1',expected_version:1,payload:{action:'REASSIGN',owner_id:'P-hannah'}}),p=f.adapter().command({command_id:'PLAN-1',command_type:'PLANNER_UPDATE',job_id:'J-1',work_package_id:'WP-1',expected_version:1,payload:{planned_start:'2026-09-12',planned_end:'2026-09-13'}});assert.equal(i.result.issue.responsible_company_id,'CO-1');assert.equal(p.result.input.actor,'P-tanya')});
 test('cancel and reinstate delegate S15 durable commands, never transports',()=>{const f=fixture();f.options.services=serviceCore._r1sServices();global._s15Execute=(kind,input)=>({ok:true,kind,input,external_calls:0});let c=f.adapter().command({command_id:'CAN-1',command_type:'CANCEL_JOB',job_id:'J-1',expected_version:1,payload:{reason:'Customer request',effective_date:'2026-09-08',work_performed:'None',material_state:'None',scaffold_state:'None',finance_review:'Reviewed',legacy_state:'None'}});f.tables.Jobs[0].workflow_stage='Cancelled';let r=f.adapter().command({command_id:'REIN-1',command_type:'REINSTATE_JOB',job_id:'J-1',expected_version:1,payload:{reason:'Customer resumed',new_date:'2026-09-10',commitment_review:'Reviewed',finance_review:'Reviewed',evidence_reference:'EV-1'}});assert.equal(c.result.kind,'Cancel');assert.equal(r.result.kind,'Reinstate');assert.equal(c.result.external_calls+r.result.external_calls,0)});
@@ -45,4 +47,92 @@ test('booking gates wraps processBookingGates under FN-01 and does not invent re
 test('booking gates refuses unauthorized, wrong mode, stale version and does not bypass blocked gates',()=>{const f=fixture('installer@example.test');f.options.services=serviceCore._r1sServices();assert.throws(()=>f.adapter().command({command_id:'BKG-2',command_type:'BOOKING_GATES',job_id:'J-BKG',expected_version:2,payload:{}}),/ROLE_DENIED/);const w=fixture();w.options.services=serviceCore._r1sServices();w.tables.ReleaseModes.find(m=>m.function_id==='FN-01').mode='Manual';assert.throws(()=>w.adapter().command({command_id:'BKG-3',command_type:'BOOKING_GATES',job_id:'J-BKG',expected_version:2,payload:{}}),/MODE_DENIED/);const s=fixture();s.options.services=serviceCore._r1sServices();global.processBookingGates=()=>({success:false,gates:{ready:false,blocked:true,summary:'Blocked'}});assert.throws(()=>s.adapter().command({command_id:'BKG-4',command_type:'BOOKING_GATES',job_id:'J-BKG',expected_version:99,payload:{}}),/STALE_VERSION/);const b=fixture();b.options.services=serviceCore._r1sServices();global.processBookingGates=()=>({success:false,gates:{ready:false,blocked:true,summary:'Blocked'},tasks:{created:[]}});const blocked=b.adapter().command({command_id:'BKG-5',command_type:'BOOKING_GATES',job_id:'J-BKG',expected_version:2,payload:{}});assert.equal(blocked.result.status,'Blocked');assert.equal(blocked.result.success,false);assert.throws(()=>b.adapter().command({command_id:'BKG-6',command_type:'BOOKING_GATES',job_id:'J-BKG',expected_version:2,payload:{force:true}}),/INVALID_FIELDS/)});
 test('deposit and operational availability flags require Admin/Office modes correctly',()=>{const f=fixture('ben@example.test');let d=f.adapter().read({read_type:'ACTION_AVAILABILITY',job_id:'J-DEP'});assert.equal(d.data.appsheet_commands.deposit_confirm.available,true);const o=fixture();assert.equal(o.adapter().read({read_type:'ACTION_AVAILABILITY',job_id:'J-OPC'}).data.appsheet_commands.operational_complete.available,true);assert.equal(o.adapter().read({read_type:'ACTION_AVAILABILITY',job_id:'J-BKG'}).data.appsheet_commands.booking_gates.available,true)});
 test('wrong environment and sheet refuse; no external API source',()=>{const f=fixture();f.options.config.environment='PROD';assert.throws(()=>f.adapter().read({read_type:'SYSTEM_STATUS'}),/DEV_ONLY/);const src=fs.readFileSync('r1-appsheet/adapter.js','utf8')+fs.readFileSync('r1-appsheet/cloud-adapter.js','utf8')+fs.readFileSync('r1-appsheet/services.js','utf8');assert.doesNotMatch(src,/UrlFetchApp|MailApp|GmailApp|CalendarApp|DriveApp/)});
-test('generated Apps Script parses and exposes only narrow entry points',()=>{const src=fs.readFileSync('apps-script/r1-appsheet/R1AppSheetAdapter.js','utf8');new vm.Script(src);assert.match(src,/function appSheetR1Read/);assert.match(src,/function appSheetR1Command/);assert.match(src,/DEPOSIT_CONFIRM/);assert.match(src,/OPERATIONAL_COMPLETE/);assert.match(src,/BOOKING_GATES/);assert.match(src,/runR1APrepareDepositConfirmFixture/);assert.doesNotMatch(src,/updateRow|genericUpdate|activateProduction/)});
+test('generated Apps Script parses and exposes only narrow entry points',()=>{const src=fs.readFileSync('apps-script/r1-appsheet/R1AppSheetAdapter.js','utf8');new vm.Script(src);assert.match(src,/function appSheetR1Read/);assert.match(src,/function appSheetR1Command/);assert.match(src,/JOB_SEARCH/);assert.match(src,/jobSearch:_s17JobSearch/);assert.match(src,/DEPOSIT_CONFIRM/);assert.match(src,/OPERATIONAL_COMPLETE/);assert.match(src,/BOOKING_GATES/);assert.match(src,/runR1APrepareDepositConfirmFixture/);assert.match(src,/_r1aPrepareOperationalCompleteFixture/);assert.match(src,/_r1aPrepareBookingGatesFixture/);assert.match(src,/TPL-GHL01/);assert.doesNotMatch(src,/insert\([^)]*TPL-R1A-GHL01|_r1aFixtureIns\([^)]*TPL-R1A-GHL01|_r1aFixtureUpsert\([^)]*TPL-R1A-GHL01/);assert.doesNotMatch(src,/updateRow|genericUpdate|activateProduction/)});
+
+function opcFixtureStore(){
+  const tables={
+    Jobs:[],Tasks:[],TaskTemplates:[{id:'TPL-GHL01',template_code:'GHL01',title:'Move GHL opportunity',group:'Aftercare',active:true,template_version:'1.0'}],
+    WorkPackages:[],Allocations:[],CommissioningSubmissions:[],GHLTasks:[],AuditEvents:[],CommitJournal:[],TaskEvents:[],Outbox:[]
+  };
+  const copy=x=>structuredClone(x);
+  return{tables,store:{
+    list:n=>copy((tables[n]||[]).filter(r=>r&&r.id)),
+    get:(n,id)=>copy((tables[n]||[]).find(x=>x&&x.id===id)||null),
+    insert:(n,r)=>{if((tables[n]||[]).some(x=>x.id===r.id))throw Error('duplicate');(tables[n]||(tables[n]=[])).push(copy(r));},
+    update:(n,id,p)=>{const row=(tables[n]||[]).find(x=>x.id===id);if(!row)throw Error('missing '+n+' '+id);Object.assign(row,copy(p));}
+  }};
+}
+test('operational-complete fixture resets mutated J-r1a-opcomplete state to clean expected_version 1 twice',()=>{
+  const cloud=require('../r1-appsheet/cloud-adapter.js');
+  const cycle=()=>{
+    const env=opcFixtureStore();
+    let a=cloud._r1aPrepareOperationalCompleteFixture(env.store);
+    assert.equal(a.pass,true);assert.equal(a.detail.job_id,'J-r1a-opcomplete');assert.equal(a.detail.expected_version,1);
+    /* Simulate successful OPERATIONAL_COMPLETE side-effects */
+    env.store.update('Jobs','J-r1a-opcomplete',{workflow_stage:'OperationallyComplete',operational_complete_at:'2026-11-12T12:00:00.000Z',operational_complete_by:'PERSON-tanya',version:2});
+    env.store.insert('Tasks',{id:'TASK-GHL01-J-r1a-opcomplete-OPCOMPLETE',job_id:'J-r1a-opcomplete',template_code:'GHL01',instance_key:'GHL01-J-r1a-opcomplete-OPCOMPLETE',status:'Open',version:1});
+    env.store.insert('GHLTasks',{id:'GHL-J-r1a-opcomplete-OPCOMPLETE',job_id:'J-r1a-opcomplete',task_id:'TASK-GHL01-J-r1a-opcomplete-OPCOMPLETE'});
+    env.store.insert('AuditEvents',{id:'AE-R1A-OPC-TEST',entity_type:'Jobs',entity_id:'J-r1a-opcomplete',action:'OperationalComplete',executing_service:'R1 AppSheet/S10',commit_id:'R1A-OPC-TEST'});
+    env.store.insert('TaskTemplates',{id:'TPL-R1A-GHL01',template_code:'GHL01',title:'duplicate',active:true,template_version:'R1A'});
+    /* Partial mutate path: version bumped without clearing GHL */
+    let b=cloud._r1aPrepareOperationalCompleteFixture(env.store);
+    assert.equal(b.pass,true);assert.equal(b.detail.expected_version,1);
+    assert.equal(env.store.get('Jobs','J-r1a-opcomplete').operational_complete_at,null);
+    assert.equal(env.store.get('Jobs','J-r1a-opcomplete').workflow_stage,'Aftercare');
+    assert.equal(env.store.list('Tasks').filter(t=>t.job_id==='J-r1a-opcomplete'&&t.template_code==='GHL01').length,0);
+    assert.equal(env.store.list('GHLTasks').filter(g=>g.job_id==='J-r1a-opcomplete').length,0);
+    assert.equal(env.store.get('TaskTemplates','TPL-R1A-GHL01'),null);
+    assert.equal(env.store.list('TaskTemplates').filter(t=>t.template_code==='GHL01'&&t.active===true).map(t=>t.id).join(','),'TPL-GHL01');
+    /* Second mutate + prepare */
+    env.store.update('Jobs','J-r1a-opcomplete',{workflow_stage:'OperationallyComplete',operational_complete_at:'2026-11-13T12:00:00.000Z',version:5});
+    env.store.insert('Tasks',{id:'TASK-GHL01-J-r1a-opcomplete-OPCOMPLETE',job_id:'J-r1a-opcomplete',template_code:'GHL01',instance_key:'GHL01-J-r1a-opcomplete-OPCOMPLETE',status:'Open'});
+    env.store.insert('GHLTasks',{id:'GHL-J-r1a-opcomplete-OPCOMPLETE',job_id:'J-r1a-opcomplete',task_id:'TASK-GHL01-J-r1a-opcomplete-OPCOMPLETE'});
+    let c=cloud._r1aPrepareOperationalCompleteFixture(env.store);
+    assert.equal(c.pass,true);assert.equal(c.detail.expected_version,1);
+    assert.equal(Number(env.store.get('Jobs','J-r1a-opcomplete').version),1);
+  };
+  cycle();cycle();
+});
+
+function bkgFixtureStore(){
+  const tables={Jobs:[],Tasks:[],Customers:[],AuditEvents:[],CommitJournal:[],TaskEvents:[],Outbox:[]};
+  const copy=x=>structuredClone(x);
+  return{tables,store:{
+    list:n=>copy((tables[n]||[]).filter(r=>r&&r.id)),
+    get:(n,id)=>copy((tables[n]||[]).find(x=>x&&x.id===id)||null),
+    insert:(n,r)=>{if((tables[n]||[]).some(x=>x.id===r.id))throw Error('duplicate');(tables[n]||(tables[n]=[])).push(copy(r));},
+    update:(n,id,p)=>{const row=(tables[n]||[]).find(x=>x.id===id);if(!row)throw Error('missing '+n+' '+id);Object.assign(row,copy(p));}
+  }};
+}
+test('booking-gates fixture resets mutated J-r1a-booking state to clean expected_version 1 twice',()=>{
+  const cloud=require('../r1-appsheet/cloud-adapter.js');
+  const cycle=()=>{
+    const env=bkgFixtureStore();
+    let a=cloud._r1aPrepareBookingGatesFixture(env.store);
+    assert.equal(a.pass,true);assert.equal(a.detail.job_id,'J-r1a-booking');assert.equal(a.detail.expected_version,1);
+    assert.equal(env.store.get('Jobs','J-r1a-booking').workflow_stage,'BookingInProgress');
+    /* Simulate successful BOOKING_GATES side-effects (S06 cloud + R1 audit) */
+    env.store.update('Jobs','J-r1a-booking',{workflow_stage:'Booked',booking_approved_at:'2026-09-07T00:00:00.000Z',booking_approved_by:'S06-gates',version:2});
+    env.store.insert('Tasks',{id:'TASK-bkg-pre01',job_id:'J-r1a-booking',template_code:'PRE01',instance_key:'PRE01-J-r1a-booking-ROOT-nodue',status:'Open',source_system:'S06-gates'});
+    env.store.insert('Tasks',{id:'TASK-bkg-bkg04',job_id:'J-r1a-booking',template_code:'BKG04',instance_key:'BKG04-J-r1a-booking-ROOT-nodue',status:'Open',source_system:'S06-gates'});
+    env.store.insert('AuditEvents',{id:'AE-R1A-BKG-TEST',entity_type:'Jobs',entity_id:'J-r1a-booking',action:'BookingGates',executing_service:'R1 AppSheet/S06',commit_id:'R1A-BKG-TEST'});
+    let b=cloud._r1aPrepareBookingGatesFixture(env.store);
+    assert.equal(b.pass,true);assert.equal(b.detail.expected_version,1);
+    const job=env.store.get('Jobs','J-r1a-booking');
+    assert.equal(job.workflow_stage,'BookingInProgress');
+    assert.equal(job.booking_approved_at,null);
+    assert.equal(Number(job.version),1);
+    assert.equal(job.pilot_job,true);
+    assert.equal(env.store.list('Tasks').filter(t=>t.job_id==='J-r1a-booking'&&t.id!=='TASK-r1a-bkg-access').length,0);
+    assert.ok(env.store.get('Tasks','TASK-r1a-bkg-access'));
+    assert.equal(env.store.get('AuditEvents','AE-R1A-BKG-TEST'),null);
+    /* Second mutate + prepare */
+    env.store.update('Jobs','J-r1a-booking',{workflow_stage:'Booked',booking_approved_at:'2026-09-08T00:00:00.000Z',version:7});
+    env.store.insert('Tasks',{id:'TASK-bkg-bkg01',job_id:'J-r1a-booking',template_code:'BKG01',instance_key:'BKG01-J-r1a-booking-ROOT-nodue',status:'Open',source_system:'S06-gates'});
+    let c=cloud._r1aPrepareBookingGatesFixture(env.store);
+    assert.equal(c.pass,true);assert.equal(c.detail.expected_version,1);
+    assert.equal(Number(env.store.get('Jobs','J-r1a-booking').version),1);
+    assert.equal(env.store.get('Jobs','J-r1a-booking').workflow_stage,'BookingInProgress');
+  };
+  cycle();cycle();
+});

@@ -322,7 +322,7 @@ function _s17OperationalQueue(store, queueName) {
     'booking': function () { return allTasks.filter(function (t) { return t.group === 'Booking' || t.group === 'Prebooking'; }); },
     'materials': function () { return allTasks.filter(function (t) { return t.group === 'Materials' || t.template_code === 'MAT01' || t.template_code === 'MAT05'; }); },
     'scaffold': function () { return allTasks.filter(function (t) { return t.group === 'Scaffold' || t.template_code === 'SCA01'; }); },
-    'calls': function () { return allTasks.filter(function (t) { return t.group === 'Calls' || t.template_code === 'CAL01'; }); },
+    'calls': function () { return allTasks.filter(function (t) { return t.group === 'Calls' || ['CAL01', 'INS01', 'INS04'].indexOf(t.template_code) >= 0; }); },
     'issues': function () { return allTasks.filter(function (t) { return t.related_entity_type === 'Issues'; }); },
     'commissioning': function () { return allTasks.filter(function (t) { return t.group === 'Commissioning'; }); },
     'handover': function () { return allTasks.filter(function (t) { return t.group === 'Handover'; }); },

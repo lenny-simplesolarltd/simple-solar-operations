@@ -2,7 +2,8 @@
  * FN-14 (R1 Automated): health monitoring + backup manifest.
  * FN-16 (R1 Manual): daily health review tasks.
  * FN-13 (R4 Automated): archive eligibility + archive action + reopen.
- * No real Drive/Calendar/Xero/GHL calls. No destructive restore.
+ * DEV-only Drive backup artifact when S01_CONFIG.backupFolderId is set (DriveApp).
+ * No Calendar/Xero/GHL calls. No destructive restore. No PROD Drive writes.
  * Durable plans use canonical CommitJournal/AuditEvents. */
 'use strict';
 
@@ -188,7 +189,64 @@ function _s16HealthStatus(store) {
   };
 }
 
-/* --- 2. BACKUP MANIFEST --- */
+/* --- 2. BACKUP MANIFEST (+ optional DEV Drive artifact) --- */
+
+function _s16BackupFolderId(input) {
+  if (!input) return null;
+  if (_s16Text(input.backupFolderId)) return input.backupFolderId.trim();
+  if (input.config && _s16Text(input.config.backupFolderId)) return input.config.backupFolderId.trim();
+  return null;
+}
+
+function _s16BackupConfigEnvironment(input, store) {
+  if (input && input.config && _s16Text(input.config.environment)) return String(input.config.environment).trim();
+  if (store && typeof store.getEnvironment === 'function') return store.getEnvironment();
+  return 'DEV';
+}
+
+/* Injectable Drive adapter for local tests; Apps Script uses DriveApp against Shared Drive folders. */
+function _s16DriveApiDefault() {
+  return {
+    findFileInFolder: function (folderId, fileName) {
+      var folder = DriveApp.getFolderById(folderId);
+      var it = folder.getFilesByName(fileName);
+      if (!it.hasNext()) return null;
+      var f = it.next();
+      return { id: f.getId(), name: f.getName() };
+    },
+    createFileInFolder: function (folderId, fileName, content, mimeType) {
+      var folder = DriveApp.getFolderById(folderId);
+      var blob = Utilities.newBlob(content, mimeType || 'application/json', fileName);
+      var f = folder.createFile(blob);
+      return { id: f.getId(), name: f.getName() };
+    }
+  };
+}
+
+function _s16WriteDevBackupDriveFile(store, input, payload) {
+  var folderId = _s16BackupFolderId(input);
+  if (!_s16Text(folderId)) return { ok: false, configured: false, reason: 'NOT_CONFIGURED' };
+  var env = _s16BackupConfigEnvironment(input, store);
+  if (env === 'PROD') throw new Error('S16_REFUSED: PROD backup Drive writes unavailable');
+  if (env !== 'DEV') throw new Error('S16_REFUSED: Drive backup only when environment is DEV');
+  if (payload.environment !== 'DEV' || payload.sheet_id !== S16_DEV_SHEET_ID)
+    throw new Error('S16_REFUSED: Drive backup payload must be exact DEV sheet');
+  var fileName = 'S16-' + payload.backup_id + '.json';
+  var drive = (input && input.drive) || _s16DriveApiDefault();
+  try {
+    var existing = drive.findFileInFolder(folderId, fileName);
+    if (existing && existing.id) {
+      return { ok: true, configured: true, file_id: existing.id, file_name: existing.name || fileName, created: false, folder_id: folderId };
+    }
+    var created = drive.createFileInFolder(folderId, fileName, JSON.stringify(payload), 'application/json');
+    if (!created || !_s16Text(created.id)) throw new Error('Drive create returned no file id');
+    return { ok: true, configured: true, file_id: created.id, file_name: created.name || fileName, created: true, folder_id: folderId };
+  } catch (e) {
+    var msg = e && e.message ? e.message : String(e);
+    if (/S16_REFUSED:/.test(msg)) throw e;
+    throw new Error('S16_BACKUP_DRIVE_FAILED: ' + msg);
+  }
+}
 
 function _s16BackupManifest(store, input) {
   _s16Scope(store);
@@ -197,7 +255,38 @@ function _s16BackupManifest(store, input) {
   var now = _s16Now();
   var backupId = 'BACKUP-' + input.command_id;
   var existing = store.get('ReportSnapshots', backupId);
-  if (existing) return { created: false, manifest: existing, replay: true };
+  if (existing) {
+    /* Replay: if prior run left a Sheet row without Drive file_id, retry Drive once when configured. */
+    if (!_s16Text(existing.file_id) && _s16BackupFolderId(input)) {
+      var priorTotals;
+      try { priorTotals = JSON.parse(existing.totals_json); } catch (e) { priorTotals = null; }
+      if (priorTotals && priorTotals.checksum) {
+        var retryPayload = {
+          backup_id: backupId,
+          environment: 'DEV',
+          sheet_id: S16_DEV_SHEET_ID,
+          created_at: priorTotals.created_at || existing.created_at || now,
+          checksum: priorTotals.checksum,
+          schema_version: priorTotals.schema_version || 'S02-1.0',
+          record_counts: priorTotals.record_counts || {},
+          total_rows: priorTotals.total_rows || 0,
+          tables_count: priorTotals.tables_count || 0,
+          report_id: backupId
+        };
+        var retryDrive = _s16WriteDevBackupDriveFile(store, input, retryPayload);
+        if (retryDrive.ok && retryDrive.file_id) {
+          priorTotals.destination = 'DriveFolder:' + retryDrive.folder_id;
+          priorTotals.drive_file_name = retryDrive.file_name;
+          priorTotals.validation_status = 'Pending';
+          priorTotals.notes = 'DEV Drive backup artifact';
+          store.update('ReportSnapshots', backupId, { file_id: retryDrive.file_id, totals_json: JSON.stringify(priorTotals) });
+          existing = store.get('ReportSnapshots', backupId);
+          return { created: false, replay: true, drive_repaired: true, backup_id: backupId, manifest: existing, file_id: existing.file_id, checksum: priorTotals.checksum, destination: priorTotals.destination };
+        }
+      }
+    }
+    return { created: false, manifest: existing, replay: true, backup_id: backupId, file_id: existing.file_id || null, checksum: (function () { try { return JSON.parse(existing.totals_json).checksum; } catch (e) { return null; } })(), destination: (function () { try { return JSON.parse(existing.totals_json).destination; } catch (e) { return null; } })() };
+  }
 
   // Enumerate tables and record counts
   var tables = [
@@ -227,6 +316,34 @@ function _s16BackupManifest(store, input) {
   var schemaVersion = 'S02-1.0'; // Canonical schema version
   var checksum = _s16Hash({ schema_version: schemaVersion, counts: counts, environment: 'DEV', sheet_id: S16_DEV_SHEET_ID, created_at: now });
 
+  var artifact = {
+    backup_id: backupId,
+    environment: 'DEV',
+    sheet_id: S16_DEV_SHEET_ID,
+    created_at: now,
+    checksum: checksum,
+    schema_version: schemaVersion,
+    record_counts: counts,
+    total_rows: totalRows,
+    tables_count: tables.length,
+    report_id: backupId
+  };
+
+  var folderConfigured = !!_s16BackupFolderId(input);
+  var driveResult = null;
+  var destination = 'NOT_CONFIGURED: no real Drive copy';
+  var notes = 'Synthetic DEV manifest only. No Drive file created.';
+  var fileId = null;
+
+  if (folderConfigured) {
+    /* Drive write before Sheet insert — failure must not claim success. */
+    driveResult = _s16WriteDevBackupDriveFile(store, input, artifact);
+    if (!driveResult.ok || !_s16Text(driveResult.file_id)) throw new Error('S16_BACKUP_DRIVE_FAILED: no file_id');
+    fileId = driveResult.file_id;
+    destination = 'DriveFolder:' + driveResult.folder_id;
+    notes = 'DEV Drive backup artifact';
+  }
+
   var manifest = {
     id: backupId,
     period_start: now.slice(0, 10),
@@ -245,12 +362,13 @@ function _s16BackupManifest(store, input) {
       total_rows: totalRows,
       checksum: checksum,
       tables_count: tables.length,
-      destination: 'NOT_CONFIGURED: no real Drive copy',
+      destination: destination,
+      drive_file_name: driveResult && driveResult.file_name ? driveResult.file_name : null,
       validation_status: 'Pending',
-      notes: 'Synthetic DEV manifest only. No Drive file created.'
+      notes: notes
     }),
     underlying_job_ids: JSON.stringify([]),
-    file_id: null,
+    file_id: fileId,
     generated_by: input.actor,
     created_at: now,
     commit_id: backupId
@@ -266,7 +384,9 @@ function _s16BackupManifest(store, input) {
     table_count: tables.length,
     total_rows: totalRows,
     checksum: checksum,
-    destination: 'NOT_CONFIGURED'
+    file_id: fileId,
+    destination: destination,
+    drive_created: !!(driveResult && driveResult.created)
   };
 }
 
@@ -725,6 +845,7 @@ if (typeof module !== 'undefined') {
     _s16Date, _s16Timestamp, _s16IsTrue, _s16AddMonths, _s16MonthsBetween, _s16Hash,
     _s16HealthStatus, _s16BackupManifest, _s16ValidateBackup, _s16RestorePlan,
     _s16ArchiveEligibility, _s16ArchiveJob, _s16ReopenArchivedJob,
-    _s16SystemTasks, _s16SetModes, _s16Scope, _s16GuardStore
+    _s16SystemTasks, _s16SetModes, _s16Scope, _s16GuardStore,
+    _s16BackupFolderId, _s16WriteDevBackupDriveFile
   };
 }

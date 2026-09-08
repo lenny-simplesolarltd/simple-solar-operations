@@ -3,14 +3,16 @@
 'use strict';
 
 const R1A_BOUND_DEV_SHEET_ID = '1z7PNZtDdC4Z5eLbmTuQdqp0QpJSmuEvx3QvN3VyNTsc';
-const R1A_BOUND_READS = ['IDENTITY_PROBE','OFFICE_HOME','JOB_OVERVIEW','OPERATIONAL_QUEUE','RELEASE_MODE_STATUS','SYSTEM_STATUS','AUDIT_HISTORY','ACTION_AVAILABILITY','TASK_ACTION_AVAILABILITY'];
+const R1A_BOUND_READS = ['IDENTITY_PROBE','OFFICE_HOME','JOB_SEARCH','JOB_OVERVIEW','OPERATIONAL_QUEUE','RELEASE_MODE_STATUS','SYSTEM_STATUS','AUDIT_HISTORY','ACTION_AVAILABILITY','TASK_ACTION_AVAILABILITY'];
 const R1A_BOUND_COMMANDS = ['TASK_COMPLETE','CALL_RECORD','ISSUE_UPDATE','PLANNER_UPDATE','CANCEL_JOB','REINSTATE_JOB','DEPOSIT_CONFIRM','OPERATIONAL_COMPLETE','BOOKING_GATES','SOLD_INTAKE','BOOKING_INTAKE'];
+const R1A_BOUND_QUEUES = ['booking','calls','issues','payments','ghl','cancellation'];
 
 function _r1aCopy(v) { return JSON.parse(JSON.stringify(v)); }
 function _r1aRefuse(code) { var e=new Error(code); e.code=code; throw e; }
 function _r1aObject(v) { return v && typeof v==='object' && !Array.isArray(v); }
 function _r1aKeys(v, allowed) { if(!_r1aObject(v) || Object.keys(v).some(function(k){return allowed.indexOf(k)<0;})) _r1aRefuse('R1A_INVALID_FIELDS'); }
 function _r1aText(v) { return typeof v==='string' && v.trim().length>0; }
+function _r1aFlag(ok,type,entity,reason){var o={command_type:type,available:!!ok};if(entity)o.expected_version_entity=entity;if(!ok&&reason)o.reason=reason;return o;}
 
 function _r1aActor(store,email) {
   if(!_r1aText(email)) _r1aRefuse('R1A_AUTHENTICATED_EMAIL_REQUIRED');
@@ -48,7 +50,7 @@ function _r1aFilterTasks(store,a,items){return (items||[]).filter(function(t){re
 function _r1aCreate(options){
   var store=options.store, reads=options.reads||{}, services=options.services||{};
   function read(input){
-    _r1aGuardEnvironment(options);_r1aKeys(input,['read_type','job_id','task_id','queue','as_of']);
+    _r1aGuardEnvironment(options);_r1aKeys(input,['read_type','job_id','task_id','queue','as_of','query']);
     if(R1A_BOUND_READS.indexOf(input.read_type)<0)_r1aRefuse('R1A_UNKNOWN_READ');
     if(input.read_type==='IDENTITY_PROBE'){
       if(Object.keys(input).length!==1)_r1aRefuse('R1A_INVALID_FIELDS');
@@ -66,13 +68,40 @@ function _r1aCreate(options){
       ['overdue','due_today','due_soon','booking_review'].forEach(function(k){out[k]=_r1aFilterTasks(store,a,out[k]);});
       out.unresolved_issues=(out.unresolved_issues||[]).filter(function(i){return _r1aAssigned(store,a,i.job_id);});
       out.overdue_count=out.overdue.length;out.due_today_count=out.due_today.length;out.due_soon_count=out.due_soon.length;out.booking_review_count=out.booking_review.length;out.unresolved_issues_count=out.unresolved_issues.length;
+    } else if(input.read_type==='JOB_SEARCH'){
+      if(!_r1aText(input.query))_r1aRefuse('R1A_QUERY_REQUIRED');
+      if(typeof reads.jobSearch!=='function')_r1aRefuse('R1A_READ_UNSUPPORTED');
+      var results=(reads.jobSearch(store,input.query)||[]).filter(function(r){var j=store.get('Jobs',r.id);return !!j&&j.pilot_job===true&&j.release_scope==='R1'&&_r1aAssigned(store,a,r.id);});
+      out={query:input.query.trim(),count:results.length,results:results};
     } else if(input.read_type==='JOB_OVERVIEW'){_r1aAuthorizeJob(store,a,input.job_id);out=reads.jobOverview(store,input.job_id);
-    } else if(input.read_type==='OPERATIONAL_QUEUE'){out=reads.operationalQueue(store,input.queue);out.tasks=_r1aFilterTasks(store,a,out.tasks||[]);out.count=out.tasks.length;
+    } else if(input.read_type==='OPERATIONAL_QUEUE'){
+      if(!_r1aText(input.queue)||R1A_BOUND_QUEUES.indexOf(input.queue)<0)_r1aRefuse('R1A_QUEUE_NOT_IN_R1');
+      out=reads.operationalQueue(store,input.queue);out.tasks=_r1aFilterTasks(store,a,out.tasks||[]);out.count=out.tasks.length;
     } else if(input.read_type==='RELEASE_MODE_STATUS'){if(!_r1aAdmin(a))_r1aRefuse('R1A_ROLE_DENIED');out=reads.releaseModes(store);
     } else if(input.read_type==='SYSTEM_STATUS'){if(!_r1aAdmin(a)&&a.roles.indexOf('Office')<0)_r1aRefuse('R1A_ROLE_DENIED');out=reads.systemStatus(store);
     } else if(input.read_type==='AUDIT_HISTORY'){_r1aAuthorizeJob(store,a,input.job_id);out=reads.auditHistory(store,input.job_id);
-    } else if(input.read_type==='ACTION_AVAILABILITY'){var aj=_r1aAuthorizeJob(store,a,input.job_id);out=reads.actionAvailability(store,input.job_id);var active=!aj.archived_at&&['CancellationInProgress','Cancelled'].indexOf(aj.workflow_stage)<0,fn01=_r1aModeAvailable(store,'FN-01','Automated'),cancelModes=fn01&&_r1aModeAvailable(store,'FN-17','Manual')&&_r1aModeAvailable(store,'FN-20','Manual'),fn15=_r1aModeAvailable(store,'FN-15','Manual'),fn19=_r1aModeAvailable(store,'FN-19','Manual'),fn11=_r1aModeAvailable(store,'FN-11','Manual'),officeMgr=_r1aOfficeManager(a);out.appsheet_commands={call_record:{command_type:'CALL_RECORD',available:active&&fn01,expected_version_entity:'Tasks'},issue_update:{command_type:'ISSUE_UPDATE',available:active&&fn01,expected_version_entity:'Issues'},planner_update:{command_type:'PLANNER_UPDATE',available:active&&fn01,expected_version_entity:'WorkPackages'},cancel_job:{command_type:'CANCEL_JOB',available:active&&cancelModes,expected_version_entity:'Jobs'},reinstate_job:{command_type:'REINSTATE_JOB',available:aj.workflow_stage==='Cancelled'&&cancelModes,expected_version_entity:'Jobs'},deposit_confirm:{command_type:'DEPOSIT_CONFIRM',available:active&&fn15&&_r1aAdmin(a)&&!aj.deposit_bank_confirmed_at,expected_version_entity:'Jobs'},operational_complete:{command_type:'OPERATIONAL_COMPLETE',available:active&&fn19&&fn11&&officeMgr&&!aj.operational_complete_at&&['InProgress','Aftercare'].indexOf(aj.workflow_stage)>=0,expected_version_entity:'Jobs'},booking_gates:{command_type:'BOOKING_GATES',available:active&&fn01&&['Prebooking','ReadyToBook','BookingInProgress'].indexOf(aj.workflow_stage)>=0,expected_version_entity:'Jobs'},sold_intake:{command_type:'SOLD_INTAKE',available:false,reason:'INTAKE_POLICY_NOT_APPROVED'},booking_intake:{command_type:'BOOKING_INTAKE',available:false,reason:'INTAKE_POLICY_NOT_APPROVED'}};
-    } else {var t=store.get('Tasks',input.task_id);if(!t)_r1aRefuse('R1A_TASK_NOT_FOUND');if(t.job_id)_r1aAuthorizeJob(store,a,t.job_id);else if(t.owner_id!==a.id&&!_r1aAdmin(a))_r1aRefuse('R1A_TASK_ACCESS_DENIED');out=reads.taskActionAvailability(store,input.task_id);out.appsheet_commands={task_complete:{command_type:'TASK_COMPLETE',available:!!(out.actions&&out.actions.complete&&out.actions.complete.available)&&(t.owner_id===a.id||t.backup_id===a.id||_r1aAdmin(a)),expected_version_entity:'Tasks'}};}
+    } else if(input.read_type==='ACTION_AVAILABILITY'){
+      var aj=_r1aAuthorizeJob(store,a,input.job_id);out=reads.actionAvailability(store,input.job_id);
+      var active=!aj.archived_at&&['CancellationInProgress','Cancelled'].indexOf(aj.workflow_stage)<0,fn01=_r1aModeAvailable(store,'FN-01','Automated'),cancelModes=fn01&&_r1aModeAvailable(store,'FN-17','Manual')&&_r1aModeAvailable(store,'FN-20','Manual'),fn15=_r1aModeAvailable(store,'FN-15','Manual'),fn19=_r1aModeAvailable(store,'FN-19','Manual'),fn11=_r1aModeAvailable(store,'FN-11','Manual'),officeMgr=_r1aOfficeManager(a),isAdmin=_r1aAdmin(a);
+      var depOk=active&&fn15&&isAdmin&&!aj.deposit_bank_confirmed_at,opcOk=active&&fn19&&fn11&&officeMgr&&!aj.operational_complete_at&&['InProgress','Aftercare'].indexOf(aj.workflow_stage)>=0,bkgOk=active&&fn01&&['Prebooking','ReadyToBook','BookingInProgress'].indexOf(aj.workflow_stage)>=0,reinOk=aj.workflow_stage==='Cancelled'&&cancelModes;
+      out.appsheet_commands={
+        call_record:_r1aFlag(active&&fn01,'CALL_RECORD','Tasks',!active?'JOB_NOT_ACTIONABLE':'MODE_UNAVAILABLE'),
+        issue_update:_r1aFlag(active&&fn01,'ISSUE_UPDATE','Issues',!active?'JOB_NOT_ACTIONABLE':'MODE_UNAVAILABLE'),
+        planner_update:_r1aFlag(active&&fn01,'PLANNER_UPDATE','WorkPackages',!active?'JOB_NOT_ACTIONABLE':'MODE_UNAVAILABLE'),
+        cancel_job:_r1aFlag(active&&cancelModes,'CANCEL_JOB','Jobs',!active?'JOB_NOT_ACTIONABLE':'MODE_UNAVAILABLE'),
+        reinstate_job:_r1aFlag(reinOk,'REINSTATE_JOB','Jobs',aj.workflow_stage!=='Cancelled'?'STAGE_NOT_CANCELLED':'MODE_UNAVAILABLE'),
+        deposit_confirm:_r1aFlag(depOk,'DEPOSIT_CONFIRM','Jobs',!active?'JOB_NOT_ACTIONABLE':!isAdmin?'ADMIN_OR_MANAGER_REQUIRED':!fn15?'MODE_UNAVAILABLE':'ALREADY_CONFIRMED'),
+        operational_complete:_r1aFlag(opcOk,'OPERATIONAL_COMPLETE','Jobs',!active?'JOB_NOT_ACTIONABLE':!officeMgr?'OFFICE_OR_ADMIN_REQUIRED':!(fn19&&fn11)?'MODE_UNAVAILABLE':aj.operational_complete_at?'ALREADY_COMPLETE':'STAGE_NOT_ELIGIBLE'),
+        booking_gates:_r1aFlag(bkgOk,'BOOKING_GATES','Jobs',!active?'JOB_NOT_ACTIONABLE':!fn01?'MODE_UNAVAILABLE':'STAGE_NOT_ELIGIBLE'),
+        sold_intake:_r1aFlag(false,'SOLD_INTAKE',null,'INTAKE_POLICY_NOT_APPROVED'),
+        booking_intake:_r1aFlag(false,'BOOKING_INTAKE',null,'INTAKE_POLICY_NOT_APPROVED')
+      };
+    } else {
+      var t=store.get('Tasks',input.task_id);if(!t)_r1aRefuse('R1A_TASK_NOT_FOUND');if(t.job_id)_r1aAuthorizeJob(store,a,t.job_id);else if(t.owner_id!==a.id&&!_r1aAdmin(a))_r1aRefuse('R1A_TASK_ACCESS_DENIED');
+      out=reads.taskActionAvailability(store,input.task_id);
+      var completeAvail=!!(out.actions&&out.actions.complete&&out.actions.complete.available),ownerOk=t.owner_id===a.id||t.backup_id===a.id||_r1aAdmin(a);
+      out.appsheet_commands={task_complete:_r1aFlag(completeAvail&&ownerOk,'TASK_COMPLETE','Tasks',!completeAvail?'COMPLETE_NOT_AVAILABLE':'TASK_OWNER_OR_BACKUP_REQUIRED')};
+    }
     return {ok:true,read_type:input.read_type,actor_id:a.id,data:_r1aCopy(out)};
   }
   function command(input){
@@ -152,14 +181,17 @@ function _r1sServices(){return{TASK_COMPLETE:_r1sTaskComplete,CALL_RECORD:_r1sCa
 function _r1aCloudOptions(){
   var store=_s17CloudStore();
   store.withLock=function(fn){var lock=LockService.getScriptLock();lock.waitLock(30000);try{return fn();}finally{lock.releaseLock();}};
-  return {store:store,config:{environment:'DEV',sheetId:R1A_BOUND_DEV_SHEET_ID},actorEmail:function(){return Session.getActiveUser().getEmail();},effectiveUserEmail:function(){return Session.getEffectiveUser().getEmail();},reads:{officeHome:_s17OfficeToday,jobOverview:_s17JobOverview,operationalQueue:_s17OperationalQueue,releaseModes:_s17AdminReleaseModes,systemStatus:_s17AdminSystemStatus,auditHistory:_s17AuditHistory,actionAvailability:_s17ActionAvailability,taskActionAvailability:_s17TaskActionAvailability},services:_r1sServices()};
+  return {store:store,config:{environment:'DEV',sheetId:R1A_BOUND_DEV_SHEET_ID},actorEmail:function(){return Session.getActiveUser().getEmail();},effectiveUserEmail:function(){return Session.getEffectiveUser().getEmail();},reads:{officeHome:_s17OfficeToday,jobSearch:_s17JobSearch,jobOverview:_s17JobOverview,operationalQueue:_s17OperationalQueue,releaseModes:_s17AdminReleaseModes,systemStatus:_s17AdminSystemStatus,auditHistory:_s17AuditHistory,actionAvailability:_s17ActionAvailability,taskActionAvailability:_s17TaskActionAvailability},services:_r1sServices()};
 }
 function appSheetR1Read(requestJson){try{return JSON.stringify(_r1aCreate(_r1aCloudOptions()).read(JSON.parse(requestJson)));}catch(e){return JSON.stringify({ok:false,error:e.code||e.message||'R1A_REFUSED'});}}
 function appSheetR1Command(requestJson){try{return JSON.stringify(_r1aCreate(_r1aCloudOptions()).command(JSON.parse(requestJson)));}catch(e){return JSON.stringify({ok:false,error:e.code||e.message||'R1A_REFUSED'});}}
 
 /* Namespaced DEV synthetic fixtures for AppSheet command smokes. Exact DEV sheet only. */
-function _r1aFixtureResult(name,pass,detail){var r={test:name,pass:pass,detail:detail};console.log(JSON.stringify(r,null,2));return r;}
+function _r1aFixtureResult(name,pass,detail){var r={test:name,pass:!!pass,detail:detail};console.log(JSON.stringify(r,null,2));return r;}
 function _r1aFixtureIns(store,table,row){if(!store.get(table,row.id))store.insert(table,row);}
+function _r1aFixtureUpsert(store,table,row){if(store.get(table,row.id))store.update(table,row.id,row);else store.insert(table,row);}
+/* Soft-retire: clear id so store.list filters the row out. DEV fixture rows only. */
+function _r1aFixtureRetire(store,table,id){if(store.get(table,id))store.update(table,id,{id:''});}
 
 function runR1APrepareDepositConfirmFixture(){
   var store=_r1aCloudOptions().store,n='2026-11-01T00:00:00.000Z',jobId='J-r1a-deposit';
@@ -169,28 +201,78 @@ function runR1APrepareDepositConfirmFixture(){
   return _r1aFixtureResult('R1A deposit fixture',!!job&&!!store.get('InvoiceStages','IS-'+jobId+'-deposit')&&!job.deposit_bank_confirmed_at,{job_id:jobId,expected_version:Number(job.version)});
 }
 
-function runR1APrepareOperationalCompleteFixture(){
-  var store=_r1aCloudOptions().store,n='2026-11-11T12:00:00.000Z',jobId='J-r1a-opcomplete';
-  _r1aFixtureIns(store,'Jobs',{id:jobId,job_id:'SS-R1A-OPC',customer_id:'CUST-r1a-opc',display_name:'R1A Operational Complete DEV',sold_submission_id:'R1A-sold-opc',booking_submission_id:'R1A-booking-opc',sold_at:n,salesperson_id:null,lead_source:'R1A',quote_reference:'Q-R1A-OPC',presale_file_id:null,finance_route:'Standard',contract_status:'Signed',contract_id:'C-R1A-OPC',contract_signed_at:n,contract_evidence_id:null,original_net_pence:400000,original_vat_pence:80000,original_gross_pence:480000,approved_change_pence:null,current_contract_gross_pence:480000,valuation_basis:'Standard',sold_booking_match_status:'Match',customer_details_verified_at:n,customer_details_verified_by:'PERSON-tanya',deposit_bank_confirmed_at:n,deposit_bank_confirmed_by:'PERSON-ben',deposit_bank_reference:'R1A-DEP',roof_required:true,electrical_required:false,scaffold_required:false,workflow_stage:'Aftercare',booking_approved_at:n,booking_approved_by:'PERSON-tanya',operational_complete_at:null,operational_complete_by:null,customer_happy_at:'2026-11-09T10:00:00.000Z',customer_happy_by:'PERSON-tanya',handover_status:'NotReady',financial_status:'Pending',cancellation_at:null,cancellation_by:null,cancellation_reason:null,archived_at:null,next_action_at:n,account_policy_version:null,pilot_job:true,release_scope:'R1',created_at:n,created_by:'R1A-fixture',updated_at:n,updated_by:'R1A-fixture',version:1,source_system:'R1A-fixture',source_record_id:null,commit_id:'R1A-OPC'});
-  _r1aFixtureIns(store,'WorkPackages',{id:'WP-r1a-opc-roof',job_id:jobId,trade:'Roof',required:true,planned_start:'2026-11-05',planned_end:'2026-11-06',actual_start:'2026-11-05',actual_end:'2026-11-06',status:'ConfirmedComplete',completion_outcome:'Complete',installer_confirmation_at:'2026-11-09T10:00:00.000Z',installer_confirmation_by:'PERSON-tanya',commissioning_required:true,sequence:1,revision:1,created_at:n,created_by:'R1A-fixture',updated_at:n,updated_by:'R1A-fixture',version:1,source_system:'R1A-fixture',commit_id:'R1A-OPC'});
-  _r1aFixtureIns(store,'Allocations',{id:'ALLOC-r1a-opc',work_package_id:'WP-r1a-opc-roof',person_id:'PERSON-installer-a',role:'Lead',active:true,created_at:n,created_by:'R1A-fixture',updated_at:n,updated_by:'R1A-fixture',version:1,source_system:'R1A-fixture',commit_id:'R1A-OPC'});
-  _r1aFixtureIns(store,'CommissioningSubmissions',{id:'CS-r1a-opc',job_id:jobId,work_package_id:'WP-r1a-opc-roof',allocation_id:'ALLOC-r1a-opc',installer_id:'PERSON-installer-a',template_version:'R1A-sample',status:'Accepted',submitted_at:'2026-11-09T09:00:00.000Z',reviewed_at:'2026-11-09T10:00:00.000Z',reviewed_by:'PERSON-tanya',review_notes:'R1A synthetic accepted',created_at:n,created_by:'R1A-fixture',updated_at:n,updated_by:'R1A-fixture',version:1,commit_id:'R1A-OPC'});
-  // Do NOT create a duplicate GHL01 template — S02 seed already provides TPL-GHL01
-  _r1aFixtureIns(store,'Tasks',{id:'TASK-r1a-opc-access',job_id:jobId,template_code:'R1A-ACCESS',instance_key:'R1A-OPC-ACCESS',group:'Aftercare',title:'R1A office access (DEV)',owner_id:'PERSON-tanya',backup_id:null,related_entity_type:'Jobs',related_entity_id:jobId,due_at:n,original_due_at:n,priority:2,status:'Open',blocking_reason:null,next_followup_at:null,completed_at:null,completed_by:null,completion_note:null,evidence_id:null,revision_required:false,created_rule_version:'R1A-1.0',created_at:n,created_by:'R1A-fixture',updated_at:n,updated_by:'R1A-fixture',version:1,source_system:'R1A-fixture',commit_id:'R1A-OPC'});
-  // Reset job if a prior failed command left it partially mutated (operational_complete_at set without GHL task)
-  var job=store.get('Jobs',jobId);
-  if(job&&job.operational_complete_at&&!store.list('GHLTasks').some(function(g){return g.job_id===jobId&&g.task_id;})){
-    store.update('Jobs',jobId,{workflow_stage:'Aftercare',operational_complete_at:null,operational_complete_by:null,updated_at:n,updated_by:'R1A-fixture',version:1});
-    job=store.get('Jobs',jobId);
+/* Reset ONLY J-r1a-opcomplete namespaced synthetic state left by prior OPERATIONAL_COMPLETE attempts. */
+function _r1aResetOperationalCompleteSynthetic(store){
+  var jobId='J-r1a-opcomplete',ghlTaskId='TASK-GHL01-'+jobId+'-OPCOMPLETE',ghlRowId='GHL-'+jobId+'-OPCOMPLETE',retired={tasks:[],ghl_tasks:[],audit:[],journal:[],task_events:[],templates:[]};
+  /* Stale duplicate GHL01 template must not coexist with seed TPL-GHL01 */
+  if(store.get('TaskTemplates','TPL-R1A-GHL01')){_r1aFixtureRetire(store,'TaskTemplates','TPL-R1A-GHL01');retired.templates.push('TPL-R1A-GHL01');}
+  store.list('Tasks').filter(function(t){return t.job_id===jobId&&t.template_code==='GHL01';}).forEach(function(t){
+    store.list('TaskEvents').filter(function(e){return e.task_id===t.id;}).forEach(function(e){_r1aFixtureRetire(store,'TaskEvents',e.id);retired.task_events.push(e.id);});
+    _r1aFixtureRetire(store,'Tasks',t.id);retired.tasks.push(t.id);
+  });
+  if(store.get('Tasks',ghlTaskId)){_r1aFixtureRetire(store,'Tasks',ghlTaskId);retired.tasks.push(ghlTaskId);}
+  store.list('GHLTasks').filter(function(g){return g.job_id===jobId;}).forEach(function(g){_r1aFixtureRetire(store,'GHLTasks',g.id);retired.ghl_tasks.push(g.id);});
+  if(store.get('GHLTasks',ghlRowId)){_r1aFixtureRetire(store,'GHLTasks',ghlRowId);retired.ghl_tasks.push(ghlRowId);}
+  store.list('AuditEvents').filter(function(a){return a.entity_id===jobId&&(a.action==='OperationalComplete'||(a.executing_service&&String(a.executing_service).indexOf('R1 AppSheet/S10')===0)||(a.commit_id&&String(a.commit_id).indexOf('R1A-')===0));}).forEach(function(a){_r1aFixtureRetire(store,'AuditEvents',a.id);retired.audit.push(a.id);});
+  store.list('CommitJournal').filter(function(j){return j.entity_id===jobId||(j.command_id&&String(j.command_id).indexOf('R1A-OPC')===0)||(j.commit_id&&String(j.commit_id).indexOf('R1A-')===0&&j.entity_type==='Jobs'&&j.entity_id===jobId);}).forEach(function(j){_r1aFixtureRetire(store,'CommitJournal',j.id);retired.journal.push(j.id);});
+  store.list('Outbox').filter(function(o){return o.correlation_id&&String(o.correlation_id).indexOf(jobId)>=0;}).forEach(function(o){_r1aFixtureRetire(store,'Outbox',o.id);});
+  return retired;
+}
+
+function _r1aPrepareOperationalCompleteFixture(store){
+  var n='2026-11-11T12:00:00.000Z',jobId='J-r1a-opcomplete';
+  var retired=_r1aResetOperationalCompleteSynthetic(store);
+  var ghlTpl=store.list('TaskTemplates').filter(function(t){return t.template_code==='GHL01'&&t.active===true;});
+  if(ghlTpl.length!==1||ghlTpl[0].id!=='TPL-GHL01'){
+    return {pass:false,detail:{job_id:jobId,error:'EXPECTED_SINGLE_TPL_GHL01',found:ghlTpl.map(function(t){return t.id;}),retired:retired}};
   }
-  return _r1aFixtureResult('R1A operational-complete fixture',!!job&&!job.operational_complete_at&&!!store.get('WorkPackages','WP-r1a-opc-roof'),{job_id:jobId,expected_version:Number(job.version)});
+  var jobRow={id:jobId,job_id:'SS-R1A-OPC',customer_id:'CUST-r1a-opc',display_name:'R1A Operational Complete DEV',sold_submission_id:'R1A-sold-opc',booking_submission_id:'R1A-booking-opc',sold_at:n,salesperson_id:null,lead_source:'R1A',quote_reference:'Q-R1A-OPC',presale_file_id:null,finance_route:'Standard',contract_status:'Signed',contract_id:'C-R1A-OPC',contract_signed_at:n,contract_evidence_id:null,original_net_pence:400000,original_vat_pence:80000,original_gross_pence:480000,approved_change_pence:null,current_contract_gross_pence:480000,valuation_basis:'Standard',sold_booking_match_status:'Match',customer_details_verified_at:n,customer_details_verified_by:'PERSON-tanya',deposit_bank_confirmed_at:n,deposit_bank_confirmed_by:'PERSON-ben',deposit_bank_reference:'R1A-DEP',roof_required:true,electrical_required:false,scaffold_required:false,workflow_stage:'Aftercare',booking_approved_at:n,booking_approved_by:'PERSON-tanya',operational_complete_at:null,operational_complete_by:null,customer_happy_at:'2026-11-09T10:00:00.000Z',customer_happy_by:'PERSON-tanya',handover_status:'NotReady',financial_status:'Pending',cancellation_at:null,cancellation_by:null,cancellation_reason:null,archived_at:null,next_action_at:n,account_policy_version:null,pilot_job:true,release_scope:'R1',created_at:n,created_by:'R1A-fixture',updated_at:n,updated_by:'R1A-fixture',version:1,source_system:'R1A-fixture',source_record_id:null,commit_id:'R1A-OPC'};
+  _r1aFixtureUpsert(store,'Jobs',jobRow);
+  _r1aFixtureUpsert(store,'WorkPackages',{id:'WP-r1a-opc-roof',job_id:jobId,trade:'Roof',required:true,planned_start:'2026-11-05',planned_end:'2026-11-06',actual_start:'2026-11-05',actual_end:'2026-11-06',status:'ConfirmedComplete',completion_outcome:'Complete',installer_confirmation_at:'2026-11-09T10:00:00.000Z',installer_confirmation_by:'PERSON-tanya',commissioning_required:true,sequence:1,revision:1,created_at:n,created_by:'R1A-fixture',updated_at:n,updated_by:'R1A-fixture',version:1,source_system:'R1A-fixture',commit_id:'R1A-OPC'});
+  _r1aFixtureUpsert(store,'Allocations',{id:'ALLOC-r1a-opc',work_package_id:'WP-r1a-opc-roof',person_id:'PERSON-installer-a',role:'Lead',active:true,created_at:n,created_by:'R1A-fixture',updated_at:n,updated_by:'R1A-fixture',version:1,source_system:'R1A-fixture',commit_id:'R1A-OPC'});
+  _r1aFixtureUpsert(store,'CommissioningSubmissions',{id:'CS-r1a-opc',job_id:jobId,work_package_id:'WP-r1a-opc-roof',allocation_id:'ALLOC-r1a-opc',installer_id:'PERSON-installer-a',template_version:'R1A-sample',status:'Accepted',submitted_at:'2026-11-09T09:00:00.000Z',reviewed_at:'2026-11-09T10:00:00.000Z',reviewed_by:'PERSON-tanya',review_notes:'R1A synthetic accepted',created_at:n,created_by:'R1A-fixture',updated_at:n,updated_by:'R1A-fixture',version:1,commit_id:'R1A-OPC'});
+  _r1aFixtureUpsert(store,'Tasks',{id:'TASK-r1a-opc-access',job_id:jobId,template_code:'R1A-ACCESS',instance_key:'R1A-OPC-ACCESS',group:'Aftercare',title:'R1A office access (DEV)',owner_id:'PERSON-tanya',backup_id:null,related_entity_type:'Jobs',related_entity_id:jobId,due_at:n,original_due_at:n,priority:2,status:'Open',blocking_reason:null,next_followup_at:null,completed_at:null,completed_by:null,completion_note:null,evidence_id:null,revision_required:false,created_rule_version:'R1A-1.0',created_at:n,created_by:'R1A-fixture',updated_at:n,updated_by:'R1A-fixture',version:1,source_system:'R1A-fixture',commit_id:'R1A-OPC'});
+  var job=store.get('Jobs',jobId);
+  var ghlLeft=store.list('Tasks').filter(function(t){return t.job_id===jobId&&t.template_code==='GHL01';}).length;
+  var ghlRows=store.list('GHLTasks').filter(function(g){return g.job_id===jobId;}).length;
+  var pass=!!job&&Number(job.version)===1&&!job.operational_complete_at&&job.workflow_stage==='Aftercare'&&job.pilot_job===true&&!!store.get('WorkPackages','WP-r1a-opc-roof')&&ghlLeft===0&&ghlRows===0;
+  return {pass:pass,detail:{job_id:jobId,expected_version:job?Number(job.version):null,retired:retired,ghl01_tasks_remaining:ghlLeft,ghl_rows_remaining:ghlRows}};
+}
+
+function runR1APrepareOperationalCompleteFixture(){
+  var store=_r1aCloudOptions().store;
+  var out=_r1aPrepareOperationalCompleteFixture(store);
+  return _r1aFixtureResult('R1A operational-complete fixture',out.pass,out.detail);
+}
+
+/* Reset ONLY J-r1a-booking namespaced synthetic state left by prior BOOKING_GATES attempts. */
+function _r1aResetBookingGatesSynthetic(store){
+  var jobId='J-r1a-booking',retired={tasks:[],audit:[],journal:[],task_events:[],outbox:[]};
+  store.list('Tasks').filter(function(t){return t.job_id===jobId;}).forEach(function(t){
+    store.list('TaskEvents').filter(function(e){return e.task_id===t.id;}).forEach(function(e){_r1aFixtureRetire(store,'TaskEvents',e.id);retired.task_events.push(e.id);});
+    _r1aFixtureRetire(store,'Tasks',t.id);retired.tasks.push(t.id);
+  });
+  store.list('AuditEvents').filter(function(a){return a.entity_id===jobId&&(a.action==='BookingGates'||(a.executing_service&&String(a.executing_service).indexOf('R1 AppSheet/S06')===0)||(a.commit_id&&String(a.commit_id).indexOf('R1A-')===0));}).forEach(function(a){_r1aFixtureRetire(store,'AuditEvents',a.id);retired.audit.push(a.id);});
+  store.list('CommitJournal').filter(function(j){return j.entity_id===jobId||(j.command_id&&String(j.command_id).indexOf('R1A-BKG')===0);}).forEach(function(j){_r1aFixtureRetire(store,'CommitJournal',j.id);retired.journal.push(j.id);});
+  store.list('Outbox').filter(function(o){return (o.correlation_id&&String(o.correlation_id).indexOf(jobId)>=0)||(o.job_id===jobId);}).forEach(function(o){_r1aFixtureRetire(store,'Outbox',o.id);retired.outbox.push(o.id);});
+  return retired;
+}
+
+function _r1aPrepareBookingGatesFixture(store){
+  var n='2026-09-06T00:00:00.000Z',jobId='J-r1a-booking';
+  var retired=_r1aResetBookingGatesSynthetic(store);
+  _r1aFixtureUpsert(store,'Customers',{id:'CUST-r1a-bkg',first_name:'R1A',last_name:'Booking',address_line1:'1 Pilot Lane',address_line2:'',town:'Testville',postcode:'TS1 1AA',email:'r1a-booking@test.example.invalid',phone:'07000000000',alternate_contact:null,contact_notes:null,created_at:n,created_by:'R1A-fixture',updated_at:n,updated_by:'R1A-fixture',version:1,source_system:'R1A-fixture',source_record_id:null,commit_id:'R1A-BKG'});
+  var jobRow={id:jobId,job_id:'SS-R1A-BKG',customer_id:'CUST-r1a-bkg',display_name:'R1A Booking Gates DEV',sold_submission_id:'R1A-sold-bkg',booking_submission_id:'R1A-booking-bkg',sold_at:n,salesperson_id:null,lead_source:'R1A',quote_reference:'Q-R1A-BKG',presale_file_id:null,finance_route:'Standard',contract_status:'Signed',contract_id:'C-R1A-BKG',contract_signed_at:n,contract_evidence_id:null,original_net_pence:400000,original_vat_pence:80000,original_gross_pence:480000,approved_change_pence:null,current_contract_gross_pence:480000,valuation_basis:'Standard',sold_booking_match_status:'Match',customer_details_verified_at:n,customer_details_verified_by:'PERSON-tanya',deposit_bank_confirmed_at:n,deposit_bank_confirmed_by:'PERSON-ben',deposit_bank_reference:'R1A-BKG-DEP',roof_required:false,electrical_required:false,scaffold_required:false,workflow_stage:'BookingInProgress',booking_approved_at:null,booking_approved_by:null,operational_complete_at:null,operational_complete_by:null,customer_happy_at:null,customer_happy_by:null,handover_status:'NotReady',financial_status:'Pending',cancellation_at:null,cancellation_by:null,cancellation_reason:null,archived_at:null,next_action_at:n,account_policy_version:null,pilot_job:true,release_scope:'R1',created_at:n,created_by:'R1A-fixture',updated_at:n,updated_by:'R1A-fixture',version:1,source_system:'R1A-fixture',source_record_id:null,commit_id:'R1A-BKG'};
+  _r1aFixtureUpsert(store,'Jobs',jobRow);
+  _r1aFixtureUpsert(store,'Tasks',{id:'TASK-r1a-bkg-access',job_id:jobId,template_code:'R1A-ACCESS',instance_key:'R1A-BKG-ACCESS',group:'Booking',title:'R1A office access (DEV)',owner_id:'PERSON-tanya',backup_id:null,related_entity_type:'Jobs',related_entity_id:jobId,due_at:n,original_due_at:n,priority:2,status:'Open',blocking_reason:null,next_followup_at:null,completed_at:null,completed_by:null,completion_note:null,evidence_id:null,revision_required:false,created_rule_version:'R1A-1.0',created_at:n,created_by:'R1A-fixture',updated_at:n,updated_by:'R1A-fixture',version:1,source_system:'R1A-fixture',commit_id:'R1A-BKG'});
+  var job=store.get('Jobs',jobId),cust=store.get('Customers','CUST-r1a-bkg');
+  var gateTasks=store.list('Tasks').filter(function(t){return t.job_id===jobId&&t.id!=='TASK-r1a-bkg-access';});
+  var pass=!!job&&!!cust&&Number(job.version)===1&&job.pilot_job===true&&job.release_scope==='R1'&&job.workflow_stage==='BookingInProgress'&&!job.booking_approved_at&&!!job.sold_submission_id&&!!job.booking_submission_id&&job.sold_booking_match_status==='Match'&&!!job.deposit_bank_confirmed_at&&job.finance_route==='Standard'&&job.contract_status==='Signed'&&typeof job.original_gross_pence==='number'&&job.original_gross_pence>0&&gateTasks.length===0;
+  return {pass:pass,detail:{job_id:jobId,expected_version:job?Number(job.version):null,retired:retired,gate_tasks_remaining:gateTasks.length}};
 }
 
 function runR1APrepareBookingGatesFixture(){
-  var store=_r1aCloudOptions().store,n='2026-09-06T00:00:00.000Z',jobId='J-r1a-booking';
-  _r1aFixtureIns(store,'Customers',{id:'CUST-r1a-bkg',first_name:'R1A',last_name:'Booking',address_line1:'1 Pilot Lane',address_line2:'',town:'Testville',postcode:'TS1 1AA',email:'r1a-booking@test.example.invalid',phone:'07000000000',alternate_contact:null,contact_notes:null,created_at:n,created_by:'R1A-fixture',updated_at:n,updated_by:'R1A-fixture',version:1,source_system:'R1A-fixture',source_record_id:null,commit_id:'R1A-BKG'});
-  _r1aFixtureIns(store,'Jobs',{id:jobId,job_id:'SS-R1A-BKG',customer_id:'CUST-r1a-bkg',display_name:'R1A Booking Gates DEV',sold_submission_id:'R1A-sold-bkg',booking_submission_id:'R1A-booking-bkg',sold_at:n,salesperson_id:null,lead_source:'R1A',quote_reference:'Q-R1A-BKG',presale_file_id:null,finance_route:'Standard',contract_status:'Signed',contract_id:'C-R1A-BKG',contract_signed_at:n,contract_evidence_id:null,original_net_pence:400000,original_vat_pence:80000,original_gross_pence:480000,approved_change_pence:null,current_contract_gross_pence:480000,valuation_basis:'Standard',sold_booking_match_status:'Match',customer_details_verified_at:n,customer_details_verified_by:'PERSON-tanya',deposit_bank_confirmed_at:n,deposit_bank_confirmed_by:'PERSON-ben',deposit_bank_reference:'R1A-BKG-DEP',roof_required:false,electrical_required:false,scaffold_required:false,workflow_stage:'BookingInProgress',booking_approved_at:null,booking_approved_by:null,operational_complete_at:null,operational_complete_by:null,customer_happy_at:null,customer_happy_by:null,handover_status:'NotReady',financial_status:'Pending',cancellation_at:null,cancellation_by:null,cancellation_reason:null,archived_at:null,next_action_at:n,account_policy_version:null,pilot_job:true,release_scope:'R1',created_at:n,created_by:'R1A-fixture',updated_at:n,updated_by:'R1A-fixture',version:1,source_system:'R1A-fixture',source_record_id:null,commit_id:'R1A-BKG'});
-  _r1aFixtureIns(store,'Tasks',{id:'TASK-r1a-bkg-access',job_id:jobId,template_code:'R1A-ACCESS',instance_key:'R1A-BKG-ACCESS',group:'Booking',title:'R1A office access (DEV)',owner_id:'PERSON-tanya',backup_id:null,related_entity_type:'Jobs',related_entity_id:jobId,due_at:n,original_due_at:n,priority:2,status:'Open',blocking_reason:null,next_followup_at:null,completed_at:null,completed_by:null,completion_note:null,evidence_id:null,revision_required:false,created_rule_version:'R1A-1.0',created_at:n,created_by:'R1A-fixture',updated_at:n,updated_by:'R1A-fixture',version:1,source_system:'R1A-fixture',commit_id:'R1A-BKG'});
-  var job=store.get('Jobs',jobId);
-  return _r1aFixtureResult('R1A booking-gates fixture',!!job&&job.pilot_job===true&&job.workflow_stage==='BookingInProgress',{job_id:jobId,expected_version:Number(job.version)});
+  var store=_r1aCloudOptions().store;
+  var out=_r1aPrepareBookingGatesFixture(store);
+  return _r1aFixtureResult('R1A booking-gates fixture',out.pass,out.detail);
 }

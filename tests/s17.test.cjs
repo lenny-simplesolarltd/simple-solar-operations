@@ -125,6 +125,11 @@ test('S17 06: operational queue returns tasks by category', () => {
   const qUnknown = core._s17OperationalQueue(s, 'nonexistent');
   assert.ok(qUnknown.error);
   assert.ok(qUnknown.available);
+  s.insert('Tasks', { id: 'T-s17-ins01', job_id: 'J-s17-active', template_code: 'INS01', group: 'Install', title: 'Installer call', owner_id: 'PERSON-tanya', status: 'Open', due_at: '2026-09-08T09:00:00.000Z', created_at: '2026-01-01T00:00:00Z', created_by: 'S17', updated_at: '2026-01-01T00:00:00Z', updated_by: 'S17', version: 1, source_system: 'S17', commit_id: 'S17' });
+  s.insert('Tasks', { id: 'T-s17-ins04', job_id: 'J-s17-active', template_code: 'INS04', group: 'Aftercare', title: 'Customer call', owner_id: 'PERSON-tanya', status: 'Open', due_at: '2026-09-08T09:00:00.000Z', created_at: '2026-01-01T00:00:00Z', created_by: 'S17', updated_at: '2026-01-01T00:00:00Z', updated_by: 'S17', version: 1, source_system: 'S17', commit_id: 'S17' });
+  const calls = core._s17OperationalQueue(s, 'calls');
+  assert.ok(calls.tasks.some(t => t.id === 'T-s17-ins01'));
+  assert.ok(calls.tasks.some(t => t.id === 'T-s17-ins04'));
 });
 
 test('S17 07: admin ReleaseModes returns all 20 functions', () => {

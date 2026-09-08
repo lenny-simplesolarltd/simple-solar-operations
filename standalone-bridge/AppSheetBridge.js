@@ -383,7 +383,7 @@ function _s17OperationalQueue(store, queueName) {
     'booking': function () { return allTasks.filter(function (t) { return t.group === 'Booking' || t.group === 'Prebooking'; }); },
     'materials': function () { return allTasks.filter(function (t) { return t.group === 'Materials' || t.template_code === 'MAT01' || t.template_code === 'MAT05'; }); },
     'scaffold': function () { return allTasks.filter(function (t) { return t.group === 'Scaffold' || t.template_code === 'SCA01'; }); },
-    'calls': function () { return allTasks.filter(function (t) { return t.group === 'Calls' || t.template_code === 'CAL01'; }); },
+    'calls': function () { return allTasks.filter(function (t) { return t.group === 'Calls' || ['CAL01', 'INS01', 'INS04'].indexOf(t.template_code) >= 0; }); },
     'issues': function () { return allTasks.filter(function (t) { return t.related_entity_type === 'Issues'; }); },
     'commissioning': function () { return allTasks.filter(function (t) { return t.group === 'Commissioning'; }); },
     'handover': function () { return allTasks.filter(function (t) { return t.group === 'Handover'; }); },
@@ -1633,14 +1633,16 @@ function processJobPayments(jobId, store, options = {}) {
 
 /* R1 AppSheet command/read boundary. DEV only; AppSheet is never authoritative. */
 const R1A_DEV_SHEET_ID = '1z7PNZtDdC4Z5eLbmTuQdqp0QpJSmuEvx3QvN3VyNTsc';
-const R1A_READS = ['IDENTITY_PROBE','OFFICE_HOME','JOB_OVERVIEW','OPERATIONAL_QUEUE','RELEASE_MODE_STATUS','SYSTEM_STATUS','AUDIT_HISTORY','ACTION_AVAILABILITY','TASK_ACTION_AVAILABILITY'];
+const R1A_READS = ['IDENTITY_PROBE','OFFICE_HOME','JOB_SEARCH','JOB_OVERVIEW','OPERATIONAL_QUEUE','RELEASE_MODE_STATUS','SYSTEM_STATUS','AUDIT_HISTORY','ACTION_AVAILABILITY','TASK_ACTION_AVAILABILITY'];
 const R1A_COMMANDS = ['TASK_COMPLETE','CALL_RECORD','ISSUE_UPDATE','PLANNER_UPDATE','CANCEL_JOB','REINSTATE_JOB','DEPOSIT_CONFIRM','OPERATIONAL_COMPLETE','BOOKING_GATES','SOLD_INTAKE','BOOKING_INTAKE'];
+const R1A_QUEUES = ['booking','calls','issues','payments','ghl','cancellation'];
 
 function _r1aCopy(v) { return JSON.parse(JSON.stringify(v)); }
 function _r1aRefuse(code) { var e=new Error(code); e.code=code; throw e; }
 function _r1aObject(v) { return v && typeof v==='object' && !Array.isArray(v); }
 function _r1aKeys(v, allowed) { if(!_r1aObject(v) || Object.keys(v).some(function(k){return allowed.indexOf(k)<0;})) _r1aRefuse('R1A_INVALID_FIELDS'); }
 function _r1aText(v) { return typeof v==='string' && v.trim().length>0; }
+function _r1aFlag(ok,type,entity,reason){var o={command_type:type,available:!!ok};if(entity)o.expected_version_entity=entity;if(!ok&&reason)o.reason=reason;return o;}
 
 function _r1aActor(store,email) {
   if(!_r1aText(email)) _r1aRefuse('R1A_AUTHENTICATED_EMAIL_REQUIRED');
@@ -1678,7 +1680,7 @@ function _r1aFilterTasks(store,a,items){return (items||[]).filter(function(t){re
 function _r1aCreate(options){
   var store=options.store, reads=options.reads||{}, services=options.services||{};
   function read(input){
-    _r1aGuardEnvironment(options);_r1aKeys(input,['read_type','job_id','task_id','queue','as_of']);
+    _r1aGuardEnvironment(options);_r1aKeys(input,['read_type','job_id','task_id','queue','as_of','query']);
     if(R1A_READS.indexOf(input.read_type)<0)_r1aRefuse('R1A_UNKNOWN_READ');
     if(input.read_type==='IDENTITY_PROBE'){
       if(Object.keys(input).length!==1)_r1aRefuse('R1A_INVALID_FIELDS');
@@ -1696,13 +1698,40 @@ function _r1aCreate(options){
       ['overdue','due_today','due_soon','booking_review'].forEach(function(k){out[k]=_r1aFilterTasks(store,a,out[k]);});
       out.unresolved_issues=(out.unresolved_issues||[]).filter(function(i){return _r1aAssigned(store,a,i.job_id);});
       out.overdue_count=out.overdue.length;out.due_today_count=out.due_today.length;out.due_soon_count=out.due_soon.length;out.booking_review_count=out.booking_review.length;out.unresolved_issues_count=out.unresolved_issues.length;
+    } else if(input.read_type==='JOB_SEARCH'){
+      if(!_r1aText(input.query))_r1aRefuse('R1A_QUERY_REQUIRED');
+      if(typeof reads.jobSearch!=='function')_r1aRefuse('R1A_READ_UNSUPPORTED');
+      var results=(reads.jobSearch(store,input.query)||[]).filter(function(r){var j=store.get('Jobs',r.id);return !!j&&j.pilot_job===true&&j.release_scope==='R1'&&_r1aAssigned(store,a,r.id);});
+      out={query:input.query.trim(),count:results.length,results:results};
     } else if(input.read_type==='JOB_OVERVIEW'){_r1aAuthorizeJob(store,a,input.job_id);out=reads.jobOverview(store,input.job_id);
-    } else if(input.read_type==='OPERATIONAL_QUEUE'){out=reads.operationalQueue(store,input.queue);out.tasks=_r1aFilterTasks(store,a,out.tasks||[]);out.count=out.tasks.length;
+    } else if(input.read_type==='OPERATIONAL_QUEUE'){
+      if(!_r1aText(input.queue)||R1A_QUEUES.indexOf(input.queue)<0)_r1aRefuse('R1A_QUEUE_NOT_IN_R1');
+      out=reads.operationalQueue(store,input.queue);out.tasks=_r1aFilterTasks(store,a,out.tasks||[]);out.count=out.tasks.length;
     } else if(input.read_type==='RELEASE_MODE_STATUS'){if(!_r1aAdmin(a))_r1aRefuse('R1A_ROLE_DENIED');out=reads.releaseModes(store);
     } else if(input.read_type==='SYSTEM_STATUS'){if(!_r1aAdmin(a)&&a.roles.indexOf('Office')<0)_r1aRefuse('R1A_ROLE_DENIED');out=reads.systemStatus(store);
     } else if(input.read_type==='AUDIT_HISTORY'){_r1aAuthorizeJob(store,a,input.job_id);out=reads.auditHistory(store,input.job_id);
-    } else if(input.read_type==='ACTION_AVAILABILITY'){var aj=_r1aAuthorizeJob(store,a,input.job_id);out=reads.actionAvailability(store,input.job_id);var active=!aj.archived_at&&['CancellationInProgress','Cancelled'].indexOf(aj.workflow_stage)<0,fn01=_r1aModeAvailable(store,'FN-01','Automated'),cancelModes=fn01&&_r1aModeAvailable(store,'FN-17','Manual')&&_r1aModeAvailable(store,'FN-20','Manual'),fn15=_r1aModeAvailable(store,'FN-15','Manual'),fn19=_r1aModeAvailable(store,'FN-19','Manual'),fn11=_r1aModeAvailable(store,'FN-11','Manual'),officeMgr=_r1aOfficeManager(a);out.appsheet_commands={call_record:{command_type:'CALL_RECORD',available:active&&fn01,expected_version_entity:'Tasks'},issue_update:{command_type:'ISSUE_UPDATE',available:active&&fn01,expected_version_entity:'Issues'},planner_update:{command_type:'PLANNER_UPDATE',available:active&&fn01,expected_version_entity:'WorkPackages'},cancel_job:{command_type:'CANCEL_JOB',available:active&&cancelModes,expected_version_entity:'Jobs'},reinstate_job:{command_type:'REINSTATE_JOB',available:aj.workflow_stage==='Cancelled'&&cancelModes,expected_version_entity:'Jobs'},deposit_confirm:{command_type:'DEPOSIT_CONFIRM',available:active&&fn15&&_r1aAdmin(a)&&!aj.deposit_bank_confirmed_at,expected_version_entity:'Jobs'},operational_complete:{command_type:'OPERATIONAL_COMPLETE',available:active&&fn19&&fn11&&officeMgr&&!aj.operational_complete_at&&['InProgress','Aftercare'].indexOf(aj.workflow_stage)>=0,expected_version_entity:'Jobs'},booking_gates:{command_type:'BOOKING_GATES',available:active&&fn01&&['Prebooking','ReadyToBook','BookingInProgress'].indexOf(aj.workflow_stage)>=0,expected_version_entity:'Jobs'},sold_intake:{command_type:'SOLD_INTAKE',available:false,reason:'INTAKE_POLICY_NOT_APPROVED'},booking_intake:{command_type:'BOOKING_INTAKE',available:false,reason:'INTAKE_POLICY_NOT_APPROVED'}};
-    } else {var t=store.get('Tasks',input.task_id);if(!t)_r1aRefuse('R1A_TASK_NOT_FOUND');if(t.job_id)_r1aAuthorizeJob(store,a,t.job_id);else if(t.owner_id!==a.id&&!_r1aAdmin(a))_r1aRefuse('R1A_TASK_ACCESS_DENIED');out=reads.taskActionAvailability(store,input.task_id);out.appsheet_commands={task_complete:{command_type:'TASK_COMPLETE',available:!!(out.actions&&out.actions.complete&&out.actions.complete.available)&&(t.owner_id===a.id||t.backup_id===a.id||_r1aAdmin(a)),expected_version_entity:'Tasks'}};}
+    } else if(input.read_type==='ACTION_AVAILABILITY'){
+      var aj=_r1aAuthorizeJob(store,a,input.job_id);out=reads.actionAvailability(store,input.job_id);
+      var active=!aj.archived_at&&['CancellationInProgress','Cancelled'].indexOf(aj.workflow_stage)<0,fn01=_r1aModeAvailable(store,'FN-01','Automated'),cancelModes=fn01&&_r1aModeAvailable(store,'FN-17','Manual')&&_r1aModeAvailable(store,'FN-20','Manual'),fn15=_r1aModeAvailable(store,'FN-15','Manual'),fn19=_r1aModeAvailable(store,'FN-19','Manual'),fn11=_r1aModeAvailable(store,'FN-11','Manual'),officeMgr=_r1aOfficeManager(a),isAdmin=_r1aAdmin(a);
+      var depOk=active&&fn15&&isAdmin&&!aj.deposit_bank_confirmed_at,opcOk=active&&fn19&&fn11&&officeMgr&&!aj.operational_complete_at&&['InProgress','Aftercare'].indexOf(aj.workflow_stage)>=0,bkgOk=active&&fn01&&['Prebooking','ReadyToBook','BookingInProgress'].indexOf(aj.workflow_stage)>=0,reinOk=aj.workflow_stage==='Cancelled'&&cancelModes;
+      out.appsheet_commands={
+        call_record:_r1aFlag(active&&fn01,'CALL_RECORD','Tasks',!active?'JOB_NOT_ACTIONABLE':'MODE_UNAVAILABLE'),
+        issue_update:_r1aFlag(active&&fn01,'ISSUE_UPDATE','Issues',!active?'JOB_NOT_ACTIONABLE':'MODE_UNAVAILABLE'),
+        planner_update:_r1aFlag(active&&fn01,'PLANNER_UPDATE','WorkPackages',!active?'JOB_NOT_ACTIONABLE':'MODE_UNAVAILABLE'),
+        cancel_job:_r1aFlag(active&&cancelModes,'CANCEL_JOB','Jobs',!active?'JOB_NOT_ACTIONABLE':'MODE_UNAVAILABLE'),
+        reinstate_job:_r1aFlag(reinOk,'REINSTATE_JOB','Jobs',aj.workflow_stage!=='Cancelled'?'STAGE_NOT_CANCELLED':'MODE_UNAVAILABLE'),
+        deposit_confirm:_r1aFlag(depOk,'DEPOSIT_CONFIRM','Jobs',!active?'JOB_NOT_ACTIONABLE':!isAdmin?'ADMIN_OR_MANAGER_REQUIRED':!fn15?'MODE_UNAVAILABLE':'ALREADY_CONFIRMED'),
+        operational_complete:_r1aFlag(opcOk,'OPERATIONAL_COMPLETE','Jobs',!active?'JOB_NOT_ACTIONABLE':!officeMgr?'OFFICE_OR_ADMIN_REQUIRED':!(fn19&&fn11)?'MODE_UNAVAILABLE':aj.operational_complete_at?'ALREADY_COMPLETE':'STAGE_NOT_ELIGIBLE'),
+        booking_gates:_r1aFlag(bkgOk,'BOOKING_GATES','Jobs',!active?'JOB_NOT_ACTIONABLE':!fn01?'MODE_UNAVAILABLE':'STAGE_NOT_ELIGIBLE'),
+        sold_intake:_r1aFlag(false,'SOLD_INTAKE',null,'INTAKE_POLICY_NOT_APPROVED'),
+        booking_intake:_r1aFlag(false,'BOOKING_INTAKE',null,'INTAKE_POLICY_NOT_APPROVED')
+      };
+    } else {
+      var t=store.get('Tasks',input.task_id);if(!t)_r1aRefuse('R1A_TASK_NOT_FOUND');if(t.job_id)_r1aAuthorizeJob(store,a,t.job_id);else if(t.owner_id!==a.id&&!_r1aAdmin(a))_r1aRefuse('R1A_TASK_ACCESS_DENIED');
+      out=reads.taskActionAvailability(store,input.task_id);
+      var completeAvail=!!(out.actions&&out.actions.complete&&out.actions.complete.available),ownerOk=t.owner_id===a.id||t.backup_id===a.id||_r1aAdmin(a);
+      out.appsheet_commands={task_complete:_r1aFlag(completeAvail&&ownerOk,'TASK_COMPLETE','Tasks',!completeAvail?'COMPLETE_NOT_AVAILABLE':'TASK_OWNER_OR_BACKUP_REQUIRED')};
+    }
     return {ok:true,read_type:input.read_type,actor_id:a.id,data:_r1aCopy(out)};
   }
   function command(input){
@@ -1779,7 +1808,7 @@ function _r1sServices(){return{TASK_COMPLETE:_r1sTaskComplete,CALL_RECORD:_r1sCa
 function _r1aCloudOptions(){
   var store=_s17CloudStore();
   store.withLock=function(fn){var lock=LockService.getScriptLock();lock.waitLock(30000);try{return fn();}finally{lock.releaseLock();}};
-  return {store:store,config:{environment:'DEV',sheetId:'1z7PNZtDdC4Z5eLbmTuQdqp0QpJSmuEvx3QvN3VyNTsc'},actorEmail:function(){return Session.getActiveUser().getEmail();},effectiveUserEmail:function(){return Session.getEffectiveUser().getEmail();},reads:{officeHome:_s17OfficeToday,jobOverview:_s17JobOverview,operationalQueue:_s17OperationalQueue,releaseModes:_s17AdminReleaseModes,systemStatus:_s17AdminSystemStatus,auditHistory:_s17AuditHistory,actionAvailability:_s17ActionAvailability,taskActionAvailability:_s17TaskActionAvailability},services:_r1sServices()};
+  return {store:store,config:{environment:'DEV',sheetId:'1z7PNZtDdC4Z5eLbmTuQdqp0QpJSmuEvx3QvN3VyNTsc'},actorEmail:function(){return Session.getActiveUser().getEmail();},effectiveUserEmail:function(){return Session.getEffectiveUser().getEmail();},reads:{officeHome:_s17OfficeToday,jobSearch:_s17JobSearch,jobOverview:_s17JobOverview,operationalQueue:_s17OperationalQueue,releaseModes:_s17AdminReleaseModes,systemStatus:_s17AdminSystemStatus,auditHistory:_s17AuditHistory,actionAvailability:_s17ActionAvailability,taskActionAvailability:_s17TaskActionAvailability},services:_r1sServices()};
 }
 function appSheetR1Read(requestJson){try{return JSON.stringify(_r1aCreate(_r1aCloudOptions()).read(JSON.parse(requestJson)));}catch(e){return JSON.stringify({ok:false,error:e.code||e.message||'R1A_REFUSED'});}}
 function appSheetR1Command(requestJson){try{return JSON.stringify(_r1aCreate(_r1aCloudOptions()).command(JSON.parse(requestJson)));}catch(e){return JSON.stringify({ok:false,error:e.code||e.message||'R1A_REFUSED'});}}
