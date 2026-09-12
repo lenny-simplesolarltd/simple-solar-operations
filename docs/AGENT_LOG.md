@@ -57,3 +57,11 @@ Chronological record of autonomous implementation batches. Newest last. Each ent
 - Tests: `tests/backup.test.cjs` 10 pass (incl. Drive/Spreadsheet stubs proving DEV tables untouched); full suite 768/768.
 - Cloud/browser: BLOCKED. Steps in `docs/BACKUP-implementation.md`.
 - Backlog reconciled as done with pointers: Commissioning framework, Missing commissioning reminder, Handover framework, 25/35/40 finance workflow, Payment status, Payment call tasks, Health dashboard, Archive/restore.
+
+## 2026-09-12 — Batch 7 (Claude): resilience review, failure alerts, Xero adapter (disabled)
+
+- Inspected: spec §3 outbox/uncertain outcome rules and dashboard indicators, RA01 (review tasks for uncertain outcomes, failure alerts, manual check), finance rules (Zapier/Xero route, stored ids, never delete authorised invoices, manual bank confirmation never fabricated), S13 intents and statuses, S17 outbox reads.
+- Implemented: `resilience/review.js` (+ cloud adapter) → unified review queue, RS-REVIEW/RS-RECOVERY tasks, RS-ALERT daily alerts, audited outbox resolution; `xero/adapter.js` (+ cloud adapter) → envelopes from S13 intents, DISABLED-by-default dispatch requiring LIVE config + FN-09 pilot + injected transport (none exists; no HTTP client or endpoint anywhere), idempotent invoice/payment callbacks, review/cancel task. Build `scripts/build-resilience.cjs` → `apps-script/resilience/ResilienceReview.js`, `apps-script/xero/XeroAdapter.js`.
+- Tests: `tests/resilience.test.cjs` 11 pass; full suite 779/779.
+- Cloud/browser: BLOCKED. Steps in `docs/RESILIENCE-implementation.md`.
+- Decisions: review/alert task codes are module defaults (no new seed templates); calendar outbox rows stay with the calendar service; uncertain Xero outcomes go straight to review, transient errors retry up to 3 times; a Confirmed stage keeps its status on callback.

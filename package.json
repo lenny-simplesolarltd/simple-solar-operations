@@ -48,7 +48,9 @@
     "build:resource": "node scripts/build-resource.cjs",
     "test:resource": "npm run build:resource && node --test tests/resource.test.cjs",
     "build:backup": "node scripts/build-backup.cjs",
-    "test:backup": "npm run build:backup && node --test tests/backup.test.cjs"
+    "test:backup": "npm run build:backup && node --test tests/backup.test.cjs",
+    "build:resilience": "node scripts/build-resilience.cjs",
+    "test:resilience": "npm run build:resilience && node --test tests/resilience.test.cjs"
   },
   "engines": {
     "node": ">=22"
