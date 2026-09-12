@@ -1,5 +1,5 @@
 /* S02 schema data — generated from schema/tables.json.
- * Do not edit manually. Regenerate with: node -e "..." > apps-script/S02SchemaData.js
+ * Do not edit manually. Regenerate with: node schema/generate-embedded.js
  * Repository schema/tables.json is the authoritative source.
  */
 

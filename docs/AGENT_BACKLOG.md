@@ -24,9 +24,9 @@ CLAUDE:
 - [x] Calendar cancellation handling — CLAUDE 12 Sep 2026: replace-installer and S15 cancellations delete the DEV event (or succeed safely when absent); S15 rows stay human-reviewed with Retry/MarkCancelled/AdoptEvent.
 - [x] Calendar audit/error recovery — CLAUDE 12 Sep 2026: AuditEvents per outcome, backoff 1/2/4/8/16 min then NeedsReview, stalled-Processing recovery, `_calResolveReview` idempotent per command, `_calStatus` review queue.
 
-- [ ] Scaffold company/config model
-- [ ] Scaffold booking workflow
-- [ ] Scaffold planner integration
+- [x] Scaffold company/config model — CLAUDE 12 Sep 2026: `scaffold/workflow.js` `_scfScaffolders/_scfConfigureScaffolder` (real Companies type Scaffolder + Contacts, audited, idempotent; synthetic S09 company refused for non-synthetic jobs; no real scaffolder invented). See docs/SCAFFOLD-implementation.md.
+- [x] Scaffold booking workflow — CLAUDE 12 Sep 2026: request → confirm (acknowledged revision) → erected → strip authorised (customer happy + no strip-blocking issues) → strip planned (new revision) → strip confirmed → stripped; change dates = new revision needing re-acknowledgement; cancel refused once erected; complaints in Issues never auto-closed; chase tasks; Friday weekly lists; SCA01–SCA05 (SCA02–05 added to seed per spec); captured Draft communications, nothing sent. 18 tests. DEV cloud NOT RUN.
+- [x] Scaffold planner integration — CLAUDE 12 Sep 2026: `_scfPlannerRows` and `_s11BuildPlanner.scaffold` rows (Erect/Strip/StripForecast with acknowledged/confirmed/actual flags); S11 bundle headers extended.
 
 - [ ] Materials requirements workflow
 - [ ] Merchant order workflow

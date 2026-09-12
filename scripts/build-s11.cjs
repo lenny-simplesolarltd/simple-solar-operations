@@ -1,6 +1,6 @@
 const fs=require('node:fs'),schema=require('../schema/tables.json');
 const core=fs.readFileSync('s11/planner.js','utf8').replace("'use strict';",'').replace(/module\.exports=[\s\S]*$/,'');
-const names=['Tasks','Jobs','WorkPackages','Allocations','People','Holidays','Settings','CalendarLinks','Outbox','CommitJournal','AuditEvents','ReleaseModes'];
+const names=['Tasks','Jobs','WorkPackages','Allocations','People','Holidays','Settings','CalendarLinks','Outbox','CommitJournal','AuditEvents','ReleaseModes','ScaffoldBookings','Companies'];
 const headers=Object.fromEntries(names.map(n=>[n,schema.tables.find(t=>t.name===n).columns.map(c=>c.name)]));
 const prefix=`/* S11 DEV planning/Calendar capture bundle. No Calendar API calls. */
 var S11_HEADERS=${JSON.stringify(headers)};
