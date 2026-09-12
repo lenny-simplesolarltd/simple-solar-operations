@@ -3,9 +3,9 @@
 'use strict';
 
 const R1A_BOUND_DEV_SHEET_ID = '1z7PNZtDdC4Z5eLbmTuQdqp0QpJSmuEvx3QvN3VyNTsc';
-const R1A_BOUND_READS = ['IDENTITY_PROBE','OFFICE_HOME','JOB_SEARCH','JOB_OVERVIEW','OPERATIONAL_QUEUE','RELEASE_MODE_STATUS','SYSTEM_STATUS','AUDIT_HISTORY','ACTION_AVAILABILITY','TASK_ACTION_AVAILABILITY'];
-const R1A_BOUND_COMMANDS = ['TASK_COMPLETE','CALL_RECORD','ISSUE_UPDATE','PLANNER_UPDATE','CANCEL_JOB','REINSTATE_JOB','DEPOSIT_CONFIRM','OPERATIONAL_COMPLETE','BOOKING_GATES','SOLD_INTAKE','BOOKING_INTAKE'];
-const R1A_BOUND_QUEUES = ['booking','calls','issues','payments','ghl','cancellation'];
+const R1A_BOUND_READS = ['IDENTITY_PROBE','OFFICE_HOME','JOB_SEARCH','JOB_OVERVIEW','OPERATIONAL_QUEUE','RELEASE_MODE_STATUS','SYSTEM_STATUS','AUDIT_HISTORY','ACTION_AVAILABILITY','TASK_ACTION_AVAILABILITY','MY_TASKS','TEAM_TASKS','PLANNER_3_WEEKS','PLANNER_6_WEEKS','INTAKE_REVIEW'];
+const R1A_BOUND_COMMANDS = ['TASK_COMPLETE','CALL_RECORD','ISSUE_UPDATE','ISSUE_CREATE','PLANNER_UPDATE','MOVE_JOB','CHANGE_INSTALLER','CANCEL_JOB','REINSTATE_JOB','DEPOSIT_CONFIRM','OPERATIONAL_COMPLETE','BOOKING_GATES','SOLD_INTAKE','BOOKING_INTAKE'];
+const R1A_BOUND_QUEUES = ['booking','calls','issues','payments','ghl','cancellation','intake_review'];
 
 function _r1aCopy(v) { return JSON.parse(JSON.stringify(v)); }
 function _r1aRefuse(code) { var e=new Error(code); e.code=code; throw e; }
@@ -25,7 +25,8 @@ function _r1aActor(store,email) {
   return {id:person.id,email:normalized,roles:roles};
 }
 function _r1aAdmin(a){return a.roles.indexOf('Admin')>=0||a.roles.indexOf('Manager')>=0;}
-function _r1aOffice(a){return _r1aAdmin(a)||a.roles.indexOf('Office')>=0||a.roles.indexOf('VariationApprover')>=0;}
+function _r1aDirector(a){return _r1aAdmin(a)||a.roles.indexOf('Director')>=0;}
+function _r1aOffice(a){return _r1aDirector(a)||a.roles.indexOf('Office')>=0||a.roles.indexOf('VariationApprover')>=0;}
 function _r1aOfficeManager(a){return _r1aAdmin(a)||a.roles.indexOf('Office')>=0;}
 function _r1aGuardEnvironment(options){
   if(!options||!options.store||!options.config||options.config.environment!=='DEV'||options.config.sheetId!==R1A_BOUND_DEV_SHEET_ID||options.store.getSheetId()!==R1A_BOUND_DEV_SHEET_ID||options.store.getEnvironment()!=='DEV') _r1aRefuse('R1A_DEV_ONLY');
@@ -83,19 +84,45 @@ function _r1aCreate(options){
     } else if(input.read_type==='ACTION_AVAILABILITY'){
       var aj=_r1aAuthorizeJob(store,a,input.job_id);out=reads.actionAvailability(store,input.job_id);
       var active=!aj.archived_at&&['CancellationInProgress','Cancelled'].indexOf(aj.workflow_stage)<0,fn01=_r1aModeAvailable(store,'FN-01','Automated'),cancelModes=fn01&&_r1aModeAvailable(store,'FN-17','Manual')&&_r1aModeAvailable(store,'FN-20','Manual'),fn15=_r1aModeAvailable(store,'FN-15','Manual'),fn19=_r1aModeAvailable(store,'FN-19','Manual'),fn11=_r1aModeAvailable(store,'FN-11','Manual'),officeMgr=_r1aOfficeManager(a),isAdmin=_r1aAdmin(a);
-      var depOk=active&&fn15&&isAdmin&&!aj.deposit_bank_confirmed_at,opcOk=active&&fn19&&fn11&&officeMgr&&!aj.operational_complete_at&&['InProgress','Aftercare'].indexOf(aj.workflow_stage)>=0,bkgOk=active&&fn01&&['Prebooking','ReadyToBook','BookingInProgress'].indexOf(aj.workflow_stage)>=0,reinOk=aj.workflow_stage==='Cancelled'&&cancelModes;
+      var depOk=active&&fn15&&_r1aDirector(a)&&!aj.deposit_bank_confirmed_at,opcOk=active&&fn19&&fn11&&officeMgr&&!aj.operational_complete_at&&['InProgress','Aftercare'].indexOf(aj.workflow_stage)>=0,bkgOk=active&&fn01&&['Prebooking','ReadyToBook','BookingInProgress'].indexOf(aj.workflow_stage)>=0,reinOk=aj.workflow_stage==='Cancelled'&&cancelModes,bookInOk=active&&fn01&&['Prebooking','ReadyToBook','BookingInProgress'].indexOf(aj.workflow_stage)>=0;
+      var moveOk=active&&fn01&&['Booked','AwaitingInstallation','InProgress','BookingInProgress'].indexOf(aj.workflow_stage)>=0;
+      var changeOk=moveOk;
       out.appsheet_commands={
         call_record:_r1aFlag(active&&fn01,'CALL_RECORD','Tasks',!active?'JOB_NOT_ACTIONABLE':'MODE_UNAVAILABLE'),
         issue_update:_r1aFlag(active&&fn01,'ISSUE_UPDATE','Issues',!active?'JOB_NOT_ACTIONABLE':'MODE_UNAVAILABLE'),
+        issue_create:_r1aFlag(active&&fn01,'ISSUE_CREATE','Jobs',!active?'JOB_NOT_ACTIONABLE':'MODE_UNAVAILABLE'),
         planner_update:_r1aFlag(active&&fn01,'PLANNER_UPDATE','WorkPackages',!active?'JOB_NOT_ACTIONABLE':'MODE_UNAVAILABLE'),
+        move_job:_r1aFlag(moveOk,'MOVE_JOB','Jobs',!active?'JOB_NOT_ACTIONABLE':!fn01?'MODE_UNAVAILABLE':'STAGE_NOT_ELIGIBLE'),
+        change_installer:_r1aFlag(changeOk,'CHANGE_INSTALLER','WorkPackages',!active?'JOB_NOT_ACTIONABLE':!fn01?'MODE_UNAVAILABLE':'STAGE_NOT_ELIGIBLE'),
         cancel_job:_r1aFlag(active&&cancelModes,'CANCEL_JOB','Jobs',!active?'JOB_NOT_ACTIONABLE':'MODE_UNAVAILABLE'),
         reinstate_job:_r1aFlag(reinOk,'REINSTATE_JOB','Jobs',aj.workflow_stage!=='Cancelled'?'STAGE_NOT_CANCELLED':'MODE_UNAVAILABLE'),
-        deposit_confirm:_r1aFlag(depOk,'DEPOSIT_CONFIRM','Jobs',!active?'JOB_NOT_ACTIONABLE':!isAdmin?'ADMIN_OR_MANAGER_REQUIRED':!fn15?'MODE_UNAVAILABLE':'ALREADY_CONFIRMED'),
+        deposit_confirm:_r1aFlag(depOk,'DEPOSIT_CONFIRM','Jobs',!active?'JOB_NOT_ACTIONABLE':!_r1aDirector(a)?'DIRECTOR_REQUIRED':!fn15?'MODE_UNAVAILABLE':'ALREADY_CONFIRMED'),
         operational_complete:_r1aFlag(opcOk,'OPERATIONAL_COMPLETE','Jobs',!active?'JOB_NOT_ACTIONABLE':!officeMgr?'OFFICE_OR_ADMIN_REQUIRED':!(fn19&&fn11)?'MODE_UNAVAILABLE':aj.operational_complete_at?'ALREADY_COMPLETE':'STAGE_NOT_ELIGIBLE'),
         booking_gates:_r1aFlag(bkgOk,'BOOKING_GATES','Jobs',!active?'JOB_NOT_ACTIONABLE':!fn01?'MODE_UNAVAILABLE':'STAGE_NOT_ELIGIBLE'),
-        sold_intake:_r1aFlag(false,'SOLD_INTAKE',null,'INTAKE_POLICY_NOT_APPROVED'),
-        booking_intake:_r1aFlag(false,'BOOKING_INTAKE',null,'INTAKE_POLICY_NOT_APPROVED')
+        sold_intake:_r1aFlag(fn01,'SOLD_INTAKE',null,fn01?null:'MODE_UNAVAILABLE'),
+        booking_intake:_r1aFlag(bookInOk,'BOOKING_INTAKE','Jobs',!active?'JOB_NOT_ACTIONABLE':!fn01?'MODE_UNAVAILABLE':'STAGE_NOT_ELIGIBLE')
       };
+    } else if(input.read_type==='MY_TASKS'){
+      var home=reads.officeHome(store,{as_of:input.as_of});
+      var mine=_r1aFilterTasks(store,a,(home.overdue||[]).concat(home.due_today||[]).concat(home.due_soon||[]).concat(home.booking_review||[]));
+      // Deduplicate by id
+      var seen={},tasks=[];mine.forEach(function(t){if(!seen[t.id]){seen[t.id]=true;tasks.push(t);}});
+      out={scope:'my',as_of:home.as_of||input.as_of||null,count:tasks.length,tasks:tasks};
+    } else if(input.read_type==='TEAM_TASKS'){
+      if(!_r1aOfficeManager(a)&&!_r1aAdmin(a))_r1aRefuse('R1A_ROLE_DENIED');
+      var teamHome=reads.officeHome(store,{as_of:input.as_of});
+      var team=(teamHome.overdue||[]).concat(teamHome.due_today||[]).concat(teamHome.due_soon||[]).concat(teamHome.booking_review||[]);
+      var tseen={},ttasks=[];team.forEach(function(t){if(!tseen[t.id]&&(!t.job_id||(store.get('Jobs',t.job_id)||{}).pilot_job===true)){tseen[t.id]=true;ttasks.push(t);}});
+      out={scope:'team',as_of:teamHome.as_of||input.as_of||null,count:ttasks.length,tasks:ttasks};
+    } else if(input.read_type==='PLANNER_3_WEEKS'||input.read_type==='PLANNER_6_WEEKS'){
+      if(!_r1aOffice(a))_r1aRefuse('R1A_ROLE_DENIED');
+      var weeks=input.read_type==='PLANNER_3_WEEKS'?3:6;
+      if(typeof reads.planner!=='function')_r1aRefuse('R1A_READ_UNSUPPORTED');
+      out=reads.planner(store,input.as_of||null,weeks);
+    } else if(input.read_type==='INTAKE_REVIEW'){
+      if(!_r1aOfficeManager(a)&&!_r1aAdmin(a))_r1aRefuse('R1A_ROLE_DENIED');
+      var reviews=store.list('Intake').filter(function(i){return i.processing_status==='Review';}).map(function(i){return{id:i.id,intake_id:i.intake_id,form_type:i.form_type,submission_id:i.submission_id,job_id:i.job_id,validation_errors:i.validation_errors,received_at:i.received_at};});
+      out={queue:'intake_review',count:reviews.length,items:reviews};
     } else {
       var t=store.get('Tasks',input.task_id);if(!t)_r1aRefuse('R1A_TASK_NOT_FOUND');if(t.job_id)_r1aAuthorizeJob(store,a,t.job_id);else if(t.owner_id!==a.id&&!_r1aAdmin(a))_r1aRefuse('R1A_TASK_ACCESS_DENIED');
       out=reads.taskActionAvailability(store,input.task_id);
@@ -105,7 +132,7 @@ function _r1aCreate(options){
     return {ok:true,read_type:input.read_type,actor_id:a.id,data:_r1aCopy(out)};
   }
   function command(input){
-    var a=_r1aGuard(options);_r1aKeys(input,['command_id','command_type','job_id','task_id','issue_id','work_package_id','expected_version','payload']);
+    var a=_r1aGuard(options);_r1aKeys(input,['command_id','command_type','job_id','task_id','issue_id','work_package_id','old_allocation_id','expected_version','payload']);
     if(!_r1aText(input.command_id))_r1aRefuse('R1A_COMMAND_ID_REQUIRED');
     if(R1A_BOUND_COMMANDS.indexOf(input.command_type)<0)_r1aRefuse('R1A_UNKNOWN_COMMAND');
     if(!_r1aOffice(a))_r1aRefuse('R1A_ROLE_DENIED');
@@ -116,10 +143,17 @@ function _r1aCreate(options){
       if(task.job_id)_r1aAuthorizeJob(store,a,task.job_id);else if(task.owner_id!==a.id&&!_r1aAdmin(a))_r1aRefuse('R1A_TASK_ACCESS_DENIED');
       if(task.owner_id!==a.id&&task.backup_id!==a.id&&!_r1aAdmin(a))_r1aRefuse('R1A_TASK_ACCESS_DENIED');
       _r1aMode(store,'FN-01','Automated');
-    } else if(input.command_type==='SOLD_INTAKE'||input.command_type==='BOOKING_INTAKE') {
-      _r1aRefuse('R1A_INTAKE_POLICY_NOT_APPROVED');
+    } else if(input.command_type==='SOLD_INTAKE') {
+      /* Office/Admin/Manager, and Director because existing _r1aOffice includes Director. Installer/Store/Scaffolder already refused. No job mutation envelope. */
+      _r1aMode(store,'FN-01','Automated');
+    } else if(input.command_type==='BOOKING_INTAKE') {
+      if(!_r1aText(input.job_id))_r1aRefuse('R1A_JOB_NOT_FOUND');
+      _r1aAuthorizeJob(store,a,input.job_id);_r1aMode(store,'FN-01','Automated');
+    } else if(input.command_type==='ISSUE_CREATE') {
+      if(!_r1aText(input.job_id))_r1aRefuse('R1A_JOB_NOT_FOUND');
+      _r1aAuthorizeJob(store,a,input.job_id);_r1aMode(store,'FN-01','Automated');
     } else if(input.command_type==='DEPOSIT_CONFIRM') {
-      if(!_r1aAdmin(a))_r1aRefuse('R1A_ROLE_DENIED');
+      if(!_r1aDirector(a))_r1aRefuse('R1A_ROLE_DENIED');
       _r1aAuthorizeJob(store,a,input.job_id);_r1aMode(store,'FN-15','Manual');
     } else if(input.command_type==='OPERATIONAL_COMPLETE') {
       if(!_r1aOfficeManager(a))_r1aRefuse('R1A_ROLE_DENIED');
@@ -131,6 +165,8 @@ function _r1aCreate(options){
       if(input.command_type==='CALL_RECORD'){var ct=store.get('Tasks',input.task_id);if(!ct||ct.job_id!==input.job_id)_r1aRefuse('R1A_TASK_JOB_MISMATCH');if(ct.owner_id!==a.id&&ct.backup_id!==a.id&&!_r1aAdmin(a))_r1aRefuse('R1A_TASK_ACCESS_DENIED');}
       if(input.command_type==='ISSUE_UPDATE'){var ci=store.get('Issues',input.issue_id);if(!ci||ci.job_id!==input.job_id)_r1aRefuse('R1A_ISSUE_JOB_MISMATCH');}
       if(input.command_type==='PLANNER_UPDATE'){var cw=store.get('WorkPackages',input.work_package_id);if(!cw||cw.job_id!==input.job_id)_r1aRefuse('R1A_WORK_PACKAGE_JOB_MISMATCH');}
+      if(input.command_type==='MOVE_JOB'){/* job-scoped; activities validated in service */}
+      if(input.command_type==='CHANGE_INSTALLER'){var cwp=store.get('WorkPackages',input.work_package_id);if(!cwp||cwp.job_id!==input.job_id)_r1aRefuse('R1A_WORK_PACKAGE_JOB_MISMATCH');}
       if(input.command_type==='CANCEL_JOB'||input.command_type==='REINSTATE_JOB'){_r1aMode(store,'FN-17','Manual');_r1aMode(store,'FN-20','Manual');}
     }
     var result=service({request:_r1aCopy(input),actor:a,store:store});
@@ -161,7 +197,72 @@ function _r1sCallRecord(ctx){var r=ctx.request,s=ctx.store,a=ctx.actor,p=_r1sPay
 
 function _r1sIssueUpdate(ctx){var r=ctx.request,s=ctx.store,a=ctx.actor,p=_r1sPayload(r,['action','owner_id','status','resolution','evidence_id','customer_resolution_confirmed'],['action']),issue=s.get('Issues',r.issue_id),aid='AE-R1A-'+r.command_id;if(s.get('AuditEvents',aid))return{status:'Replayed',issue:issue,external_calls:0};if(!issue||Number(issue.version)!==Number(r.expected_version))_r1sErr('R1A_STALE_VERSION');var before=issue,after;if(p.action==='REASSIGN'){if(!_r1sText(p.owner_id))_r1sErr('R1A_REQUIRED_OWNER_ID');after=_s10ReassignIssue(issue.id,p.owner_id,a.id,s);}else if(p.action==='TRANSITION'){after=_s10TransitionIssue(issue.id,p.status,a.id,s,{resolution:p.resolution,evidence_id:p.evidence_id,customer_resolution_confirmed:p.customer_resolution_confirmed===true});}else _r1sErr('R1A_ISSUE_ACTION_DENIED');_r1sInsertAudit(s,aid,'Issues',issue.id,p.action,before,after,a.id,r.command_id,p.resolution,'R1 AppSheet/S10',new Date().toISOString());return{status:'Updated',issue:after,external_calls:0};}
 
+function _r1sEnsureIssueTaskTemplates(store){
+  var now=new Date().toISOString(),needed=[
+    {id:'TPL-ISS01',template_code:'ISS01',title:'Review variation',group:'Aftercare',default_owner_role:'VariationApprover'},
+    {id:'TPL-ISS02',template_code:'ISS02',title:'Investigate and resolve issue',group:'Aftercare',default_owner_role:'Office'}
+  ];
+  needed.forEach(function(tpl){
+    var byCode=store.list('TaskTemplates').filter(function(t){return t.template_code===tpl.template_code&&t.active===true;});
+    if(byCode.length)return;
+    if(store.get('TaskTemplates',tpl.id))return;
+    store.insert('TaskTemplates',{id:tpl.id,template_code:tpl.template_code,title:tpl.title,group:tpl.group,default_owner_role:tpl.default_owner_role,trigger_event:'Issue created',due_rule:'Next staffed day',evidence_required:'Issue outcome',active:true,template_version:'R1A-1.0',created_at:now,created_by:'R1A-appsheet',updated_at:now,updated_by:'R1A-appsheet',version:1,commit_id:'R1A-ISSUE-TPL'});
+  });
+}
+function _r1sIssueImpact(v){
+  if(v===undefined||v===null||v==='')return undefined;
+  if(v===true||v===false)return v;
+  var s=String(v).trim().toLowerCase();
+  if(['yes','true','1','y'].indexOf(s)>=0)return true;
+  if(['no','false','0','n'].indexOf(s)>=0)return false;
+  _r1sErr('R1A_INVALID_CUSTOMER_IMPACT');
+}
+function _r1sIssueCreate(ctx){
+  var r=ctx.request,s=ctx.store,a=ctx.actor;
+  if(r.task_id||r.issue_id||r.work_package_id||r.old_allocation_id)_r1sErr('R1A_INVALID_FIELDS');
+  if(!_r1sText(r.job_id))_r1sErr('R1A_JOB_NOT_FOUND');
+  _r1sCommandId(r.command_id);
+  var p=_r1sPayload(r,['issue_type','title','description','severity','owner_id','customer_impact','requested_by','requested_at'],['issue_type','title','description']);
+  if(['Variation','Remedial','Complaint'].indexOf(p.issue_type)<0)_r1sErr('R1A_INVALID_ISSUE_TYPE');
+  var severity=_r1sText(p.severity)?String(p.severity).trim():'Normal';
+  if(['Normal','Medium'].indexOf(severity)<0)_r1sErr('R1A_INVALID_SEVERITY');
+  if(!_r1sBlank(p.owner_id))_r1sActivePerson(s,p.owner_id);
+  if(!_r1sBlank(p.requested_by)&&!_r1sActorMatch(a,p.requested_by))_r1sErr('R1A_ACTOR_MISMATCH');
+  var impact=_r1sIssueImpact(p.customer_impact),expected=_r1sVersion(r.expected_version);
+  var fingerprint=JSON.stringify({command_type:'ISSUE_CREATE',job_id:r.job_id,payload:{issue_type:p.issue_type,title:p.title,description:p.description,severity:severity,owner_id:p.owner_id||null,customer_impact:impact===undefined?null:impact,requested_at:p.requested_at||null}});
+  return s.withLock(function(){
+    var now=new Date().toISOString(),issueId='ISS-R1A-'+r.command_id,prior=s.get('CommitJournal',_r1sJournalId(r.command_id));
+    var job=s.get('Jobs',r.job_id);if(!job)_r1sErr('R1A_JOB_NOT_FOUND');
+    if(job.pilot_job!==true||job.release_scope!=='R1')_r1sErr('R1A_OUTSIDE_PILOT');
+    if(!prior){
+      if(Number(job.version)!==expected)_r1sErr('R1A_STALE_VERSION');
+      if(job.archived_at||['CancellationInProgress','Cancelled'].indexOf(job.workflow_stage)>=0)_r1sErr('R1A_JOB_NOT_ACTIONABLE');
+    }
+    var journal=_r1sBeginJournal(s,r.command_id,'Issues',issueId,expected,fingerprint,now);
+    var jobsBefore=s.list('Jobs').length,issueCountBefore=s.list('Issues').length,jobVersionBefore=Number(job.version);
+    try{
+      if(typeof _s10CreateIssue!=='function')_r1sErr('R1A_COMMAND_UNSUPPORTED');
+      _r1sEnsureIssueTaskTemplates(s);
+      var input={id:issueId,job_id:r.job_id,type:p.issue_type,category:String(p.title).trim(),description:String(p.description).trim(),raised_at:p.requested_at||now,raised_by:a.id,office_owner_id:p.owner_id||null,severity:severity,commit_id:'R1A-'+r.command_id};
+      if(impact!==undefined)input.blocks_completion=impact;
+      var res=_s10CreateIssue(input,s);
+      if(Number(s.get('Jobs',r.job_id).version)!==jobVersionBefore)_r1sErr('R1A_JOB_MUTATION');
+      if(s.list('Jobs').length!==jobsBefore)_r1sErr('R1A_INTAKE_CARDINALITY');
+      if(res.created&&s.list('Issues').length!==issueCountBefore+1)_r1sErr('R1A_INTAKE_CARDINALITY');
+      if(!res.created&&s.list('Issues').length!==issueCountBefore)_r1sErr('R1A_INTAKE_CARDINALITY');
+      var issue=s.get('Issues',issueId);
+      if(!issue||issue.job_id!==r.job_id)_r1sErr('R1A_ISSUE_JOB_MISMATCH');
+      var out={status:journal.replay?'Replayed':(res.created?'Created':'Replayed'),issue_id:issueId,issue:issue,task:res.task||null,external_calls:0};
+      if(!journal.replay)_r1sInsertAudit(s,'AE-R1A-'+r.command_id,'Issues',issueId,'Create',null,issue,a.id,r.command_id,p.title,'R1 AppSheet/S10',now);
+      s.update('CommitJournal',journal.id,{state:'Committed',committed_at:now,entity_id:issueId});
+      return out;
+    }catch(e){if(s.get('CommitJournal',journal.id))s.update('CommitJournal',journal.id,{state:'RecoveryRequired'});throw e;}
+  });
+}
+
 function _r1sPlannerUpdate(ctx){var r=ctx.request,p=_r1sPayload(r,['planned_start','planned_end','reason'],['planned_start','planned_end']);return _s11UpdatePlannedDates({command_id:r.command_id,job_id:r.job_id,work_package_id:r.work_package_id,planned_start:p.planned_start,planned_end:p.planned_end,expected_version:r.expected_version,actor:ctx.actor.id,reason:p.reason||null},ctx.store);}
+function _r1sMoveJob(ctx){var r=ctx.request,p=_r1sPayload(r,['activities','planned_start','planned_end','scaffold_erect','scaffold_strip','reason'],['activities','reason']);if(!Array.isArray(p.activities)||!p.activities.length)_r1sErr('R1A_REQUIRED_ACTIVITIES');if(typeof _s11MoveJobR1!=='function')_r1sErr('R1A_COMMAND_UNSUPPORTED');return _s11MoveJobR1({command_id:r.command_id,job_id:r.job_id,expected_version:r.expected_version,actor:ctx.actor.id,activities:p.activities,planned_start:p.planned_start||null,planned_end:p.planned_end||null,scaffold_erect:p.scaffold_erect||null,scaffold_strip:p.scaffold_strip||null,reason:p.reason},ctx.store);}
+function _r1sChangeInstaller(ctx){var r=ctx.request,p=_r1sPayload(r,['mode','person_id','reason','role','old_allocation_id'],['mode','person_id','reason']);var oldId=p.old_allocation_id||r.old_allocation_id;if(!_r1sText(oldId))_r1sErr('R1A_REQUIRED_OLD_ALLOCATION_ID');if(typeof _s11ChangeInstallerR1!=='function')_r1sErr('R1A_COMMAND_UNSUPPORTED');return _s11ChangeInstallerR1({command_id:r.command_id,job_id:r.job_id,work_package_id:r.work_package_id,old_allocation_id:oldId,person_id:p.person_id,mode:p.mode,role:p.role||null,expected_version:r.expected_version,actor:ctx.actor.id,reason:p.reason},ctx.store);}
 function _r1sCancel(ctx){var r=ctx.request,p=_r1sPayload(r,['reason','effective_date','work_performed','material_state','scaffold_state','finance_review','legacy_state'],['reason','effective_date','work_performed','material_state','scaffold_state','finance_review','legacy_state']);return _s15Execute('Cancel',Object.assign({command_id:r.command_id,job_id:r.job_id,expected_version:r.expected_version,actor:ctx.actor.id},p),ctx.store);}
 function _r1sReinstate(ctx){var r=ctx.request,p=_r1sPayload(r,['reason','new_date','risk_review','commitment_review','finance_review','evidence_reference'],['reason','new_date','commitment_review','finance_review','evidence_reference']);return _s15Execute('Reinstate',Object.assign({command_id:r.command_id,job_id:r.job_id,expected_version:r.expected_version,actor:ctx.actor.id},p),ctx.store);}
 
@@ -172,16 +273,482 @@ function _r1sOperationalComplete(ctx){var r=ctx.request,s=ctx.store,a=ctx.actor;
   return s.withLock(function(){var job=s.get('Jobs',r.job_id);if(!job||Number(job.version)!==Number(r.expected_version))_r1sErr('R1A_STALE_VERSION');if(typeof _s10ApproveOperationalCompletion!=='function')_r1sErr('R1A_COMMAND_UNSUPPORTED');var before=job,res=_s10ApproveOperationalCompletion(r.job_id,a.id,s),now=new Date().toISOString(),after=s.get('Jobs',r.job_id);_r1sInsertAudit(s,'AE-R1A-'+r.command_id,'Jobs',r.job_id,'OperationalComplete',before,after,a.id,r.command_id,res&&res.status,'R1 AppSheet/S10',now);return{status:res.status,created:!!res.created,gate:res.gate,ghl_task:res.ghl_task||null,external_calls:0};});}
 
 function _r1sBookingGates(ctx){var r=ctx.request,s=ctx.store,a=ctx.actor;_r1sPayload(r,[],[]);
-  return s.withLock(function(){var job=s.get('Jobs',r.job_id);if(!job||Number(job.version)!==Number(r.expected_version))_r1sErr('R1A_STALE_VERSION');if(typeof processBookingGates!=='function')_r1sErr('R1A_COMMAND_UNSUPPORTED');var before=job,res=processBookingGates(r.job_id,s),now=new Date().toISOString(),after=s.get('Jobs',r.job_id);_r1sInsertAudit(s,'AE-R1A-'+r.command_id,'Jobs',r.job_id,'BookingGates',before,after,a.id,r.command_id,res&&res.gates&&res.gates.summary,'R1 AppSheet/S06',now);return{status:res&&res.gates&&res.gates.ready?'Ready':(res&&res.gates&&res.gates.blocked?'Blocked':'NeedsReview'),gates:res.gates||res,tasks:res.tasks||null,success:!!(res&&res.success),external_calls:0};});}
+  return s.withLock(function(){var job=s.get('Jobs',r.job_id);if(!job||Number(job.version)!==Number(r.expected_version))_r1sErr('R1A_STALE_VERSION');if(typeof processBookingGates!=='function')_r1sErr('R1A_COMMAND_UNSUPPORTED');var before=job,res=processBookingGates(r.job_id,s,{actor:a.id,command_id:r.command_id}),now=new Date().toISOString(),after=s.get('Jobs',r.job_id);_r1sInsertAudit(s,'AE-R1A-'+r.command_id,'Jobs',r.job_id,'BookingGates',before,after,a.id,r.command_id,res&&res.gates&&res.gates.summary,'R1 AppSheet/S06',now);return{status:after&&after.workflow_stage==='ReadyToBook'?'ReadyToBook':(after&&after.workflow_stage==='Booked'?'Booked':(res&&res.gates&&res.gates.blocked?'Blocked':'NeedsReview')),readiness:res.readiness||null,gates:res.gates||res,tasks:res.tasks||null,success:!!(res&&res.success),external_calls:0};});}
 
-function _r1sServices(){return{TASK_COMPLETE:_r1sTaskComplete,CALL_RECORD:_r1sCallRecord,ISSUE_UPDATE:_r1sIssueUpdate,PLANNER_UPDATE:_r1sPlannerUpdate,CANCEL_JOB:_r1sCancel,REINSTATE_JOB:_r1sReinstate,DEPOSIT_CONFIRM:_r1sDepositConfirm,OPERATIONAL_COMPLETE:_r1sOperationalComplete,BOOKING_GATES:_r1sBookingGates};}
+/* AppSheet helper-table contracts. These tables are request envelopes only.
+ * The processor never treats them as authoritative Jobs/Customers storage. */
+var R1A_SOLD_FORM_ID='R1A-SOLD-DEV';
+var R1A_BOOKING_FORM_ID='R1A-BOOKING-DEV';
+var R1A_DEV_SHEET='1z7PNZtDdC4Z5eLbmTuQdqp0QpJSmuEvx3QvN3VyNTsc';
+var R1A_SOLD_FIELDS=[
+  {key:'customer_first_name',qid:'sold_first_name',type:'text',required:true},
+  {key:'customer_last_name',qid:'sold_last_name',type:'text',required:true},
+  {key:'street_address',qid:'sold_address1',type:'text',required:true},
+  {key:'city',qid:'sold_town',type:'text',required:true},
+  {key:'postcode',qid:'sold_postcode',type:'text',required:true},
+  {key:'phone',qid:'sold_phone',type:'text'},
+  {key:'email',qid:'sold_email',type:'text'},
+  {key:'salesperson_id',qid:'sold_salesperson_id',type:'text'},
+  {key:'lead_source',qid:'sold_lead_source',type:'text'},
+  {key:'quote_reference',qid:'sold_quote_ref',type:'text'},
+  {key:'presale_file_id',qid:'sold_presale_file_id',type:'text'},
+  {key:'finance_route',qid:'sold_finance_route',type:'text',required:true},
+  {key:'gross_amount',qid:'sold_gross_pence',type:'number'},
+  {key:'roof_required',qid:'sold_roof',type:'bool'},
+  {key:'electrical_required',qid:'sold_electrical',type:'bool'},
+  {key:'scaffold_required',qid:'sold_scaffold',type:'bool'},
+  {key:'roof_notes',qid:'sold_roof_notes',type:'text'},
+  {key:'electrical_notes',qid:'sold_electrical_notes',type:'text'},
+  {key:'submitted_by',qid:'sold_submitted_by',type:'text'}
+];
+var R1A_BOOKING_FIELDS=[
+  {key:'customer_first_name',qid:'booking_first_name',type:'text'},
+  {key:'customer_last_name',qid:'booking_last_name',type:'text'},
+  {key:'street_address',qid:'booking_address1',type:'text'},
+  {key:'city',qid:'booking_town',type:'text'},
+  {key:'postcode',qid:'booking_postcode',type:'text'},
+  {key:'phone',qid:'booking_phone',type:'text'},
+  {key:'email',qid:'booking_email',type:'text'},
+  {key:'solar_kw',qid:'booking_solar_kw',type:'text'},
+  {key:'cost',qid:'booking_cost',type:'number'},
+  {key:'finance_route',qid:'booking_finance',type:'text'},
+  {key:'merchant_name',qid:'booking_merchant',type:'text'},
+  {key:'invoice_date',qid:'booking_invoice_date',type:'date'},
+  {key:'annual_generation',qid:'booking_annual_gen',type:'text'},
+  {key:'date_roofer',qid:'booking_date_roofer',type:'date'},
+  {key:'date_sparky',qid:'booking_date_sparky',type:'date'},
+  {key:'date_scaffold',qid:'booking_date_scaffold',type:'date'},
+  {key:'roofer',qid:'booking_roofer',type:'person'},
+  {key:'sparky',qid:'booking_sparky',type:'person'},
+  {key:'second_sparky',qid:'booking_second_sparky',type:'person'},
+  {key:'scaffold_company',qid:'booking_scaffold_company',type:'company'},
+  {key:'scaffold_pdf',qid:'booking_scaffold_pdf',type:'text'},
+  {key:'scaffold_notes',qid:'booking_scaffold_notes',type:'text'},
+  {key:'roofing_notes',qid:'booking_roofing_notes',type:'text'},
+  {key:'electrical_notes',qid:'booking_electrical_notes',type:'text'},
+  {key:'ordering_notes',qid:'booking_ordering_notes',type:'text'},
+  {key:'roof_hooks_type',qid:'booking_roof_hooks_type',type:'text'},
+  {key:'mat_slate_portrait',qid:'booking_mat_slate_portrait',type:'int'},
+  {key:'mat_slate_landscape',qid:'booking_mat_slate_landscape',type:'int'},
+  {key:'mat_r420181_total',qid:'booking_mat_r420181_total',type:'int'},
+  {key:'mat_concrete_portrait',qid:'booking_mat_concrete_portrait',type:'int'},
+  {key:'mat_concrete_landscape',qid:'booking_mat_concrete_landscape',type:'int'},
+  {key:'mat_r420150_total',qid:'booking_mat_r420150_total',type:'int'},
+  {key:'mat_l_bracket',qid:'booking_mat_l_bracket',type:'int'},
+  {key:'mat_hook_rest',qid:'booking_mat_hook_rest',type:'int'},
+  {key:'mat_end_clamps',qid:'booking_mat_end_clamps',type:'int'},
+  {key:'mat_end_caps',qid:'booking_mat_end_caps',type:'int'},
+  {key:'mat_mid_clamps',qid:'booking_mat_mid_clamps',type:'int'},
+  {key:'mat_rail',qid:'booking_mat_rail',type:'int'},
+  {key:'mat_splice',qid:'booking_mat_splice',type:'int'},
+  {key:'mat_k2_flat_multi',qid:'booking_mat_k2_flat_multi',type:'int'},
+  {key:'mat_k2_curved_multi',qid:'booking_mat_k2_curved_multi',type:'int'},
+  {key:'mat_k2_flat_mini',qid:'booking_mat_k2_flat_mini',type:'int'},
+  {key:'mat_k2_curved_mini',qid:'booking_mat_k2_curved_mini',type:'int'},
+  {key:'mat_genius',qid:'booking_mat_genius',type:'int'},
+  {key:'mat_k2_1000074',qid:'booking_mat_k2_1000074',type:'int'},
+  {key:'mat_k2_mid',qid:'booking_mat_k2_mid',type:'int'},
+  {key:'mat_k2_end',qid:'booking_mat_k2_end',type:'int'},
+  {key:'mat_k2_end_caps',qid:'booking_mat_k2_end_caps',type:'int'},
+  {key:'mat_k2_rail',qid:'booking_mat_k2_rail',type:'int'},
+  {key:'mat_k2_splice',qid:'booking_mat_k2_splice',type:'int'},
+  {key:'mat_panel_515',qid:'booking_mat_panel_515',type:'int'},
+  {key:'mat_panel_460',qid:'booking_mat_panel_460',type:'int'},
+  {key:'mat_panel_m',qid:'booking_mat_panel_m',type:'int'},
+  {key:'mat_bird_netting',qid:'booking_mat_bird_netting',type:'int'},
+  {key:'mat_optimisers',qid:'booking_mat_optimisers',type:'int'},
+  {key:'mat_fox_jb',qid:'booking_mat_fox_jb',type:'int'},
+  {key:'mat_dongle',qid:'booking_mat_dongle',type:'int'},
+  {key:'mat_gateway',qid:'booking_mat_gateway',type:'int'},
+  {key:'mat_ev',qid:'booking_mat_ev',type:'int'},
+  {key:'inverter',qid:'booking_inverter',type:'text'},
+  {key:'battery',qid:'booking_battery',type:'text'},
+  {key:'battery_qty',qid:'booking_battery_qty',type:'int'},
+  {key:'fox_jb_calc',qid:'booking_fox_jb_calc',type:'text'},
+  {key:'extras',qid:'booking_extras',type:'text'},
+  {key:'sig_extras',qid:'booking_sig_extras',type:'text'},
+  {key:'tesla_extras',qid:'booking_tesla_extras',type:'text'},
+  {key:'submitted_by',qid:'booking_submitted_by',type:'text'}
+];
+var R1A_SOLD_REQUEST_COLUMNS=['id','command_id','submitted_by'].concat(R1A_SOLD_FIELDS.map(function(f){return f.key;})).concat(['result_status','result_job_id','result_job_id_human','result_version','result_message']);
+var R1A_BOOKING_REQUEST_COLUMNS=['id','command_id','submitted_by','job_id','job_id_human','expected_version'].concat(R1A_BOOKING_FIELDS.map(function(f){return f.key;})).concat(['result_status','result_job_id','result_job_id_human','result_version','result_workflow_stage','result_message']);
 
+function _r1sBlank(v){return v===undefined||v===null||v==='';}
+function _r1sCommandId(id){if(!_r1sText(id)||!/^[A-Za-z0-9][A-Za-z0-9_-]{0,80}$/.test(id))_r1sErr('R1A_INVALID_COMMAND_ID');}
+function _r1sActorMatch(a,v){var s=String(v).trim().toLowerCase();return s===a.id.toLowerCase()||s===a.email;}
+function _r1sFinance(v){if(['Standard','Phoenix','OtherReview'].indexOf(v)<0)_r1sErr('R1A_INVALID_FINANCE_ROUTE');}
+function _r1sVersion(v){var n=typeof v==='number'?v:(typeof v==='string'&&/^\d+$/.test(v.trim())?Number(v):NaN);if(!Number.isSafeInteger(n)||n<1)_r1sErr('R1A_STALE_VERSION');return n;}
+function _r1sDate(v){if(_r1sBlank(v))return undefined;var s=String(v).trim(),m=s.match(/^(\d{4}-\d{2}-\d{2})/);if(!m)_r1sErr('R1A_INVALID_DATE');return m[1];}
+function _r1sInt(v){if(_r1sBlank(v))return undefined;var n=typeof v==='number'?v:Number(String(v).trim());if(!Number.isSafeInteger(n)||n<0)_r1sErr('R1A_INVALID_INTEGER');return String(n);}
+function _r1sBoolText(v){if(v===true||v===false)return v?'Yes':'No';var s=String(v).trim().toLowerCase();if(['yes','true','1'].indexOf(s)>=0)return 'Yes';if(['no','false','0'].indexOf(s)>=0)return 'No';_r1sErr('R1A_INVALID_BOOLEAN');}
+function _r1sPoundsToPence(v){if(_r1sBlank(v))return undefined;var s=String(v).trim().replace(/[£,\s]/g,'');if(!/^\d+(\.\d{1,2})?$/.test(s))_r1sErr('R1A_INVALID_GROSS_AMOUNT');var pence=Math.round(Number(s)*100);if(!Number.isSafeInteger(pence))_r1sErr('R1A_INVALID_GROSS_AMOUNT');return String(pence);}
+function _r1sCanonPayload(fields,payload){var out={};fields.forEach(function(f){if(Object.prototype.hasOwnProperty.call(payload,f.key)&&!_r1sBlank(payload[f.key]))out[f.key]=payload[f.key];});return JSON.stringify(out);}
+function _r1sPersonName(store,v){if(_r1sBlank(v))return undefined;var s=String(v).trim();var byId=store.list('People').filter(function(p){return p.id===s&&p.active===true;});if(byId.length===1&&_r1sText(byId[0].display_name))return byId[0].display_name;return s;}
+function _r1sCompanyName(store,v){if(_r1sBlank(v))return undefined;var s=String(v).trim();var byId=store.list('Companies').filter(function(c){return c.id===s;});if(byId.length===1&&_r1sText(byId[0].name))return byId[0].name;return s;}
+function _r1sActivePerson(store,id){var p=store.get('People',id);if(!p||p.active!==true)_r1sErr('R1A_SALESPERSON_NOT_FOUND');}
+function _r1sJournalId(id){return 'CJ-R1A-'+id;}
+function _r1sDevConfig(store){if(!store||store.getSheetId()!==R1A_DEV_SHEET||(typeof store.getEnvironment==='function'&&store.getEnvironment()!=='DEV'))_r1sErr('R1A_DEV_ONLY');return{environment:'DEV',sheetId:R1A_DEV_SHEET};}
+function _r1sMappingBuilder(){
+  if(typeof S05Core!=='undefined'&&typeof S05Core.buildSyntheticMapping==='function')return S05Core.buildSyntheticMapping;
+  if(typeof buildSyntheticMapping==='function')return buildSyntheticMapping;
+  if(typeof require==='function'){try{return require('../s05/mapping.js').buildSyntheticMapping;}catch(e){}}
+  _r1sErr('R1A_COMMAND_UNSUPPORTED');
+}
+function _r1sIntakeProcessor(store,actor){
+  var options={config:_r1sDevConfig(store),store:store,pilotJob:true,actor:actor.id,createPrebookingTasks:function(job,s){
+    var fn=typeof createPrebookingTasksForSold==='function'?createPrebookingTasksForSold:null;
+    if(!fn&&typeof require==='function'){try{fn=require('../s06/gates.js').createPrebookingTasksForSold;}catch(e){fn=null;}}
+    return fn?fn(job,s):null;
+  }};
+  if(typeof S05Core!=='undefined'&&typeof S05Core.createIntakeProcessor==='function')return S05Core.createIntakeProcessor(options);
+  if(typeof createIntakeProcessor==='function')return createIntakeProcessor(options);
+  if(typeof require==='function'){try{return require('../s05/intake.js').createIntakeProcessor(options);}catch(e){}}
+  _r1sErr('R1A_COMMAND_UNSUPPORTED');
+}
+function _r1sEnsureMappings(store,formId,formType,idPrefix){
+  var builder=_r1sMappingBuilder();
+  var expected=builder(formId,formType,idPrefix);
+  var existing=store.list('MappingRules').filter(function(r){return r.form_id===formId;});
+  if(existing.length){
+    var have={};
+    existing.forEach(function(r){if(r.active===true)have[r.question_id]=true;});
+    if(expected.some(function(r){return !have[r.question_id];}))_r1sErr('R1A_INTAKE_MAPPING_INCOMPLETE');
+    return;
+  }
+  expected.forEach(function(r){
+    r.owner='R1A-appsheet';r.mapping_version='R1A-1.0';r.created_by='R1A-appsheet';r.updated_by='R1A-appsheet';
+    if(!store.get('MappingRules',r.id))store.insert('MappingRules',r);
+  });
+}
+function _r1sFieldValue(store,field,value){
+  if(_r1sBlank(value))return undefined;
+  if(field.type==='bool')return _r1sBoolText(value);
+  if(field.type==='date')return _r1sDate(value);
+  if(field.type==='int')return _r1sInt(value);
+  if(field.type==='person')return _r1sPersonName(store,value);
+  if(field.type==='company')return _r1sCompanyName(store,value);
+  if(field.key==='gross_amount')return _r1sPoundsToPence(value);
+  if(field.key==='cost'){var s=String(value).trim().replace(/[£,\s]/g,'');if(!/^\d+(\.\d{1,2})?$/.test(s))_r1sErr('R1A_INVALID_GROSS_AMOUNT');if(s.indexOf('.')<0)s+='.00';return s;}
+  return String(value).trim();
+}
+function _r1sRawPayload(store,fields,payload,extra){
+  var raw=extra||{};
+  fields.forEach(function(f){
+    if(f.qid==='sold_submitted_by'||f.qid==='booking_submitted_by')return;
+    var value=_r1sFieldValue(store,f,payload[f.key]);
+    if(value!==undefined)raw[f.qid]=value;
+  });
+  return raw;
+}
+function _r1sAppSheetEscape(col){return 'SUBSTITUTE(SUBSTITUTE(['+col+'], CHAR(34), "\'"), CHAR(10), " ")';}
+function _r1sAppSheetExpression(commandType,fields,top){
+  var lines=['CONCATENATE(','  "{\\"command_id\\":\\"", [command_id],','  "\\",\\"command_type\\":\\"'+commandType+'\\""'];
+  (top||[]).forEach(function(key){
+    if(key==='expected_version')lines.push('  , ",\\"expected_version\\":", TEXT([expected_version], "0")');
+    else lines.push('  , ",\\"'+key+'\\":\\"", ['+key+'], "\\""');
+  });
+  lines.push('  , ",\\"payload\\":{"');
+  fields.forEach(function(f,i){
+    var lead=i===0?'"\\"'+(f.key)+'\\":':'",\\"'+f.key+'\\":';
+    if(f.type==='bool')lines.push('  , '+lead+'", IF(OR(ISBLANK(['+f.key+']), ['+f.key+']=FALSE), "false", "true")');
+    else if(f.type==='number'||f.type==='int')lines.push('  , '+lead+'", IF(ISBLANK(['+f.key+']), "null", TEXT(['+f.key+']))');
+    else if(f.type==='date')lines.push('  , '+lead+'\\"", IF(ISBLANK(['+f.key+']), "", TEXT(['+f.key+'], "YYYY-MM-DD")), "\\""');
+    else lines.push('  , '+lead+'\\"", '+_r1sAppSheetEscape(f.key)+', "\\""');
+  });
+  lines.push('  , "}}"',' )');
+  return lines.join('\n');
+}
+function _r1sSoldExpression(){return _r1sAppSheetExpression('SOLD_INTAKE',R1A_SOLD_FIELDS,[]);}
+function _r1sBookingExpression(){return _r1sAppSheetExpression('BOOKING_INTAKE',R1A_BOOKING_FIELDS,['job_id','expected_version']);}
+function _r1sBeginJournal(store,commandId,entityType,entityId,expected,fingerprint,now){
+  var jid=_r1sJournalId(commandId),prior=store.get('CommitJournal',jid);
+  if(prior){if(prior.changes_json!==fingerprint)_r1sErr('R1A_COMMAND_CONFLICT');if(prior.state!=='Committed')_r1sErr('R1A_RECOVERY_REQUIRED');return{replay:true,id:jid};}
+  store.insert('CommitJournal',{id:jid,commit_id:'R1A-'+commandId,state:'Prepared',command_id:commandId,entity_type:entityType,entity_id:entityId||null,expected_version:expected||null,changes_json:fingerprint,prepared_at:now,committed_at:null,created_at:now});
+  return{replay:false,id:jid};
+}
+function _r1sSoldIntake(ctx){
+  var r=ctx.request,s=ctx.store,a=ctx.actor;
+  if(r.job_id||r.task_id||r.issue_id||r.work_package_id||r.old_allocation_id||r.expected_version!=null)_r1sErr('R1A_INVALID_FIELDS');
+  _r1sCommandId(r.command_id);
+  var allowed=R1A_SOLD_FIELDS.map(function(f){return f.key;});
+  var p=_r1sPayload(r,allowed,['customer_first_name','customer_last_name','street_address','city','postcode','finance_route']);
+  _r1sFinance(p.finance_route);
+  if(!_r1sBlank(p.salesperson_id))_r1sActivePerson(s,p.salesperson_id);
+  if(!_r1sBlank(p.submitted_by)&&!_r1sActorMatch(a,p.submitted_by))_r1sErr('R1A_ACTOR_MISMATCH');
+  var fingerprint=JSON.stringify({command_type:'SOLD_INTAKE',payload:JSON.parse(_r1sCanonPayload(R1A_SOLD_FIELDS,p))});
+  return s.withLock(function(){
+    var now=new Date().toISOString();
+    var journal=_r1sBeginJournal(s,r.command_id,'Intake','R1A-SOLD-'+r.command_id,null,fingerprint,now);
+    var jobsBefore=s.list('Jobs').length,customersBefore=s.list('Customers').length;
+    try{
+      _r1sEnsureMappings(s,R1A_SOLD_FORM_ID,'Sold','MAP-R1A-SOLD-');
+      var raw=_r1sRawPayload(s,R1A_SOLD_FIELDS,p,{});
+      var res=_r1sIntakeProcessor(s,a).processSold({intake_id:'R1A-SOLD-'+r.command_id,form_id:R1A_SOLD_FORM_ID,form_type:'Sold',submission_id:r.command_id,raw_payload:raw});
+      var jobsAfter=s.list('Jobs').length,customersAfter=s.list('Customers').length;
+      if(res.status==='Processed'&&!res.duplicate){
+        if(jobsAfter!==jobsBefore+1||customersAfter!==customersBefore+1)_r1sErr('R1A_INTAKE_CARDINALITY');
+      }else if(jobsAfter!==jobsBefore||customersAfter!==customersBefore){_r1sErr('R1A_INTAKE_CARDINALITY');}
+      var job=res.job_id?s.get('Jobs',res.job_id):null;
+      if(res.status==='Processed'&&job){
+        if(job.pilot_job!==true||job.release_scope!=='R1')_r1sErr('R1A_OUTSIDE_PILOT');
+        if(!/^SS-[A-Z]{4}-\d{4}$/.test(job.job_id))_r1sErr('R1A_JOB_ID_INVALID');
+      }
+      var out={status:journal.replay?'Replayed':res.status,duplicate:!!res.duplicate,intake_id:res.intake_id||('R1A-SOLD-'+r.command_id),job_id:res.job_id||null,job_id_human:job?job.job_id:null,customer_id:res.customer_id||(job?job.customer_id:null),version:job?Number(job.version):null,workflow_stage:job?job.workflow_stage:null,prebooking_tasks:res.prebooking_tasks||null,error:res.error||null,message:res.message||null,external_calls:0};
+      if(!journal.replay&&res.job_id)_r1sInsertAudit(s,'AE-R1A-'+r.command_id,'Jobs',res.job_id,'SoldIntake',null,job,a.id,r.command_id,res.message,'R1 AppSheet/S05',now);
+      s.update('CommitJournal',journal.id,{state:'Committed',committed_at:now,entity_id:res.job_id||('R1A-SOLD-'+r.command_id)});
+      return out;
+    }catch(e){if(s.get('CommitJournal',journal.id))s.update('CommitJournal',journal.id,{state:'RecoveryRequired'});throw e;}
+  });
+}
+function _r1sBookingIntake(ctx){
+  var r=ctx.request,s=ctx.store,a=ctx.actor;
+  if(r.task_id||r.issue_id||r.work_package_id||r.old_allocation_id)_r1sErr('R1A_INVALID_FIELDS');
+  if(!_r1sText(r.job_id))_r1sErr('R1A_JOB_NOT_FOUND');
+  _r1sCommandId(r.command_id);
+  var allowed=R1A_BOOKING_FIELDS.map(function(f){return f.key;});
+  var p=_r1sPayload(r,allowed,[]);
+  if(!_r1sBlank(p.submitted_by)&&!_r1sActorMatch(a,p.submitted_by))_r1sErr('R1A_ACTOR_MISMATCH');
+  if(!_r1sBlank(p.finance_route))_r1sFinance(p.finance_route);
+  var expected=_r1sVersion(r.expected_version);
+  var fingerprint=JSON.stringify({command_type:'BOOKING_INTAKE',job_id:r.job_id,payload:JSON.parse(_r1sCanonPayload(R1A_BOOKING_FIELDS,p))});
+  return s.withLock(function(){
+    var now=new Date().toISOString();
+    var prior=s.get('CommitJournal',_r1sJournalId(r.command_id));
+    var job=s.get('Jobs',r.job_id);
+    if(!job)_r1sErr('R1A_JOB_NOT_FOUND');
+    if(job.pilot_job!==true||job.release_scope!=='R1')_r1sErr('R1A_OUTSIDE_PILOT');
+    if(!_r1sText(job.job_id)||!/^SS-[A-Z]{4}-\d{4}$/.test(job.job_id))_r1sErr('R1A_JOB_ID_INVALID');
+    if(!prior){
+      if(Number(job.version)!==expected)_r1sErr('R1A_STALE_VERSION');
+      if(job.archived_at||['CancellationInProgress','Cancelled'].indexOf(job.workflow_stage)>=0)_r1sErr('R1A_JOB_NOT_ACTIONABLE');
+      if(['Prebooking','ReadyToBook','BookingInProgress'].indexOf(job.workflow_stage)<0)_r1sErr('R1A_STAGE_NOT_ELIGIBLE');
+    }
+    var journal=_r1sBeginJournal(s,r.command_id,'Jobs',r.job_id,expected,fingerprint,now);
+    var beforeStage=job.workflow_stage,jobsBefore=s.list('Jobs').length,customerBefore=s.get('Customers',job.customer_id);
+    try{
+      _r1sEnsureMappings(s,R1A_BOOKING_FORM_ID,'Booking','MAP-R1A-BOOK-');
+      var raw=_r1sRawPayload(s,R1A_BOOKING_FIELDS,p,{booking_job_id:job.job_id});
+      var res=_r1sIntakeProcessor(s,a).processBooking({intake_id:'R1A-BOOK-'+r.command_id,form_id:R1A_BOOKING_FORM_ID,form_type:'Booking',submission_id:r.command_id,raw_payload:raw});
+      if(s.list('Jobs').length!==jobsBefore)_r1sErr('R1A_INTAKE_CARDINALITY');
+      if(res.job_id&&res.job_id!==r.job_id)_r1sErr('R1A_JOB_LINK_MISMATCH');
+      var after=s.get('Jobs',r.job_id),customerAfter=s.get('Customers',job.customer_id);
+      if(customerBefore&&customerAfter){
+        ['first_name','last_name','address_line1','town','postcode','email','phone'].forEach(function(k){if(customerBefore[k]!==customerAfter[k])_r1sErr('R1A_CUSTOMER_OVERWRITE');});
+      }
+      if(beforeStage==='ReadyToBook'&&after&&after.workflow_stage!=='BookingInProgress'&&res.status!=='Review'&&!res.duplicate)_r1sErr('R1A_STAGE_RULE_BROKEN');
+      if(beforeStage==='Prebooking'&&after&&after.workflow_stage!=='Prebooking')_r1sErr('R1A_STAGE_RULE_BROKEN');
+      var out={status:journal.replay?'Replayed':res.status,duplicate:!!res.duplicate,intake_id:res.intake_id||('R1A-BOOK-'+r.command_id),job_id:r.job_id,job_id_human:after?after.job_id:job.job_id,version:after?Number(after.version):null,workflow_stage:after?after.workflow_stage:null,match_status:res.match_status||(after?after.sold_booking_match_status:null),customer_changes:(res.applied&&res.applied.customer_changes)||[],error:res.error||null,message:res.message||null,external_calls:0};
+      if(!journal.replay)_r1sInsertAudit(s,'AE-R1A-'+r.command_id,'Jobs',r.job_id,'BookingIntake',job,after,a.id,r.command_id,res.message,'R1 AppSheet/S05',now);
+      s.update('CommitJournal',journal.id,{state:'Committed',committed_at:now,entity_id:r.job_id});
+      return out;
+    }catch(e){if(s.get('CommitJournal',journal.id))s.update('CommitJournal',journal.id,{state:'RecoveryRequired'});throw e;}
+  });
+}
+
+var R1A_ISSUE_CREATE_FIELDS=[
+  {key:'issue_type',type:'enum'},
+  {key:'title',type:'text',required:true},
+  {key:'description',type:'text',required:true},
+  {key:'severity',type:'enum'},
+  {key:'owner_id',type:'person'},
+  {key:'customer_impact',type:'bool'},
+  {key:'requested_by',type:'text'},
+  {key:'requested_at',type:'timestamp'}
+];
+var R1A_ISSUE_CREATE_REQUEST_COLUMNS=['id','command_id','job_id','expected_version'].concat(R1A_ISSUE_CREATE_FIELDS.map(function(f){return f.key;})).concat(['result_status','result_issue_id','result_message']);
+
+function _r1sServices(){return{TASK_COMPLETE:_r1sTaskComplete,CALL_RECORD:_r1sCallRecord,ISSUE_UPDATE:_r1sIssueUpdate,ISSUE_CREATE:_r1sIssueCreate,PLANNER_UPDATE:_r1sPlannerUpdate,MOVE_JOB:_r1sMoveJob,CHANGE_INSTALLER:_r1sChangeInstaller,CANCEL_JOB:_r1sCancel,REINSTATE_JOB:_r1sReinstate,DEPOSIT_CONFIRM:_r1sDepositConfirm,OPERATIONAL_COMPLETE:_r1sOperationalComplete,BOOKING_GATES:_r1sBookingGates,SOLD_INTAKE:_r1sSoldIntake,BOOKING_INTAKE:_r1sBookingIntake};}
+
+
+/* Read AppSheet helper-table rows and build canonical intake commands.
+ * AppSheet must not serialize the booking payload. DEV spreadsheet only.
+ * This module never writes helper tables or operational sheets. */
+'use strict';
+
+var R1A_REQUEST_DEV_SHEET = '1z7PNZtDdC4Z5eLbmTuQdqp0QpJSmuEvx3QvN3VyNTsc';
+var R1A_REQUEST_TABLES = {
+  SOLD_INTAKE: 'DEVNewJobSoldRequests',
+  BOOKING_INTAKE: 'DEVBookingIntakeRequests',
+  ISSUE_CREATE: 'DEVCreateIssueRequests'
+};
+
+function _r1aReqRefuse(code) { var e = new Error(code); e.code = code; throw e; }
+function _r1aReqText(v) { return typeof v === 'string' && v.trim().length > 0; }
+function _r1aReqEmail(v) {
+  if (typeof v !== 'string') return '';
+  var s = v.trim().toLowerCase();
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(s) ? s : '';
+}
+function _r1aReqFields(commandType) {
+  if (commandType === 'SOLD_INTAKE' && typeof R1A_SOLD_FIELDS !== 'undefined') return R1A_SOLD_FIELDS;
+  if (commandType === 'BOOKING_INTAKE' && typeof R1A_BOOKING_FIELDS !== 'undefined') return R1A_BOOKING_FIELDS;
+  if (commandType === 'ISSUE_CREATE' && typeof R1A_ISSUE_CREATE_FIELDS !== 'undefined') return R1A_ISSUE_CREATE_FIELDS;
+  if (typeof require === 'function') {
+    var spec = require('./services.js');
+    if (commandType === 'SOLD_INTAKE') return spec.R1A_SOLD_FIELDS;
+    if (commandType === 'BOOKING_INTAKE') return spec.R1A_BOOKING_FIELDS;
+    if (commandType === 'ISSUE_CREATE') return spec.R1A_ISSUE_CREATE_FIELDS;
+  }
+  _r1aReqRefuse('R1A_COMMAND_UNSUPPORTED');
+}
+function _r1aReqPresent(v) { return !(v === undefined || v === null || v === ''); }
+function _r1aReqDate(v) {
+  if (Object.prototype.toString.call(v) === '[object Date]' && !isNaN(v.getTime())) {
+    if (typeof Utilities !== 'undefined' && Utilities.formatDate) return Utilities.formatDate(v, 'Europe/London', 'yyyy-MM-dd');
+    var y = v.getFullYear(), m = v.getMonth() + 1, d = v.getDate();
+    return y + '-' + (m < 10 ? '0' : '') + m + '-' + (d < 10 ? '0' : '') + d;
+  }
+  return v;
+}
+function _r1aReqCell(v) {
+  if (!_r1aReqPresent(v)) return undefined;
+  if (typeof v === 'string') {
+    var s = v.trim();
+    return s.length ? s : undefined;
+  }
+  return _r1aReqDate(v);
+}
+
+/* Read one helper row. No writes. Extra columns are ignored by the builder. */
+function _r1aReadRequestRowFromSpreadsheet(ss, tableName, requestRowId, expectedSheetId) {
+  if (!ss || typeof ss.getId !== 'function' || ss.getId() !== expectedSheetId) _r1aReqRefuse('R1A_DEV_ONLY');
+  var matches = ss.getSheets().filter(function(sh) { return sh.getName() === tableName; });
+  if (matches.length !== 1) _r1aReqRefuse('R1A_REQUEST_TABLE_MISSING');
+  var sh = matches[0];
+  var lastCol = sh.getLastColumn(), lastRow = sh.getLastRow();
+  if (lastCol < 1 || lastRow < 2) _r1aReqRefuse('R1A_REQUEST_NOT_FOUND');
+  var headers = sh.getRange(1, 1, 1, lastCol).getValues()[0].map(function(h) { return String(h || '').trim(); });
+  if (headers.indexOf('id') < 0 || headers.indexOf('command_id') < 0) _r1aReqRefuse('R1A_REQUEST_SCHEMA');
+  if ((tableName === 'DEVBookingIntakeRequests' || tableName === 'DEVCreateIssueRequests') && (headers.indexOf('job_id') < 0 || headers.indexOf('expected_version') < 0)) _r1aReqRefuse('R1A_REQUEST_SCHEMA');
+  var values = sh.getRange(2, 1, lastRow - 1, lastCol).getValues();
+  var wanted = String(requestRowId).trim();
+  var found = [];
+  values.forEach(function(row) {
+    var id = row[headers.indexOf('id')];
+    if (!_r1aReqPresent(id)) return;
+    if (String(id).trim() === wanted) found.push(row);
+  });
+  if (found.length === 0) _r1aReqRefuse('R1A_REQUEST_NOT_FOUND');
+  if (found.length > 1) _r1aReqRefuse('R1A_REQUEST_AMBIGUOUS');
+  var out = {};
+  headers.forEach(function(h, i) { if (h && !Object.prototype.hasOwnProperty.call(out, h)) out[h] = found[0][i]; });
+  return out;
+}
+
+function _r1aOpenDevRequestSpreadsheet() {
+  if (typeof SpreadsheetApp === 'undefined') _r1aReqRefuse('R1A_DEV_ONLY');
+  var ss = SpreadsheetApp.openById(R1A_REQUEST_DEV_SHEET);
+  if (!ss || ss.getId() !== R1A_REQUEST_DEV_SHEET) _r1aReqRefuse('R1A_DEV_ONLY');
+  return ss;
+}
+
+function _r1aSessionEmail() {
+  try {
+    if (typeof Session === 'undefined' || !Session.getActiveUser) return '';
+    return _r1aReqEmail(Session.getActiveUser().getEmail() || '');
+  } catch (e) { return ''; }
+}
+
+function _r1aAssertSubmittedBy(actorEmail, submittedBy) {
+  if (!_r1aReqPresent(submittedBy)) return;
+  var submitted = String(submittedBy).trim().toLowerCase();
+  if (submitted.indexOf('@') >= 0 && submitted !== actorEmail) _r1aReqRefuse('R1A_ACTOR_MISMATCH');
+}
+function _r1aAssertActorField(actorEmail, value, actorId) {
+  if (!_r1aReqPresent(value)) return;
+  var submitted = String(value).trim().toLowerCase();
+  if (submitted.indexOf('@') >= 0) {
+    if (submitted !== actorEmail) _r1aReqRefuse('R1A_ACTOR_MISMATCH');
+    return;
+  }
+  if (actorId && submitted === String(actorId).trim().toLowerCase()) return;
+  if (submitted.indexOf('@') < 0 && actorId && submitted === String(actorId).trim().toLowerCase()) return;
+  /* Non-email values are checked again against the authenticated actor id by the service. */
+}
+
+/* Build the canonical command object. Sheet identity fields are never the authorization actor. */
+function _r1aBuildIntakeRequest(commandType, row, actorEmail, actorId) {
+  if (!row || typeof row !== 'object' || Array.isArray(row)) _r1aReqRefuse('R1A_REQUEST_NOT_FOUND');
+  if (commandType !== 'SOLD_INTAKE' && commandType !== 'BOOKING_INTAKE' && commandType !== 'ISSUE_CREATE') _r1aReqRefuse('R1A_UNKNOWN_COMMAND');
+  var commandId = _r1aReqCell(row.command_id);
+  if (!_r1aReqText(commandId)) _r1aReqRefuse('R1A_COMMAND_ID_REQUIRED');
+  _r1aAssertSubmittedBy(actorEmail, row.submitted_by);
+  _r1aAssertActorField(actorEmail, row.requested_by, actorId);
+  var fields = _r1aReqFields(commandType);
+  var payload = {};
+  fields.forEach(function(f) {
+    if (f.key === 'job_id' || f.key === 'job_id_human' || f.key === 'expected_version' || f.key === 'command_id') return;
+    var value = _r1aReqCell(row[f.key]);
+    if (value !== undefined) {
+      if (f.type === 'timestamp' && Object.prototype.toString.call(row[f.key]) === '[object Date]' && !isNaN(row[f.key].getTime())) {
+        payload[f.key] = row[f.key].toISOString();
+      } else if (f.type === 'bool' && (row[f.key] === true || row[f.key] === false)) {
+        payload[f.key] = row[f.key];
+      } else {
+        payload[f.key] = value;
+      }
+    }
+  });
+  if (_r1aReqPresent(row.submitted_by)) payload.submitted_by = String(row.submitted_by).trim();
+  if (_r1aReqPresent(row.requested_by)) payload.requested_by = String(row.requested_by).trim();
+  var request = { command_id: String(commandId).trim(), command_type: commandType, payload: payload };
+  if (commandType === 'SOLD_INTAKE') {
+    if (_r1aReqPresent(row.job_id) || _r1aReqPresent(row.expected_version)) _r1aReqRefuse('R1A_INVALID_FIELDS');
+    return request;
+  }
+  var jobId = _r1aReqCell(row.job_id);
+  if (!_r1aReqText(jobId)) _r1aReqRefuse('R1A_JOB_NOT_FOUND');
+  if (!_r1aReqPresent(row.expected_version)) _r1aReqRefuse('R1A_STALE_VERSION');
+  request.job_id = String(jobId).trim();
+  request.expected_version = typeof row.expected_version === 'number' ? row.expected_version : String(row.expected_version).trim();
+  return request;
+}
+
+function _r1aDispatchBuiltRequest(request, actorEmail) {
+  var options = _r1aCloudOptions();
+  if (!options || !options.config || options.config.environment !== 'DEV' || options.config.sheetId !== R1A_REQUEST_DEV_SHEET || !options.store || options.store.getSheetId() !== R1A_REQUEST_DEV_SHEET || options.store.getEnvironment() !== 'DEV') _r1aReqRefuse('R1A_DEV_ONLY');
+  options.actorEmail = function() { return actorEmail; };
+  return _r1aCreate(options).command(request);
+}
+
+function _r1aCommandFromRequestRow(commandType, requestRowId, actorEmail, deps) {
+  deps = deps || {};
+  var type = typeof commandType === 'string' ? commandType.trim() : '';
+  if (!R1A_REQUEST_TABLES[type]) _r1aReqRefuse('R1A_UNKNOWN_COMMAND');
+  if (!_r1aReqPresent(requestRowId) || !String(requestRowId).trim()) _r1aReqRefuse('R1A_REQUEST_NOT_FOUND');
+  var actor = _r1aReqEmail(typeof actorEmail === 'string' ? actorEmail : '');
+  if (!actor) _r1aReqRefuse('R1A_AUTHENTICATED_EMAIL_REQUIRED');
+  var session = typeof deps.sessionEmail === 'string' ? _r1aReqEmail(deps.sessionEmail) : _r1aSessionEmail();
+  if (session && session !== actor) _r1aReqRefuse('R1A_ACTOR_MISMATCH');
+  var sheetId = deps.sheetId || R1A_REQUEST_DEV_SHEET;
+  if (sheetId !== R1A_REQUEST_DEV_SHEET) _r1aReqRefuse('R1A_DEV_ONLY');
+  var row = typeof deps.readRow === 'function'
+    ? deps.readRow(R1A_REQUEST_TABLES[type], String(requestRowId).trim(), sheetId)
+    : _r1aReadRequestRowFromSpreadsheet(_r1aOpenDevRequestSpreadsheet(), R1A_REQUEST_TABLES[type], requestRowId, R1A_REQUEST_DEV_SHEET);
+  var request = _r1aBuildIntakeRequest(type, row, actor);
+  var dispatch = typeof deps.dispatch === 'function' ? deps.dispatch : _r1aDispatchBuiltRequest;
+  return dispatch(request, actor);
+}
+
+function appSheetR1CommandFromRequestRow(commandType, requestRowId, actorEmail) {
+  try { return JSON.stringify(_r1aCommandFromRequestRow(commandType, requestRowId, actorEmail)); }
+  catch (e) { return JSON.stringify({ ok: false, error: e.code || e.message || 'R1A_REFUSED' }); }
+}
+
+if (typeof module !== 'undefined') module.exports = {
+  R1A_REQUEST_DEV_SHEET: R1A_REQUEST_DEV_SHEET,
+  R1A_REQUEST_TABLES: R1A_REQUEST_TABLES,
+  _r1aReadRequestRowFromSpreadsheet: _r1aReadRequestRowFromSpreadsheet,
+  _r1aBuildIntakeRequest: _r1aBuildIntakeRequest,
+  _r1aCommandFromRequestRow: _r1aCommandFromRequestRow,
+  appSheetR1CommandFromRequestRow: appSheetR1CommandFromRequestRow
+};
 
 /* DEV-only Apps Script entry points. No generic mutation and no PROD fallback. */
 function _r1aCloudOptions(){
   var store=_s17CloudStore();
   store.withLock=function(fn){var lock=LockService.getScriptLock();lock.waitLock(30000);try{return fn();}finally{lock.releaseLock();}};
-  return {store:store,config:{environment:'DEV',sheetId:R1A_BOUND_DEV_SHEET_ID},actorEmail:function(){return Session.getActiveUser().getEmail();},effectiveUserEmail:function(){return Session.getEffectiveUser().getEmail();},reads:{officeHome:_s17OfficeToday,jobSearch:_s17JobSearch,jobOverview:_s17JobOverview,operationalQueue:_s17OperationalQueue,releaseModes:_s17AdminReleaseModes,systemStatus:_s17AdminSystemStatus,auditHistory:_s17AuditHistory,actionAvailability:_s17ActionAvailability,taskActionAvailability:_s17TaskActionAvailability},services:_r1sServices()};
+  return {store:store,config:{environment:'DEV',sheetId:R1A_BOUND_DEV_SHEET_ID},actorEmail:function(){return Session.getActiveUser().getEmail();},effectiveUserEmail:function(){return Session.getEffectiveUser().getEmail();},reads:{officeHome:_s17OfficeToday,jobSearch:_s17JobSearch,jobOverview:_s17JobOverview,operationalQueue:_s17OperationalQueue,releaseModes:_s17AdminReleaseModes,systemStatus:_s17AdminSystemStatus,auditHistory:_s17AuditHistory,actionAvailability:_s17ActionAvailability,taskActionAvailability:_s17TaskActionAvailability,planner:function(s,asOf,weeks){if(typeof _s11BuildPlanner!=='function')throw new Error('R1A_READ_UNSUPPORTED');var start=asOf||Utilities.formatDate(new Date(),'Europe/London','yyyy-MM-dd');return _s11BuildPlanner(s,start,weeks);}},services:_r1sServices()};
 }
 function appSheetR1Read(requestJson){try{return JSON.stringify(_r1aCreate(_r1aCloudOptions()).read(JSON.parse(requestJson)));}catch(e){return JSON.stringify({ok:false,error:e.code||e.message||'R1A_REFUSED'});}}
 function appSheetR1Command(requestJson){try{return JSON.stringify(_r1aCreate(_r1aCloudOptions()).command(JSON.parse(requestJson)));}catch(e){return JSON.stringify({ok:false,error:e.code||e.message||'R1A_REFUSED'});}}

@@ -119,11 +119,35 @@ function _s17OfficeToday(store, input) {
 }
 
 function _s17TaskSummary(t) {
+  var dueAt = t.due_at ? _s17Date(t.due_at) : null;
+  var today = _s17Today();
+  var dueClass = 'NO_DUE';
+  var dueLabel = 'No due date';
+  var daysDelta = null;
+  if (dueAt) {
+    if (dueAt < today) {
+      daysDelta = -Math.round((new Date(today + 'T12:00:00Z') - new Date(dueAt + 'T12:00:00Z')) / 86400000);
+      dueClass = 'OVERDUE';
+      dueLabel = 'OVERDUE (' + (-daysDelta) + ' day' + ((-daysDelta) === 1 ? '' : 's') + ' late)';
+    } else if (dueAt === today) {
+      dueClass = 'DUE_TODAY'; dueLabel = 'DUE TODAY'; daysDelta = 0;
+    } else {
+      var tomorrow = new Date(today + 'T12:00:00Z'); tomorrow.setUTCDate(tomorrow.getUTCDate() + 1);
+      var tom = tomorrow.toISOString().slice(0, 10);
+      var week = new Date(today + 'T12:00:00Z'); week.setUTCDate(week.getUTCDate() + 7);
+      var weekEnd = week.toISOString().slice(0, 10);
+      daysDelta = Math.round((new Date(dueAt + 'T12:00:00Z') - new Date(today + 'T12:00:00Z')) / 86400000);
+      if (dueAt === tom) { dueClass = 'DUE_TOMORROW'; dueLabel = 'DUE TOMORROW'; }
+      else if (dueAt <= weekEnd) { dueClass = 'NEXT_7_DAYS'; dueLabel = 'NEXT 7 DAYS'; }
+      else { dueClass = 'NORMAL_LATER'; dueLabel = 'NORMAL/LATER'; }
+    }
+  }
   return {
     id: t.id, job_id: t.job_id, title: t.title, group: t.group,
-    owner_id: t.owner_id, due_at: t.due_at ? _s17Date(t.due_at) : null,
+    owner_id: t.owner_id, backup_id: t.backup_id, due_at: dueAt,
     status: t.status, priority: t.priority, blocking_reason: t.blocking_reason,
-    template_code: t.template_code, related_entity_type: t.related_entity_type, related_entity_id: t.related_entity_id
+    template_code: t.template_code, related_entity_type: t.related_entity_type, related_entity_id: t.related_entity_id,
+    due_class: dueClass, due_class_label: dueLabel, days_delta: daysDelta
   };
 }
 
@@ -538,6 +562,8 @@ function _s17ActionAvailability(store, jobId) {
       record_call: { available: !cancelled && !archived && pilotGated('FN-01'), mode: fnEnabled('FN-01') ? fnMode('FN-01') : 'Disabled' },
       resolve_issue: { available: !cancelled && !archived && pilotGated('FN-01'), mode: fnEnabled('FN-01') ? fnMode('FN-01') : 'Disabled' },
       approve_booking: { available: !cancelled && !archived && ['Prebooking', 'ReadyToBook', 'BookingInProgress'].includes(stage) && pilotGated('FN-01'), mode: fnEnabled('FN-01') ? fnMode('FN-01') : 'Disabled' },
+      move_job: { available: !cancelled && !archived && ['Booked', 'AwaitingInstallation', 'InProgress', 'BookingInProgress'].includes(stage) && pilotGated('FN-01'), mode: fnEnabled('FN-01') ? fnMode('FN-01') : 'Disabled' },
+      change_installer: { available: !cancelled && !archived && ['Booked', 'AwaitingInstallation', 'InProgress', 'BookingInProgress'].includes(stage) && pilotGated('FN-01'), mode: fnEnabled('FN-01') ? fnMode('FN-01') : 'Disabled' },
       operational_completion: { available: !cancelled && !archived && ['InProgress', 'Aftercare'].includes(stage) && !operational && pilotGated('FN-01'), mode: fnEnabled('FN-01') ? fnMode('FN-01') : 'Disabled' },
       commissioning_review: { available: !cancelled && !archived && pilotGated('FN-07'), mode: fnEnabled('FN-07') ? fnMode('FN-07') : 'Disabled' },
       handover_approval: { available: !cancelled && !archived && pilotGated('FN-08'), mode: fnEnabled('FN-08') ? fnMode('FN-08') : 'Disabled' },

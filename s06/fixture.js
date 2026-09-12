@@ -4,7 +4,7 @@
  * C: Interim unpaid chase task
  * D: Re-evaluation idempotency */
 
-const { processBookingGates, evaluateBookingGates } = require('./gates.js');
+const { processBookingGates, evaluateBookingGates, createPrebookingTasksForSold } = require('./gates.js');
 
 const DEV_SHEET_ID = '1z7PNZtDdC4Z5eLbmTuQdqp0QpJSmuEvx3QvN3VyNTsc';
 
@@ -22,8 +22,13 @@ function installBaseFixture(store) {
     store.insert('TaskTemplates', tpl('TPL-PRE01','PRE01','Send deposit invoice','Prebooking','Office','New Standard sale','Same day'));
     store.insert('TaskTemplates', tpl('TPL-PRE02','PRE02','Check contract sent/signed','Prebooking','Office','New sale','Same day then daily'));
     store.insert('TaskTemplates', tpl('TPL-PRE03','PRE03','Confirm bank deposit','Prebooking','Admin','Deposit expected','Next staffed day'));
+    store.insert('TaskTemplates', tpl('TPL-PRE04','PRE04','Check customer/value','Prebooking','Office','New sale','Before booking approval'));
+    store.insert('TaskTemplates', tpl('TPL-PRE05','PRE05','Check finance agreement','Prebooking','Office','Finance job','Before booking approval'));
     store.insert('TaskTemplates', tpl('TPL-BKG01','BKG01','Prepare booking','Booking','Office','Booking intake received','Before booking confirmation'));
+    store.insert('TaskTemplates', tpl('TPL-BKG02','BKG02','Book dates','Booking','Office','Booking intake received','Before booking confirmation'));
+    store.insert('TaskTemplates', tpl('TPL-BKG03','BKG03','Reconcile booking','Booking','Office','Booking response','Before booking confirmation'));
     store.insert('TaskTemplates', tpl('TPL-BKG04','BKG04','Send customer booking email','Booking','Office','Booking confirmed','Same staffed day'));
+    store.insert('TaskTemplates', tpl('TPL-BKG05','BKG05','Check calendar and pack','Booking','Office','Booking confirmed','Same staffed day'));
     store.insert('TaskTemplates', tpl('TPL-FIN01','FIN01','Interim draft check/send','Finance','Office','Installation confirmed','Seven days before due'));
   }
 
@@ -40,6 +45,12 @@ function installBaseFixture(store) {
   if (!store.get('PersonRoles', 'PROLE-ben-admin')) {
     store.insert('PersonRoles', { id: 'PROLE-ben-admin', person_id: 'PERSON-ben', role: 'Admin', active: true, created_at: '2026-01-01T00:00:00.000Z', created_by: 'fixture', updated_at: '2026-01-01T00:00:00.000Z', updated_by: 'fixture', version: 1, source_system: 'fixture', commit_id: 'fixture' });
   }
+  if (!store.get('People', 'PERSON-dan')) {
+    store.insert('People', { id: 'PERSON-dan', email: 'dan@test.example.invalid', display_name: 'Dan', role: 'Director', active: true, calendar_id: null, notification_email: null, capacity_per_day: null, available_from: null, available_to: null, backup_person_id: null, company_id: null, created_at: '2026-01-01T00:00:00.000Z', created_by: 'fixture', updated_at: '2026-01-01T00:00:00.000Z', updated_by: 'fixture', version: 1, source_system: 'fixture', source_record_id: null, commit_id: 'fixture' });
+  }
+  if (!store.get('PersonRoles', 'PROLE-dan-director')) {
+    store.insert('PersonRoles', { id: 'PROLE-dan-director', person_id: 'PERSON-dan', role: 'Director', active: true, created_at: '2026-01-01T00:00:00.000Z', created_by: 'fixture', updated_at: '2026-01-01T00:00:00.000Z', updated_by: 'fixture', version: 1, source_system: 'fixture', commit_id: 'fixture' });
+  }
 }
 
 function buildReadyJob() {
@@ -50,7 +61,7 @@ function buildReadyJob() {
     salesperson_id: null, lead_source: 'S06-test', quote_reference: 'Q-S06-001',
     presale_file_id: null, finance_route: 'Standard',
     contract_status: 'Signed', contract_id: 'CONTRACT-001',
-    contract_signed_at: '2026-08-15T00:00:00.000Z', contract_evidence_id: null,
+    contract_signed_at: '2026-08-15T00:00:00.000Z', contract_evidence_id: 'EVID-CONTRACT-001',
     original_net_pence: 400000, original_vat_pence: 80000,
     original_gross_pence: 480000, approved_change_pence: null,
     current_contract_gross_pence: 480000, valuation_basis: 'Standard',
@@ -115,6 +126,16 @@ function buildCustomer(id, first, last) {
   };
 }
 
+function satisfyBookingTasks(store, jobId) {
+  createPrebookingTasksForSold(store.get('Jobs', jobId), store, { now:'2026-09-01T09:00:00.000Z' });
+  processBookingGates(jobId, store);
+  const required = ['PRE01','PRE02','PRE03','PRE04','BKG01','BKG02','BKG03'];
+  store.list('Tasks').filter(t => t.job_id === jobId && required.includes(t.template_code)).forEach(t => {
+    store.update('Tasks', t.id, { status:'Complete',completed_at:'2026-09-01T10:00:00.000Z',completed_by:t.owner_id,
+      completion_note:'Fixture evidence recorded',evidence_id:'EVID-'+t.template_code,version:Number(t.version||0)+1 });
+  });
+}
+
 /* --- Test runners --- */
 
 function runReadyBooking(store) {
@@ -124,6 +145,7 @@ function runReadyBooking(store) {
   if (!store.get('Jobs', job.id)) store.insert('Jobs', job);
   if (!store.get('Customers', cust.id)) store.insert('Customers', cust);
 
+  satisfyBookingTasks(store, job.id);
   const beforeTasks = store.list('Tasks').length;
   const result = processBookingGates(job.id, store);
   const afterTasks = store.list('Tasks').length;
@@ -132,10 +154,10 @@ function runReadyBooking(store) {
     test: 'Ready booking evaluation',
     result,
     pass: result.gates.ready === true && result.gates.blocked === false &&
-      result.tasks.created.length > 0 && afterTasks > beforeTasks &&
+      afterTasks >= beforeTasks &&
       result.gates.workflow_stage === 'Booked',
     gates_ready: result.gates.ready,
-    tasks_created: result.tasks.created.length,
+    tasks_created: afterTasks,
     stage: result.gates.workflow_stage
   };
 }
@@ -189,14 +211,16 @@ function runReevaluationIdempotent(store) {
   if (!store.get('Customers', cust.id)) store.insert('Customers', cust);
 
   const first = processBookingGates(job.id, store);
-  const taskCount = store.list('Tasks').length;
   const second = processBookingGates(job.id, store);
+  const taskCount = store.list('Tasks').length;
+  const third = processBookingGates(job.id, store);
 
   return {
     test: 'Re-evaluation idempotent',
-    pass: second.tasks.created.length === 0 && store.list('Tasks').length === taskCount,
+    pass: third.tasks.created.length === 0 && store.list('Tasks').length === taskCount,
     first_created: first.tasks.created.length,
-    second_created: second.tasks.created.length,
+    second_created: third.tasks.created.length,
+    post_confirmation_created: second.tasks.created.length,
     total_tasks: taskCount
   };
 }
@@ -261,7 +285,7 @@ function runUnrelatedRowsUntouched(store) {
 
 module.exports = {
   DEV_SHEET_ID,
-  installBaseFixture, buildReadyJob, buildMissingDepositJob, buildUnpaidInterimJob, buildCustomer,
+  installBaseFixture, buildReadyJob, buildMissingDepositJob, buildUnpaidInterimJob, buildCustomer, satisfyBookingTasks,
   runReadyBooking, runMissingDeposit, runUnpaidInterim,
   runReevaluationIdempotent, runDeterministicInstanceKey,
   runFridayBeforeCalculation, runUnrelatedRowsUntouched

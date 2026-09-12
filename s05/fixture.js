@@ -34,11 +34,18 @@ function soldPayload() {
 
 function bookingPayload(soldJobId) {
   return {
-    booking_sold_ref: soldJobId,
-    booking_install_date: '2026-10-01',
-    booking_notes: 'S05 synthetic booking',
-    booking_email: 'alice_updated@s05.example.invalid',
-    booking_phone: '07987654321'
+    booking_job_id: soldJobId,
+    booking_first_name: 'Alice',
+    booking_last_name: 'Synthetic',
+    booking_address1: '1 Test Street',
+    booking_town: 'Testville',
+    booking_postcode: 'TS1 1AA',
+    booking_email: 'alice@s05.example.invalid',
+    booking_phone: '07123456789',
+    booking_cost: '5000.00',
+    booking_date_roofer: '2026-10-01',
+    booking_date_sparky: '2026-10-03',
+    booking_notes_compat: 'S05 synthetic booking'
   };
 }
 
@@ -209,7 +216,7 @@ function runBookingHappyPath(store, sha256) {
     pass: result.status === 'Processed' && !result.duplicate &&
       updatedJob && updatedJob.booking_submission_id === 'S05-booking-happy-001' &&
       updatedJob.sold_booking_match_status === 'Match' &&
-      updatedJob.workflow_stage === 'BookingInProgress' &&
+      updatedJob.workflow_stage === 'Prebooking' &&
       afterIntake === beforeIntake + 1,
     job_before_stage: job ? job.workflow_stage : null,
     job_after_stage: updatedJob ? updatedJob.workflow_stage : null
@@ -283,7 +290,7 @@ function runBookingConflictingReplay(store, sha256) {
   proc.processBooking(bookingIntake);
 
   const changed = clone(bookingIntake);
-  changed.raw_payload.booking_notes = 'Changed notes';
+  changed.raw_payload.booking_date_roofer = '2026-11-01';
   const second = proc.processBooking(changed);
 
   return {

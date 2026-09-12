@@ -29,7 +29,8 @@ var _S06_COLS = {
   TaskTemplates: ['id','template_code','title','group','default_owner_role','trigger_event','due_rule','evidence_required','active','template_version','created_at','created_by','updated_at','updated_by','version','commit_id'],
   People: ['id','email','display_name','role','company_id','active','calendar_id','notification_email','capacity_per_day','available_from','available_to','backup_person_id','created_at','created_by','updated_at','updated_by','version','source_system','source_record_id','commit_id'],
   PersonRoles: ['id','person_id','role','active','created_at','created_by','updated_at','updated_by','version','source_system','commit_id'],
-  ReleaseModes: ['id','function_id','function_name','mode','mode_record_basis','authorised_job_scope','target_release','planned_target_mode','current_system','fallback','external_ids_protected_reference','activation_time','approved_version','ben_approval_reference','scope_boundary_notes','created_at','created_by','updated_at','updated_by','version','commit_id']
+  ReleaseModes: ['id','function_id','function_name','mode','mode_record_basis','authorised_job_scope','target_release','planned_target_mode','current_system','fallback','external_ids_protected_reference','activation_time','approved_version','ben_approval_reference','scope_boundary_notes','created_at','created_by','updated_at','updated_by','version','commit_id'],
+  AuditEvents: ['id','entity_type','entity_id','action','before_json','after_json','initiating_actor','executing_service','timestamp','correlation_id','reason','commit_id','created_at']
 };
 
 function _s06Read(ss, name) {
@@ -131,8 +132,13 @@ function runS06FixtureApply() {
   tpl('TPL-PRE01','PRE01','Send deposit invoice','Prebooking','Office','New Standard sale','Same day');
   tpl('TPL-PRE02','PRE02','Check contract sent/signed','Prebooking','Office','New sale','Same day then daily');
   tpl('TPL-PRE03','PRE03','Confirm bank deposit','Prebooking','Admin','Deposit expected','Next staffed day');
+  tpl('TPL-PRE04','PRE04','Check customer/value','Prebooking','Office','New sale','Before booking approval');
+  tpl('TPL-PRE05','PRE05','Check finance agreement','Prebooking','Office','Finance job','Before booking approval');
   tpl('TPL-BKG01','BKG01','Prepare booking','Booking','Office','Booking intake received','Before booking confirmation');
+  tpl('TPL-BKG02','BKG02','Book dates','Booking','Office','Booking intake received','Before booking confirmation');
+  tpl('TPL-BKG03','BKG03','Reconcile booking','Booking','Office','Booking response','Before booking confirmation');
   tpl('TPL-BKG04','BKG04','Send customer booking email','Booking','Office','Booking confirmed','Same staffed day');
+  tpl('TPL-BKG05','BKG05','Check calendar and pack','Booking','Office','Booking confirmed','Same staffed day');
   tpl('TPL-FIN01','FIN01','Interim draft check/send','Finance','Office','Installation confirmed','Seven days before due');
 
   var result = { applied: true, templates: store.list('TaskTemplates').length };
@@ -165,16 +171,20 @@ function runS06HappyPathTest() {
   var now = new Date().toISOString();
   var job = { id:'J-s06-ready',job_id:'SS-S06R-EADY',customer_id:'CUST-s06-ready',display_name:'S06 Ready Test',sold_submission_id:'S06-sold-ready',booking_submission_id:'S06-booking-ready',sold_at:'2026-08-01T00:00:00.000Z',salesperson_id:null,lead_source:'S06-test',quote_reference:'Q-S06-001',presale_file_id:null,finance_route:'Standard',contract_status:'Signed',contract_id:'CONTRACT-001',contract_signed_at:'2026-08-15T00:00:00.000Z',contract_evidence_id:null,original_net_pence:400000,original_vat_pence:80000,original_gross_pence:480000,approved_change_pence:null,current_contract_gross_pence:480000,valuation_basis:'Standard',sold_booking_match_status:'Match',customer_details_verified_at:'2026-08-15T00:00:00.000Z',customer_details_verified_by:'PERSON-tanya',deposit_bank_confirmed_at:'2026-08-20T00:00:00.000Z',deposit_bank_confirmed_by:'PERSON-ben',deposit_bank_reference:'DEP-001',roof_required:false,electrical_required:false,scaffold_required:false,workflow_stage:'BookingInProgress',booking_approved_at:null,booking_approved_by:null,operational_complete_at:null,operational_complete_by:null,customer_happy_at:null,customer_happy_by:null,handover_status:'NotReady',financial_status:'Pending',cancellation_at:null,cancellation_by:null,cancellation_reason:null,archived_at:null,next_action_at:'2026-10-15T00:00:00.000Z',account_policy_version:null,pilot_job:false,release_scope:'R1',created_at:now,created_by:'S06-test',updated_at:now,updated_by:'S06-test',version:1,source_system:'S06-test',source_record_id:null,commit_id:'S06-test' };
 
+  job.contract_evidence_id = 'EVID-CONTRACT-001';
   if (!store.get('Jobs', job.id)) store.insert('Jobs', job);
   if (!store.get('Customers', 'CUST-s06-ready')) {
     store.insert('Customers', { id:'CUST-s06-ready',first_name:'Alice',last_name:'Ready',address_line1:'1 Test Street',address_line2:'',town:'Testville',postcode:'TS1 1AA',email:'alice@test.example.invalid',phone:'07123456789',alternate_contact:null,contact_notes:null,created_at:now,created_by:'S06-test',updated_at:now,updated_by:'S06-test',version:1,source_system:'S06-test',source_record_id:null,commit_id:'S06-test' });
   }
 
-  // Process gates
+  // Generate, explicitly satisfy the synthetic pre/booking tasks, then process gates.
+  processBookingGates(job.id, store);
+  var required=['PRE01','PRE02','PRE03','PRE04','BKG01','BKG02','BKG03'];
+  store.list('Tasks').filter(function(t){return t.job_id===job.id&&required.indexOf(t.template_code)>=0;}).forEach(function(t){store.update('Tasks',t.id,{status:'Complete',completed_at:now,completed_by:t.owner_id,completion_note:'S06 fixture evidence',evidence_id:'EVID-'+t.template_code,version:Number(t.version||0)+1});});
   var result = processBookingGates(job.id, store);
 
   var pass = result.gates.ready === true && result.gates.blocked === false &&
-    result.tasks.created.length > 0 && result.gates.workflow_stage === 'Booked';
+    result.gates.workflow_stage === 'Booked';
 
   return _s06Result('S06 happy path', pass, pass ?
     'PASS. Gates ready. Stage: ' + result.gates.workflow_stage + '. Tasks created: ' + result.tasks.created.length :
@@ -190,11 +200,12 @@ function restoreS06SafeState() {
   return _s06Result('S06 safe state', true, 'FN-01 restored to Disabled');
 }
 
-/* Minimal embedded processBookingGates for cloud */
-function processBookingGates(jobId, store) {
+/* DEV cloud booking state machine; mirrors canonical s06/gates.js safeguards. */
+function processBookingGates(jobId, store, options) {
   /* S15: stop normal work during cancellation and controlled reopen review. */
   var S15_job = store.get('Jobs',jobId); if (S15_job && (S15_job.cancellation_at || ['CancellationInProgress','Cancelled'].includes(S15_job.workflow_stage) || store.list('Tasks').some(function(t){return t.job_id===S15_job.id&&t.template_code==='S15-REOPEN-REVIEW'&&!['Complete','NotRequired'].includes(t.status);}))) throw new Error('S15_REVIEW: normal work suppressed');
 
+  options = options || {};
   var job = store.get('Jobs', jobId);
   if (!job) return { error: 'JOB_NOT_FOUND' };
 
@@ -207,40 +218,70 @@ function processBookingGates(jobId, store) {
     if (!pass) ready = false;
   }
 
+  function taskSatisfied(code) {
+    var rows=store.list('Tasks').filter(function(t){return t.job_id===jobId&&t.template_code===code;});
+    if(rows.length!==1)return false;
+    return ['Complete','NotRequired'].indexOf(rows[0].status)>=0&&(rows[0].status!=='NotRequired'||!!(rows[0].completion_note||rows[0].evidence_id));
+  }
+  var standard=job.finance_route==='Standard';
+  var readyToBook=!!job.sold_submission_id&&['Standard','Phoenix','OtherReview'].indexOf(job.finance_route)>=0&&
+    job.contract_status==='Signed'&&!!job.contract_evidence_id&&taskSatisfied('PRE04')&&
+    !!job.customer_details_verified_at&&!!job.customer_details_verified_by&&typeof job.original_gross_pence==='number'&&job.original_gross_pence>0;
+  readyToBook=readyToBook&&taskSatisfied('PRE02');
+  if(standard){readyToBook=readyToBook&&taskSatisfied('PRE03')&&!!job.deposit_bank_confirmed_at&&!!job.deposit_bank_confirmed_by&&!!job.deposit_bank_reference;}
+  else{var pre05=store.list('Tasks').filter(function(t){return t.job_id===jobId&&t.template_code==='PRE05';})[0];readyToBook=readyToBook&&taskSatisfied('PRE05')&&!!pre05&&!!pre05.evidence_id;}
+
   check('sold_booking_linked', !!(job.sold_submission_id && job.booking_submission_id), 'Linked: ' + !!job.booking_submission_id, true);
   check('sold_booking_match', job.sold_booking_match_status === 'Match', 'Match: ' + (job.sold_booking_match_status||'?'), true);
   var cust = job.customer_id ? store.get('Customers', job.customer_id) : null;
   check('customer_exists', !!cust, cust ? 'Customer: ' + cust.id : 'No customer', true);
-  check('contract_status', ['Sent','Signed'].includes(job.contract_status), 'Contract: ' + (job.contract_status||'?'), false);
+  check('contract_status', job.contract_status==='Signed'&&!!job.contract_evidence_id, 'Signed contract evidence required', true);
   check('finance_route', ['Standard','Phoenix','OtherReview'].includes(job.finance_route), 'Finance: ' + (job.finance_route||'?'), true);
-  check('deposit_confirmed', !!job.deposit_bank_confirmed_at, 'Deposit: ' + (job.deposit_bank_confirmed_at||'not confirmed'), true);
+  check('deposit_confirmed', !standard||!!(job.deposit_bank_confirmed_at&&job.deposit_bank_confirmed_by&&job.deposit_bank_reference), 'Deposit: ' + (job.deposit_bank_confirmed_at||'not applicable/not confirmed'), true);
   check('gross_amount', typeof job.original_gross_pence === 'number' && job.original_gross_pence > 0, 'Gross: ' + (job.original_gross_pence||0), false);
+  var mandatory=(standard?['PRE01','PRE02','PRE03','PRE04']:['PRE02','PRE04','PRE05']).concat(['BKG01','BKG02','BKG03']);
+  mandatory.forEach(function(code){check('task_'+code,taskSatisfied(code),code+' must be Complete/NotRequired',true);});
 
   var created = [];
   var now = new Date().toISOString();
 
-  function mkTask(code, title, group, owner, due) {
+  function mkTask(code, title, group, owner, due, backup) {
     var key = code + '-' + jobId + '-ROOT-nodue';
     var exists = store.list('Tasks').filter(function(t) { return t.instance_key === key; });
     if (exists.length > 0) return;
-    var t = { id:'TASK-'+Date.now().toString(36)+'-'+Math.random().toString(36).slice(2,8), job_id:jobId, template_code:code, instance_key:key, group:group, title:title, owner_id:owner, backup_id:null, related_entity_type:'Jobs', related_entity_id:jobId, due_at:due||null, original_due_at:due||null, priority:1, status:'Open', blocking_reason:null, next_followup_at:null, completed_at:null, completed_by:null, completion_note:null, evidence_id:null, revision_required:false, created_rule_version:'S06-1.0', created_at:now, created_by:'S06-gates', updated_at:now, updated_by:'S06-gates', version:1, source_system:'S06-gates', commit_id:'S06-'+key };
+    var t = { id:'TASK-'+Date.now().toString(36)+'-'+Math.random().toString(36).slice(2,8), job_id:jobId, template_code:code, instance_key:key, group:group, title:title, owner_id:owner, backup_id:backup||null, related_entity_type:'Jobs', related_entity_id:jobId, due_at:due||null, original_due_at:due||null, priority:1, status:'Open', blocking_reason:null, next_followup_at:null, completed_at:null, completed_by:null, completion_note:null, evidence_id:null, revision_required:false, created_rule_version:'S06-1.0', created_at:now, created_by:'S06-gates', updated_at:now, updated_by:'S06-gates', version:1, source_system:'S06-gates', commit_id:'S06-'+key };
     store.insert('Tasks', t);
     created.push({ code:code, task_id:t.id });
   }
 
-  mkTask('PRE01','Send deposit invoice','Prebooking','PERSON-tanya',null);
+  if (job.finance_route === 'Standard') mkTask('PRE01','Send deposit invoice','Prebooking','PERSON-tanya',now);
   mkTask('PRE02','Check contract sent/signed','Prebooking','PERSON-tanya',null);
-  mkTask('PRE03','Confirm bank deposit','Prebooking','PERSON-ben',null);
-  mkTask('BKG01','Prepare booking','Booking','PERSON-tanya',null);
-  mkTask('BKG04','Send customer booking email','Booking','PERSON-tanya',null);
+  if (job.finance_route === 'Standard') mkTask('PRE03','Confirm bank deposit','Prebooking','PERSON-ben',null,'PERSON-dan');
+  mkTask('PRE04','Check customer details and sold/presale amount','Prebooking','PERSON-tanya',null);
+  if (job.finance_route !== 'Standard') mkTask('PRE05','Check finance agreement approval','Prebooking','PERSON-tanya',null);
+  if (job.booking_submission_id) {
+    mkTask('BKG01','Prepare booking','Booking','PERSON-tanya',null);
+    mkTask('BKG02','Book dates and allocations','Booking','PERSON-tanya',null);
+    mkTask('BKG03','Reconcile booking response','Booking','PERSON-tanya',null);
+  }
+  if (job.workflow_stage === 'Booked' || job.booking_approved_at) {
+    mkTask('BKG04','Send customer booking email','Booking','PERSON-tanya',now);
+    mkTask('BKG05','Check calendar events and document pack','Booking','PERSON-tanya',now);
+  }
 
-  if (ready && job.workflow_stage === 'BookingInProgress') {
-    store.update('Jobs', jobId, { workflow_stage:'Booked',booking_approved_at:now,booking_approved_by:'S06-gates',updated_at:now,updated_by:'S06-gates',version:(job.version||0)+1 });
-    job.workflow_stage = 'Booked';
+  var actor=options.actor||'S06-gates';
+  function transition(stage,extra){var before=store.get('Jobs',jobId),patch={workflow_stage:stage,updated_at:now,updated_by:actor,version:Number(before.version||0)+1,commit_id:options.command_id?'S06-'+options.command_id:before.commit_id};for(var k in (extra||{}))patch[k]=extra[k];store.update('Jobs',jobId,patch);var after=store.get('Jobs',jobId),aid='AE-S06-'+stage+'-'+jobId;if(!store.get('AuditEvents',aid))store.insert('AuditEvents',{id:aid,entity_type:'Jobs',entity_id:jobId,action:'WorkflowStage:'+stage,before_json:JSON.stringify(before),after_json:JSON.stringify(after),initiating_actor:actor,executing_service:'S06-gates',timestamp:now,correlation_id:options.command_id||null,reason:stage,commit_id:options.command_id?'S06-'+options.command_id:'S06-'+stage+'-'+jobId,created_at:now});job=after;}
+  if(job.workflow_stage==='Prebooking'&&readyToBook)transition('ReadyToBook');
+  else if(job.workflow_stage==='ReadyToBook'&&job.booking_submission_id)transition('BookingInProgress');
+  else if(ready&&job.workflow_stage==='BookingInProgress')transition('Booked',{booking_approved_at:now,booking_approved_by:actor});
+  if(job.workflow_stage==='Booked'){
+    mkTask('BKG04','Send customer booking email','Booking','PERSON-tanya',now);
+    mkTask('BKG05','Check calendar events and document pack','Booking','PERSON-tanya',now);
   }
 
   return {
     job_id: jobId, job_id_human: job.job_id,
+    readiness: { ready:readyToBook, blocked:!readyToBook, workflow_stage:job.workflow_stage },
     gates: { ready:ready, blocked:blocked, gates:gates, workflow_stage:job.workflow_stage },
     tasks: { created:created, task_count:created.length },
     success: !blocked

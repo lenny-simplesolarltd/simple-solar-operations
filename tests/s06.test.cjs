@@ -8,7 +8,7 @@ const DEV_SHEET_ID = '1z7PNZtDdC4Z5eLbmTuQdqp0QpJSmuEvx3QvN3VyNTsc';
 const clone = v => JSON.parse(JSON.stringify(v));
 
 const {
-  evaluateBookingGates, createTasksForJob, processBookingGates,
+  evaluateReadyToBook, evaluateBookingGates, createTasksForJob, createPrebookingTasksForSold, processBookingGates,
   isStaffedDay, nextStaffedDay, fridayBefore
 } = require('../s06/gates.js');
 
@@ -146,6 +146,257 @@ test('S06: processBookingGates returns error for missing job', () => {
   assert.equal(result.error, 'JOB_NOT_FOUND');
 });
 
+test('S06: explicit ReadyToBook requires task and field evidence and records one audit transition', () => {
+  const store = makeStore(); installBaseFixture(store);
+  const job = buildReadyJob(); job.workflow_stage='Prebooking'; job.booking_submission_id=null;
+  store.insert('Jobs',job); store.insert('Customers',buildCustomer(job.customer_id,'Alice','Ready'));
+  createPrebookingTasksForSold(job,store,{now:'2026-09-01T09:00:00.000Z'});
+  ['PRE01','PRE02','PRE03','PRE04'].forEach(code => { const t=store.list('Tasks').find(x=>x.job_id===job.id&&x.template_code===code); store.update('Tasks',t.id,{status:'Complete',completed_at:'2026-09-01T10:00:00.000Z',completed_by:t.owner_id,completion_note:'Verified',evidence_id:'EVID-'+code,version:2}); });
+  assert.equal(evaluateReadyToBook(store.get('Jobs',job.id),store).ready,true);
+  const first=processBookingGates(job.id,store,{actor:'PERSON-tanya',command_id:'READY-1',now:'2026-09-01T11:00:00.000Z'});
+  assert.equal(store.get('Jobs',job.id).workflow_stage,'ReadyToBook');
+  assert.equal(first.readiness.stage_advanced,true);
+  assert.equal(store.list('AuditEvents').filter(a=>a.action==='WorkflowStage:ReadyToBook').length,1);
+  const version=store.get('Jobs',job.id).version;
+  processBookingGates(job.id,store,{actor:'PERSON-tanya',command_id:'READY-RETRY',now:'2026-09-01T12:00:00.000Z'});
+  assert.equal(store.get('Jobs',job.id).version,version);
+  assert.equal(store.list('AuditEvents').filter(a=>a.action==='WorkflowStage:ReadyToBook').length,1);
+});
+
+test('S06: missing contract/PRE04/deposit evidence cannot reach ReadyToBook', () => {
+  const store = makeStore(); installBaseFixture(store);
+  const job=buildReadyJob(); job.workflow_stage='Prebooking'; job.booking_submission_id=null; job.contract_evidence_id=null; job.deposit_bank_reference=null;
+  store.insert('Jobs',job); store.insert('Customers',buildCustomer(job.customer_id,'Alice','Blocked'));
+  createPrebookingTasksForSold(job,store);
+  const result=processBookingGates(job.id,store,{actor:'PERSON-tanya',command_id:'READY-BLOCKED'});
+  assert.equal(result.readiness.ready,false);
+  assert.equal(store.get('Jobs',job.id).workflow_stage,'Prebooking');
+  assert.equal(store.list('AuditEvents').length,0);
+});
+
+test('S06: field gates cannot bypass outstanding mandatory PRE/BKG tasks', () => {
+  const store=makeStore(); installBaseFixture(store);
+  const job=buildReadyJob(); store.insert('Jobs',job); store.insert('Customers',buildCustomer(job.customer_id,'Alice','Blocked'));
+  const result=processBookingGates(job.id,store);
+  assert.equal(result.gates.ready,false);
+  assert.equal(store.get('Jobs',job.id).workflow_stage,'BookingInProgress');
+  assert.ok(result.gates.gates.some(g=>g.name==='task_BKG01'&&!g.pass));
+});
+
+test('S06: ReadyToBook requires PRE02/PRE03/PRE04 and records actor/time/version once', () => {
+  const store = makeStore(); installBaseFixture(store);
+  const job = buildReadyJob();
+  job.workflow_stage = 'Prebooking';
+  job.booking_submission_id = null;
+  job.version = 1;
+  store.insert('Jobs', job);
+  store.insert('Customers', buildCustomer(job.customer_id, 'Alice', 'Ready'));
+  createPrebookingTasksForSold(job, store, { now: '2026-09-01T09:00:00.000Z' });
+
+  assert.equal(evaluateReadyToBook(store.get('Jobs', job.id), store).ready, false);
+
+  const openPre03 = store.list('Tasks').find(t => t.template_code === 'PRE03');
+  assert.equal(openPre03.status, 'Open');
+  processBookingGates(job.id, store, { actor: 'PERSON-tanya', command_id: 'RTB-PRE03-OPEN', now: '2026-09-01T10:00:00.000Z' });
+  assert.equal(store.get('Jobs', job.id).workflow_stage, 'Prebooking');
+
+  ['PRE02', 'PRE03', 'PRE04'].forEach(code => {
+    const t = store.list('Tasks').find(x => x.job_id === job.id && x.template_code === code);
+    store.update('Tasks', t.id, {
+      status: 'Complete', completed_at: '2026-09-01T10:30:00.000Z', completed_by: t.owner_id,
+      completion_note: 'Verified', evidence_id: 'EVID-' + code, version: 2
+    });
+  });
+  // PRE01 may remain open for ReadyToBook; it is a Booked-gate requirement.
+  assert.equal(evaluateReadyToBook(store.get('Jobs', job.id), store).ready, true);
+
+  const advanced = processBookingGates(job.id, store, {
+    actor: 'PERSON-tanya', command_id: 'RTB-OK', now: '2026-09-01T11:00:00.000Z'
+  });
+  const after = store.get('Jobs', job.id);
+  assert.equal(after.workflow_stage, 'ReadyToBook');
+  assert.equal(after.version, 2);
+  assert.equal(after.updated_by, 'PERSON-tanya');
+  assert.equal(after.updated_at, '2026-09-01T11:00:00.000Z');
+  assert.equal(advanced.readiness.stage_advanced, true);
+  const audits = store.list('AuditEvents').filter(a => a.action === 'WorkflowStage:ReadyToBook');
+  assert.equal(audits.length, 1);
+  assert.equal(audits[0].initiating_actor, 'PERSON-tanya');
+  assert.equal(audits[0].timestamp, '2026-09-01T11:00:00.000Z');
+
+  processBookingGates(job.id, store, { actor: 'PERSON-tanya', command_id: 'RTB-REPLAY', now: '2026-09-01T12:00:00.000Z' });
+  assert.equal(store.get('Jobs', job.id).version, 2);
+  assert.equal(store.list('AuditEvents').filter(a => a.action === 'WorkflowStage:ReadyToBook').length, 1);
+});
+
+test('S06: signed contract evidence and customer/value verification are required for ReadyToBook', () => {
+  const store = makeStore(); installBaseFixture(store);
+  const job = buildReadyJob();
+  job.workflow_stage = 'Prebooking';
+  job.booking_submission_id = null;
+  job.contract_status = 'Sent';
+  job.contract_evidence_id = null;
+  job.customer_details_verified_at = null;
+  job.customer_details_verified_by = null;
+  store.insert('Jobs', job);
+  store.insert('Customers', buildCustomer(job.customer_id, 'Alice', 'Evidence'));
+  createPrebookingTasksForSold(job, store);
+  ['PRE02', 'PRE03', 'PRE04'].forEach(code => {
+    const t = store.list('Tasks').find(x => x.job_id === job.id && x.template_code === code);
+    store.update('Tasks', t.id, { status: 'Complete', completion_note: 'note', evidence_id: 'E-' + code, version: 2 });
+  });
+  const blocked = evaluateReadyToBook(store.get('Jobs', job.id), store);
+  assert.equal(blocked.ready, false);
+  assert.ok(blocked.gates.some(g => g.name === 'signed_contract_evidence' && !g.pass));
+  assert.ok(blocked.gates.some(g => g.name === 'customer_value_verified' && !g.pass));
+  processBookingGates(job.id, store);
+  assert.equal(store.get('Jobs', job.id).workflow_stage, 'Prebooking');
+});
+
+test('S06: finance route ReadyToBook requires PRE05 evidence and suppresses PRE03', () => {
+  const store = makeStore(); installBaseFixture(store);
+  const job = buildReadyJob();
+  job.id = 'J-s06-finance';
+  job.job_id = 'SS-S06F-INAN';
+  job.customer_id = 'CUST-s06-finance';
+  job.workflow_stage = 'Prebooking';
+  job.booking_submission_id = null;
+  job.finance_route = 'Phoenix';
+  job.deposit_bank_confirmed_at = null;
+  job.deposit_bank_confirmed_by = null;
+  job.deposit_bank_reference = null;
+  store.insert('Jobs', job);
+  store.insert('Customers', buildCustomer(job.customer_id, 'Fin', 'Ance'));
+  const created = createPrebookingTasksForSold(job, store);
+  assert.ok(created.created.some(t => t.template === 'PRE05'));
+  assert.ok(!created.created.some(t => t.template === 'PRE01' || t.template === 'PRE03'));
+  assert.equal(evaluateReadyToBook(store.get('Jobs', job.id), store).ready, false);
+
+  ['PRE02', 'PRE04', 'PRE05'].forEach(code => {
+    const t = store.list('Tasks').find(x => x.job_id === job.id && x.template_code === code);
+    store.update('Tasks', t.id, {
+      status: 'Complete', completed_at: '2026-09-01T10:00:00.000Z', completed_by: t.owner_id,
+      completion_note: 'Finance checked', evidence_id: 'EVID-' + code, version: 2
+    });
+  });
+  assert.equal(evaluateReadyToBook(store.get('Jobs', job.id), store).ready, true);
+  processBookingGates(job.id, store, { actor: 'PERSON-tanya', command_id: 'RTB-FIN', now: '2026-09-01T11:00:00.000Z' });
+  assert.equal(store.get('Jobs', job.id).workflow_stage, 'ReadyToBook');
+});
+
+test('S06: early Booking link stays Prebooking until ReadyToBook then advances one stage at a time', () => {
+  const store = makeStore(); installBaseFixture(store);
+  const job = buildReadyJob();
+  job.workflow_stage = 'Prebooking';
+  job.booking_submission_id = 'S06-booking-early';
+  job.version = 1;
+  store.insert('Jobs', job);
+  store.insert('Customers', buildCustomer(job.customer_id, 'Alice', 'Early'));
+  createPrebookingTasksForSold(job, store);
+
+  // Booking linked but prebooking incomplete → stay Prebooking (never jump to Booked).
+  processBookingGates(job.id, store, { actor: 'PERSON-tanya', command_id: 'EARLY-1', now: '2026-09-01T09:00:00.000Z' });
+  assert.equal(store.get('Jobs', job.id).workflow_stage, 'Prebooking');
+  assert.ok(store.list('Tasks').some(t => t.template_code === 'BKG01'));
+  assert.ok(!store.list('Tasks').some(t => t.template_code === 'BKG04'));
+
+  ['PRE01', 'PRE02', 'PRE03', 'PRE04'].forEach(code => {
+    const t = store.list('Tasks').find(x => x.job_id === job.id && x.template_code === code);
+    store.update('Tasks', t.id, {
+      status: 'Complete', completed_at: '2026-09-01T10:00:00.000Z', completed_by: t.owner_id,
+      completion_note: 'Verified', evidence_id: 'EVID-' + code, version: 2
+    });
+  });
+  processBookingGates(job.id, store, { actor: 'PERSON-tanya', command_id: 'EARLY-2', now: '2026-09-01T11:00:00.000Z' });
+  assert.equal(store.get('Jobs', job.id).workflow_stage, 'ReadyToBook');
+
+  processBookingGates(job.id, store, { actor: 'PERSON-tanya', command_id: 'EARLY-3', now: '2026-09-01T12:00:00.000Z' });
+  assert.equal(store.get('Jobs', job.id).workflow_stage, 'BookingInProgress');
+  assert.ok(!store.list('Tasks').some(t => t.template_code === 'BKG04'));
+});
+
+test('S06: Booked denied for open/blocked mandatory tasks; BKG04/BKG05 never block', () => {
+  const store = makeStore(); installBaseFixture(store);
+  const job = buildReadyJob();
+  store.insert('Jobs', job);
+  store.insert('Customers', buildCustomer(job.customer_id, 'Alice', 'Gate'));
+  createPrebookingTasksForSold(job, store);
+  processBookingGates(job.id, store);
+  const codes = ['PRE01', 'PRE02', 'PRE03', 'PRE04', 'BKG01', 'BKG02', 'BKG03'];
+  codes.forEach(code => {
+    const t = store.list('Tasks').find(x => x.job_id === job.id && x.template_code === code);
+    assert.ok(t, 'missing task ' + code);
+    store.update('Tasks', t.id, {
+      status: 'Complete', completed_at: '2026-09-01T10:00:00.000Z', completed_by: t.owner_id,
+      completion_note: 'Verified', evidence_id: 'EVID-' + code, version: 2
+    });
+  });
+  const bkg02 = store.list('Tasks').find(t => t.job_id === job.id && t.template_code === 'BKG02');
+  store.update('Tasks', bkg02.id, { status: 'Blocked', blocking_reason: 'Awaiting survey', version: 3 });
+  let result = processBookingGates(job.id, store);
+  assert.equal(result.gates.ready, false);
+  assert.equal(store.get('Jobs', job.id).workflow_stage, 'BookingInProgress');
+  assert.ok(result.gates.gates.some(g => g.name === 'task_BKG02' && !g.pass));
+
+  store.update('Tasks', bkg02.id, { status: 'Open', blocking_reason: null, version: 4 });
+  result = processBookingGates(job.id, store);
+  assert.equal(result.gates.ready, false);
+  assert.equal(store.get('Jobs', job.id).workflow_stage, 'BookingInProgress');
+
+  store.update('Tasks', bkg02.id, {
+    status: 'Complete', completed_at: '2026-09-01T11:00:00.000Z', completed_by: bkg02.owner_id,
+    completion_note: 'Booked', evidence_id: 'EVID-BKG02', version: 5
+  });
+  // Spurious open BKG04/BKG05 must not block Booked (they are post-Booked).
+  store.insert('Tasks', {
+    id: 'TASK-fake-bkg04', job_id: job.id, template_code: 'BKG04',
+    instance_key: 'BKG04-' + job.id + '-ROOT-nodue', status: 'Open', version: 1
+  });
+  store.insert('Tasks', {
+    id: 'TASK-fake-bkg05', job_id: job.id, template_code: 'BKG05',
+    instance_key: 'BKG05-' + job.id + '-ROOT-nodue', status: 'Open', version: 1
+  });
+  result = processBookingGates(job.id, store, { actor: 'PERSON-tanya', command_id: 'BOOK-OK', now: '2026-09-01T12:00:00.000Z' });
+  assert.equal(result.gates.ready, true);
+  assert.equal(store.get('Jobs', job.id).workflow_stage, 'Booked');
+  assert.equal(store.get('Jobs', job.id).booking_approved_by, 'PERSON-tanya');
+  assert.ok(!result.gates.gates.some(g => g.name === 'task_BKG04' || g.name === 'task_BKG05'));
+});
+
+test('S06: non-applicable PRE01/PRE03 do not block finance Booked; post-Booked BKG04/BKG05 created once', () => {
+  const store = makeStore(); installBaseFixture(store);
+  const job = buildReadyJob();
+  job.id = 'J-s06-finbook';
+  job.job_id = 'SS-S06F-BOOK';
+  job.customer_id = 'CUST-s06-finbook';
+  job.finance_route = 'Phoenix';
+  job.deposit_bank_confirmed_at = null;
+  job.deposit_bank_confirmed_by = null;
+  job.deposit_bank_reference = null;
+  job.workflow_stage = 'BookingInProgress';
+  store.insert('Jobs', job);
+  store.insert('Customers', buildCustomer(job.customer_id, 'Fin', 'Book'));
+  createPrebookingTasksForSold(job, store);
+  processBookingGates(job.id, store);
+  assert.ok(!store.list('Tasks').some(t => t.job_id === job.id && (t.template_code === 'PRE01' || t.template_code === 'PRE03')));
+  ['PRE02', 'PRE04', 'PRE05', 'BKG01', 'BKG02', 'BKG03'].forEach(code => {
+    const t = store.list('Tasks').find(x => x.job_id === job.id && x.template_code === code);
+    assert.ok(t, 'missing task ' + code);
+    store.update('Tasks', t.id, {
+      status: 'Complete', completed_at: '2026-09-01T10:00:00.000Z', completed_by: t.owner_id,
+      completion_note: 'Verified', evidence_id: 'EVID-' + code, version: 2
+    });
+  });
+  const first = processBookingGates(job.id, store, { actor: 'PERSON-tanya', command_id: 'FIN-BOOK', now: '2026-09-01T12:00:00.000Z' });
+  assert.equal(store.get('Jobs', job.id).workflow_stage, 'Booked');
+  assert.ok(first.tasks.created.some(t => t.template === 'BKG04'));
+  assert.ok(first.tasks.created.some(t => t.template === 'BKG05'));
+  const second = processBookingGates(job.id, store, { actor: 'PERSON-tanya', command_id: 'FIN-BOOK-2', now: '2026-09-01T13:00:00.000Z' });
+  assert.equal(second.tasks.created.length, 0);
+  assert.equal(store.list('Tasks').filter(t => t.job_id === job.id && t.template_code === 'BKG04').length, 1);
+  assert.equal(store.list('Tasks').filter(t => t.job_id === job.id && t.template_code === 'BKG05').length, 1);
+});
+
 /* --- Test 13: Completed tasks not recreated --- */
 test('S06: completed tasks not recreated on re-evaluation', () => {
   const store = makeStore();
@@ -180,6 +431,7 @@ test('S06: S06Gates.js entry points run via VM', () => {
     Tasks: [['id','job_id','template_code','instance_key','group','title','owner_id','backup_id','related_entity_type','related_entity_id','due_at','original_due_at','priority','status','blocking_reason','next_followup_at','completed_at','completed_by','completion_note','evidence_id','revision_required','created_rule_version','created_at','created_by','updated_at','updated_by','version','source_system','commit_id']],
     Customers: [['id','first_name','last_name','address_line1','address_line2','town','postcode','email','phone','alternate_contact','contact_notes','created_at','created_by','updated_at','updated_by','version','source_system','source_record_id','commit_id']],
     TaskTemplates: [['id','template_code','title','group','default_owner_role','trigger_event','due_rule','evidence_required','active','template_version','created_at','created_by','updated_at','updated_by','version','commit_id']],
+    AuditEvents: [['id','entity_type','entity_id','action','before_json','after_json','initiating_actor','executing_service','timestamp','correlation_id','reason','commit_id','created_at']],
     ReleaseModes: [modeHdrs, mkRow({id:'RM-FN01',function_id:'FN-01',function_name:'Office',mode:'Automated',authorised_job_scope:'Pilot',target_release:'R1',version:1})]
   };
 
@@ -219,7 +471,7 @@ test('S06: S06Gates.js entry points run via VM', () => {
 
   var ap = ctx.runS06FixtureApply();
   assert.equal(ap.applied, true);
-  assert.equal(ap.templates, 6);
+  assert.equal(ap.templates, 11);
 
   var hp = ctx.runS06HappyPathTest();
   assert.equal(hp.pass, true, JSON.stringify(hp));

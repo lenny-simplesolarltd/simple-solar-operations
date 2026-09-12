@@ -19,7 +19,72 @@ function _r1sCallRecord(ctx){var r=ctx.request,s=ctx.store,a=ctx.actor,p=_r1sPay
 
 function _r1sIssueUpdate(ctx){var r=ctx.request,s=ctx.store,a=ctx.actor,p=_r1sPayload(r,['action','owner_id','status','resolution','evidence_id','customer_resolution_confirmed'],['action']),issue=s.get('Issues',r.issue_id),aid='AE-R1A-'+r.command_id;if(s.get('AuditEvents',aid))return{status:'Replayed',issue:issue,external_calls:0};if(!issue||Number(issue.version)!==Number(r.expected_version))_r1sErr('R1A_STALE_VERSION');var before=issue,after;if(p.action==='REASSIGN'){if(!_r1sText(p.owner_id))_r1sErr('R1A_REQUIRED_OWNER_ID');after=_s10ReassignIssue(issue.id,p.owner_id,a.id,s);}else if(p.action==='TRANSITION'){after=_s10TransitionIssue(issue.id,p.status,a.id,s,{resolution:p.resolution,evidence_id:p.evidence_id,customer_resolution_confirmed:p.customer_resolution_confirmed===true});}else _r1sErr('R1A_ISSUE_ACTION_DENIED');_r1sInsertAudit(s,aid,'Issues',issue.id,p.action,before,after,a.id,r.command_id,p.resolution,'R1 AppSheet/S10',new Date().toISOString());return{status:'Updated',issue:after,external_calls:0};}
 
+function _r1sEnsureIssueTaskTemplates(store){
+  var now=new Date().toISOString(),needed=[
+    {id:'TPL-ISS01',template_code:'ISS01',title:'Review variation',group:'Aftercare',default_owner_role:'VariationApprover'},
+    {id:'TPL-ISS02',template_code:'ISS02',title:'Investigate and resolve issue',group:'Aftercare',default_owner_role:'Office'}
+  ];
+  needed.forEach(function(tpl){
+    var byCode=store.list('TaskTemplates').filter(function(t){return t.template_code===tpl.template_code&&t.active===true;});
+    if(byCode.length)return;
+    if(store.get('TaskTemplates',tpl.id))return;
+    store.insert('TaskTemplates',{id:tpl.id,template_code:tpl.template_code,title:tpl.title,group:tpl.group,default_owner_role:tpl.default_owner_role,trigger_event:'Issue created',due_rule:'Next staffed day',evidence_required:'Issue outcome',active:true,template_version:'R1A-1.0',created_at:now,created_by:'R1A-appsheet',updated_at:now,updated_by:'R1A-appsheet',version:1,commit_id:'R1A-ISSUE-TPL'});
+  });
+}
+function _r1sIssueImpact(v){
+  if(v===undefined||v===null||v==='')return undefined;
+  if(v===true||v===false)return v;
+  var s=String(v).trim().toLowerCase();
+  if(['yes','true','1','y'].indexOf(s)>=0)return true;
+  if(['no','false','0','n'].indexOf(s)>=0)return false;
+  _r1sErr('R1A_INVALID_CUSTOMER_IMPACT');
+}
+function _r1sIssueCreate(ctx){
+  var r=ctx.request,s=ctx.store,a=ctx.actor;
+  if(r.task_id||r.issue_id||r.work_package_id||r.old_allocation_id)_r1sErr('R1A_INVALID_FIELDS');
+  if(!_r1sText(r.job_id))_r1sErr('R1A_JOB_NOT_FOUND');
+  _r1sCommandId(r.command_id);
+  var p=_r1sPayload(r,['issue_type','title','description','severity','owner_id','customer_impact','requested_by','requested_at'],['issue_type','title','description']);
+  if(['Variation','Remedial','Complaint'].indexOf(p.issue_type)<0)_r1sErr('R1A_INVALID_ISSUE_TYPE');
+  var severity=_r1sText(p.severity)?String(p.severity).trim():'Normal';
+  if(['Normal','Medium'].indexOf(severity)<0)_r1sErr('R1A_INVALID_SEVERITY');
+  if(!_r1sBlank(p.owner_id))_r1sActivePerson(s,p.owner_id);
+  if(!_r1sBlank(p.requested_by)&&!_r1sActorMatch(a,p.requested_by))_r1sErr('R1A_ACTOR_MISMATCH');
+  var impact=_r1sIssueImpact(p.customer_impact),expected=_r1sVersion(r.expected_version);
+  var fingerprint=JSON.stringify({command_type:'ISSUE_CREATE',job_id:r.job_id,payload:{issue_type:p.issue_type,title:p.title,description:p.description,severity:severity,owner_id:p.owner_id||null,customer_impact:impact===undefined?null:impact,requested_at:p.requested_at||null}});
+  return s.withLock(function(){
+    var now=new Date().toISOString(),issueId='ISS-R1A-'+r.command_id,prior=s.get('CommitJournal',_r1sJournalId(r.command_id));
+    var job=s.get('Jobs',r.job_id);if(!job)_r1sErr('R1A_JOB_NOT_FOUND');
+    if(job.pilot_job!==true||job.release_scope!=='R1')_r1sErr('R1A_OUTSIDE_PILOT');
+    if(!prior){
+      if(Number(job.version)!==expected)_r1sErr('R1A_STALE_VERSION');
+      if(job.archived_at||['CancellationInProgress','Cancelled'].indexOf(job.workflow_stage)>=0)_r1sErr('R1A_JOB_NOT_ACTIONABLE');
+    }
+    var journal=_r1sBeginJournal(s,r.command_id,'Issues',issueId,expected,fingerprint,now);
+    var jobsBefore=s.list('Jobs').length,issueCountBefore=s.list('Issues').length,jobVersionBefore=Number(job.version);
+    try{
+      if(typeof _s10CreateIssue!=='function')_r1sErr('R1A_COMMAND_UNSUPPORTED');
+      _r1sEnsureIssueTaskTemplates(s);
+      var input={id:issueId,job_id:r.job_id,type:p.issue_type,category:String(p.title).trim(),description:String(p.description).trim(),raised_at:p.requested_at||now,raised_by:a.id,office_owner_id:p.owner_id||null,severity:severity,commit_id:'R1A-'+r.command_id};
+      if(impact!==undefined)input.blocks_completion=impact;
+      var res=_s10CreateIssue(input,s);
+      if(Number(s.get('Jobs',r.job_id).version)!==jobVersionBefore)_r1sErr('R1A_JOB_MUTATION');
+      if(s.list('Jobs').length!==jobsBefore)_r1sErr('R1A_INTAKE_CARDINALITY');
+      if(res.created&&s.list('Issues').length!==issueCountBefore+1)_r1sErr('R1A_INTAKE_CARDINALITY');
+      if(!res.created&&s.list('Issues').length!==issueCountBefore)_r1sErr('R1A_INTAKE_CARDINALITY');
+      var issue=s.get('Issues',issueId);
+      if(!issue||issue.job_id!==r.job_id)_r1sErr('R1A_ISSUE_JOB_MISMATCH');
+      var out={status:journal.replay?'Replayed':(res.created?'Created':'Replayed'),issue_id:issueId,issue:issue,task:res.task||null,external_calls:0};
+      if(!journal.replay)_r1sInsertAudit(s,'AE-R1A-'+r.command_id,'Issues',issueId,'Create',null,issue,a.id,r.command_id,p.title,'R1 AppSheet/S10',now);
+      s.update('CommitJournal',journal.id,{state:'Committed',committed_at:now,entity_id:issueId});
+      return out;
+    }catch(e){if(s.get('CommitJournal',journal.id))s.update('CommitJournal',journal.id,{state:'RecoveryRequired'});throw e;}
+  });
+}
+
 function _r1sPlannerUpdate(ctx){var r=ctx.request,p=_r1sPayload(r,['planned_start','planned_end','reason'],['planned_start','planned_end']);return _s11UpdatePlannedDates({command_id:r.command_id,job_id:r.job_id,work_package_id:r.work_package_id,planned_start:p.planned_start,planned_end:p.planned_end,expected_version:r.expected_version,actor:ctx.actor.id,reason:p.reason||null},ctx.store);}
+function _r1sMoveJob(ctx){var r=ctx.request,p=_r1sPayload(r,['activities','planned_start','planned_end','scaffold_erect','scaffold_strip','reason'],['activities','reason']);if(!Array.isArray(p.activities)||!p.activities.length)_r1sErr('R1A_REQUIRED_ACTIVITIES');if(typeof _s11MoveJobR1!=='function')_r1sErr('R1A_COMMAND_UNSUPPORTED');return _s11MoveJobR1({command_id:r.command_id,job_id:r.job_id,expected_version:r.expected_version,actor:ctx.actor.id,activities:p.activities,planned_start:p.planned_start||null,planned_end:p.planned_end||null,scaffold_erect:p.scaffold_erect||null,scaffold_strip:p.scaffold_strip||null,reason:p.reason},ctx.store);}
+function _r1sChangeInstaller(ctx){var r=ctx.request,p=_r1sPayload(r,['mode','person_id','reason','role','old_allocation_id'],['mode','person_id','reason']);var oldId=p.old_allocation_id||r.old_allocation_id;if(!_r1sText(oldId))_r1sErr('R1A_REQUIRED_OLD_ALLOCATION_ID');if(typeof _s11ChangeInstallerR1!=='function')_r1sErr('R1A_COMMAND_UNSUPPORTED');return _s11ChangeInstallerR1({command_id:r.command_id,job_id:r.job_id,work_package_id:r.work_package_id,old_allocation_id:oldId,person_id:p.person_id,mode:p.mode,role:p.role||null,expected_version:r.expected_version,actor:ctx.actor.id,reason:p.reason},ctx.store);}
 function _r1sCancel(ctx){var r=ctx.request,p=_r1sPayload(r,['reason','effective_date','work_performed','material_state','scaffold_state','finance_review','legacy_state'],['reason','effective_date','work_performed','material_state','scaffold_state','finance_review','legacy_state']);return _s15Execute('Cancel',Object.assign({command_id:r.command_id,job_id:r.job_id,expected_version:r.expected_version,actor:ctx.actor.id},p),ctx.store);}
 function _r1sReinstate(ctx){var r=ctx.request,p=_r1sPayload(r,['reason','new_date','risk_review','commitment_review','finance_review','evidence_reference'],['reason','new_date','commitment_review','finance_review','evidence_reference']);return _s15Execute('Reinstate',Object.assign({command_id:r.command_id,job_id:r.job_id,expected_version:r.expected_version,actor:ctx.actor.id},p),ctx.store);}
 
@@ -30,8 +95,290 @@ function _r1sOperationalComplete(ctx){var r=ctx.request,s=ctx.store,a=ctx.actor;
   return s.withLock(function(){var job=s.get('Jobs',r.job_id);if(!job||Number(job.version)!==Number(r.expected_version))_r1sErr('R1A_STALE_VERSION');if(typeof _s10ApproveOperationalCompletion!=='function')_r1sErr('R1A_COMMAND_UNSUPPORTED');var before=job,res=_s10ApproveOperationalCompletion(r.job_id,a.id,s),now=new Date().toISOString(),after=s.get('Jobs',r.job_id);_r1sInsertAudit(s,'AE-R1A-'+r.command_id,'Jobs',r.job_id,'OperationalComplete',before,after,a.id,r.command_id,res&&res.status,'R1 AppSheet/S10',now);return{status:res.status,created:!!res.created,gate:res.gate,ghl_task:res.ghl_task||null,external_calls:0};});}
 
 function _r1sBookingGates(ctx){var r=ctx.request,s=ctx.store,a=ctx.actor;_r1sPayload(r,[],[]);
-  return s.withLock(function(){var job=s.get('Jobs',r.job_id);if(!job||Number(job.version)!==Number(r.expected_version))_r1sErr('R1A_STALE_VERSION');if(typeof processBookingGates!=='function')_r1sErr('R1A_COMMAND_UNSUPPORTED');var before=job,res=processBookingGates(r.job_id,s),now=new Date().toISOString(),after=s.get('Jobs',r.job_id);_r1sInsertAudit(s,'AE-R1A-'+r.command_id,'Jobs',r.job_id,'BookingGates',before,after,a.id,r.command_id,res&&res.gates&&res.gates.summary,'R1 AppSheet/S06',now);return{status:res&&res.gates&&res.gates.ready?'Ready':(res&&res.gates&&res.gates.blocked?'Blocked':'NeedsReview'),gates:res.gates||res,tasks:res.tasks||null,success:!!(res&&res.success),external_calls:0};});}
+  return s.withLock(function(){var job=s.get('Jobs',r.job_id);if(!job||Number(job.version)!==Number(r.expected_version))_r1sErr('R1A_STALE_VERSION');if(typeof processBookingGates!=='function')_r1sErr('R1A_COMMAND_UNSUPPORTED');var before=job,res=processBookingGates(r.job_id,s,{actor:a.id,command_id:r.command_id}),now=new Date().toISOString(),after=s.get('Jobs',r.job_id);_r1sInsertAudit(s,'AE-R1A-'+r.command_id,'Jobs',r.job_id,'BookingGates',before,after,a.id,r.command_id,res&&res.gates&&res.gates.summary,'R1 AppSheet/S06',now);return{status:after&&after.workflow_stage==='ReadyToBook'?'ReadyToBook':(after&&after.workflow_stage==='Booked'?'Booked':(res&&res.gates&&res.gates.blocked?'Blocked':'NeedsReview')),readiness:res.readiness||null,gates:res.gates||res,tasks:res.tasks||null,success:!!(res&&res.success),external_calls:0};});}
 
-function _r1sServices(){return{TASK_COMPLETE:_r1sTaskComplete,CALL_RECORD:_r1sCallRecord,ISSUE_UPDATE:_r1sIssueUpdate,PLANNER_UPDATE:_r1sPlannerUpdate,CANCEL_JOB:_r1sCancel,REINSTATE_JOB:_r1sReinstate,DEPOSIT_CONFIRM:_r1sDepositConfirm,OPERATIONAL_COMPLETE:_r1sOperationalComplete,BOOKING_GATES:_r1sBookingGates};}
+/* AppSheet helper-table contracts. These tables are request envelopes only.
+ * The processor never treats them as authoritative Jobs/Customers storage. */
+var R1A_SOLD_FORM_ID='R1A-SOLD-DEV';
+var R1A_BOOKING_FORM_ID='R1A-BOOKING-DEV';
+var R1A_DEV_SHEET='1z7PNZtDdC4Z5eLbmTuQdqp0QpJSmuEvx3QvN3VyNTsc';
+var R1A_SOLD_FIELDS=[
+  {key:'customer_first_name',qid:'sold_first_name',type:'text',required:true},
+  {key:'customer_last_name',qid:'sold_last_name',type:'text',required:true},
+  {key:'street_address',qid:'sold_address1',type:'text',required:true},
+  {key:'city',qid:'sold_town',type:'text',required:true},
+  {key:'postcode',qid:'sold_postcode',type:'text',required:true},
+  {key:'phone',qid:'sold_phone',type:'text'},
+  {key:'email',qid:'sold_email',type:'text'},
+  {key:'salesperson_id',qid:'sold_salesperson_id',type:'text'},
+  {key:'lead_source',qid:'sold_lead_source',type:'text'},
+  {key:'quote_reference',qid:'sold_quote_ref',type:'text'},
+  {key:'presale_file_id',qid:'sold_presale_file_id',type:'text'},
+  {key:'finance_route',qid:'sold_finance_route',type:'text',required:true},
+  {key:'gross_amount',qid:'sold_gross_pence',type:'number'},
+  {key:'roof_required',qid:'sold_roof',type:'bool'},
+  {key:'electrical_required',qid:'sold_electrical',type:'bool'},
+  {key:'scaffold_required',qid:'sold_scaffold',type:'bool'},
+  {key:'roof_notes',qid:'sold_roof_notes',type:'text'},
+  {key:'electrical_notes',qid:'sold_electrical_notes',type:'text'},
+  {key:'submitted_by',qid:'sold_submitted_by',type:'text'}
+];
+var R1A_BOOKING_FIELDS=[
+  {key:'customer_first_name',qid:'booking_first_name',type:'text'},
+  {key:'customer_last_name',qid:'booking_last_name',type:'text'},
+  {key:'street_address',qid:'booking_address1',type:'text'},
+  {key:'city',qid:'booking_town',type:'text'},
+  {key:'postcode',qid:'booking_postcode',type:'text'},
+  {key:'phone',qid:'booking_phone',type:'text'},
+  {key:'email',qid:'booking_email',type:'text'},
+  {key:'solar_kw',qid:'booking_solar_kw',type:'text'},
+  {key:'cost',qid:'booking_cost',type:'number'},
+  {key:'finance_route',qid:'booking_finance',type:'text'},
+  {key:'merchant_name',qid:'booking_merchant',type:'text'},
+  {key:'invoice_date',qid:'booking_invoice_date',type:'date'},
+  {key:'annual_generation',qid:'booking_annual_gen',type:'text'},
+  {key:'date_roofer',qid:'booking_date_roofer',type:'date'},
+  {key:'date_sparky',qid:'booking_date_sparky',type:'date'},
+  {key:'date_scaffold',qid:'booking_date_scaffold',type:'date'},
+  {key:'roofer',qid:'booking_roofer',type:'person'},
+  {key:'sparky',qid:'booking_sparky',type:'person'},
+  {key:'second_sparky',qid:'booking_second_sparky',type:'person'},
+  {key:'scaffold_company',qid:'booking_scaffold_company',type:'company'},
+  {key:'scaffold_pdf',qid:'booking_scaffold_pdf',type:'text'},
+  {key:'scaffold_notes',qid:'booking_scaffold_notes',type:'text'},
+  {key:'roofing_notes',qid:'booking_roofing_notes',type:'text'},
+  {key:'electrical_notes',qid:'booking_electrical_notes',type:'text'},
+  {key:'ordering_notes',qid:'booking_ordering_notes',type:'text'},
+  {key:'roof_hooks_type',qid:'booking_roof_hooks_type',type:'text'},
+  {key:'mat_slate_portrait',qid:'booking_mat_slate_portrait',type:'int'},
+  {key:'mat_slate_landscape',qid:'booking_mat_slate_landscape',type:'int'},
+  {key:'mat_r420181_total',qid:'booking_mat_r420181_total',type:'int'},
+  {key:'mat_concrete_portrait',qid:'booking_mat_concrete_portrait',type:'int'},
+  {key:'mat_concrete_landscape',qid:'booking_mat_concrete_landscape',type:'int'},
+  {key:'mat_r420150_total',qid:'booking_mat_r420150_total',type:'int'},
+  {key:'mat_l_bracket',qid:'booking_mat_l_bracket',type:'int'},
+  {key:'mat_hook_rest',qid:'booking_mat_hook_rest',type:'int'},
+  {key:'mat_end_clamps',qid:'booking_mat_end_clamps',type:'int'},
+  {key:'mat_end_caps',qid:'booking_mat_end_caps',type:'int'},
+  {key:'mat_mid_clamps',qid:'booking_mat_mid_clamps',type:'int'},
+  {key:'mat_rail',qid:'booking_mat_rail',type:'int'},
+  {key:'mat_splice',qid:'booking_mat_splice',type:'int'},
+  {key:'mat_k2_flat_multi',qid:'booking_mat_k2_flat_multi',type:'int'},
+  {key:'mat_k2_curved_multi',qid:'booking_mat_k2_curved_multi',type:'int'},
+  {key:'mat_k2_flat_mini',qid:'booking_mat_k2_flat_mini',type:'int'},
+  {key:'mat_k2_curved_mini',qid:'booking_mat_k2_curved_mini',type:'int'},
+  {key:'mat_genius',qid:'booking_mat_genius',type:'int'},
+  {key:'mat_k2_1000074',qid:'booking_mat_k2_1000074',type:'int'},
+  {key:'mat_k2_mid',qid:'booking_mat_k2_mid',type:'int'},
+  {key:'mat_k2_end',qid:'booking_mat_k2_end',type:'int'},
+  {key:'mat_k2_end_caps',qid:'booking_mat_k2_end_caps',type:'int'},
+  {key:'mat_k2_rail',qid:'booking_mat_k2_rail',type:'int'},
+  {key:'mat_k2_splice',qid:'booking_mat_k2_splice',type:'int'},
+  {key:'mat_panel_515',qid:'booking_mat_panel_515',type:'int'},
+  {key:'mat_panel_460',qid:'booking_mat_panel_460',type:'int'},
+  {key:'mat_panel_m',qid:'booking_mat_panel_m',type:'int'},
+  {key:'mat_bird_netting',qid:'booking_mat_bird_netting',type:'int'},
+  {key:'mat_optimisers',qid:'booking_mat_optimisers',type:'int'},
+  {key:'mat_fox_jb',qid:'booking_mat_fox_jb',type:'int'},
+  {key:'mat_dongle',qid:'booking_mat_dongle',type:'int'},
+  {key:'mat_gateway',qid:'booking_mat_gateway',type:'int'},
+  {key:'mat_ev',qid:'booking_mat_ev',type:'int'},
+  {key:'inverter',qid:'booking_inverter',type:'text'},
+  {key:'battery',qid:'booking_battery',type:'text'},
+  {key:'battery_qty',qid:'booking_battery_qty',type:'int'},
+  {key:'fox_jb_calc',qid:'booking_fox_jb_calc',type:'text'},
+  {key:'extras',qid:'booking_extras',type:'text'},
+  {key:'sig_extras',qid:'booking_sig_extras',type:'text'},
+  {key:'tesla_extras',qid:'booking_tesla_extras',type:'text'},
+  {key:'submitted_by',qid:'booking_submitted_by',type:'text'}
+];
+var R1A_SOLD_REQUEST_COLUMNS=['id','command_id','submitted_by'].concat(R1A_SOLD_FIELDS.map(function(f){return f.key;})).concat(['result_status','result_job_id','result_job_id_human','result_version','result_message']);
+var R1A_BOOKING_REQUEST_COLUMNS=['id','command_id','submitted_by','job_id','job_id_human','expected_version'].concat(R1A_BOOKING_FIELDS.map(function(f){return f.key;})).concat(['result_status','result_job_id','result_job_id_human','result_version','result_workflow_stage','result_message']);
 
-if(typeof module!=='undefined')module.exports={_r1sServices:_r1sServices};
+function _r1sBlank(v){return v===undefined||v===null||v==='';}
+function _r1sCommandId(id){if(!_r1sText(id)||!/^[A-Za-z0-9][A-Za-z0-9_-]{0,80}$/.test(id))_r1sErr('R1A_INVALID_COMMAND_ID');}
+function _r1sActorMatch(a,v){var s=String(v).trim().toLowerCase();return s===a.id.toLowerCase()||s===a.email;}
+function _r1sFinance(v){if(['Standard','Phoenix','OtherReview'].indexOf(v)<0)_r1sErr('R1A_INVALID_FINANCE_ROUTE');}
+function _r1sVersion(v){var n=typeof v==='number'?v:(typeof v==='string'&&/^\d+$/.test(v.trim())?Number(v):NaN);if(!Number.isSafeInteger(n)||n<1)_r1sErr('R1A_STALE_VERSION');return n;}
+function _r1sDate(v){if(_r1sBlank(v))return undefined;var s=String(v).trim(),m=s.match(/^(\d{4}-\d{2}-\d{2})/);if(!m)_r1sErr('R1A_INVALID_DATE');return m[1];}
+function _r1sInt(v){if(_r1sBlank(v))return undefined;var n=typeof v==='number'?v:Number(String(v).trim());if(!Number.isSafeInteger(n)||n<0)_r1sErr('R1A_INVALID_INTEGER');return String(n);}
+function _r1sBoolText(v){if(v===true||v===false)return v?'Yes':'No';var s=String(v).trim().toLowerCase();if(['yes','true','1'].indexOf(s)>=0)return 'Yes';if(['no','false','0'].indexOf(s)>=0)return 'No';_r1sErr('R1A_INVALID_BOOLEAN');}
+function _r1sPoundsToPence(v){if(_r1sBlank(v))return undefined;var s=String(v).trim().replace(/[£,\s]/g,'');if(!/^\d+(\.\d{1,2})?$/.test(s))_r1sErr('R1A_INVALID_GROSS_AMOUNT');var pence=Math.round(Number(s)*100);if(!Number.isSafeInteger(pence))_r1sErr('R1A_INVALID_GROSS_AMOUNT');return String(pence);}
+function _r1sCanonPayload(fields,payload){var out={};fields.forEach(function(f){if(Object.prototype.hasOwnProperty.call(payload,f.key)&&!_r1sBlank(payload[f.key]))out[f.key]=payload[f.key];});return JSON.stringify(out);}
+function _r1sPersonName(store,v){if(_r1sBlank(v))return undefined;var s=String(v).trim();var byId=store.list('People').filter(function(p){return p.id===s&&p.active===true;});if(byId.length===1&&_r1sText(byId[0].display_name))return byId[0].display_name;return s;}
+function _r1sCompanyName(store,v){if(_r1sBlank(v))return undefined;var s=String(v).trim();var byId=store.list('Companies').filter(function(c){return c.id===s;});if(byId.length===1&&_r1sText(byId[0].name))return byId[0].name;return s;}
+function _r1sActivePerson(store,id){var p=store.get('People',id);if(!p||p.active!==true)_r1sErr('R1A_SALESPERSON_NOT_FOUND');}
+function _r1sJournalId(id){return 'CJ-R1A-'+id;}
+function _r1sDevConfig(store){if(!store||store.getSheetId()!==R1A_DEV_SHEET||(typeof store.getEnvironment==='function'&&store.getEnvironment()!=='DEV'))_r1sErr('R1A_DEV_ONLY');return{environment:'DEV',sheetId:R1A_DEV_SHEET};}
+function _r1sMappingBuilder(){
+  if(typeof S05Core!=='undefined'&&typeof S05Core.buildSyntheticMapping==='function')return S05Core.buildSyntheticMapping;
+  if(typeof buildSyntheticMapping==='function')return buildSyntheticMapping;
+  if(typeof require==='function'){try{return require('../s05/mapping.js').buildSyntheticMapping;}catch(e){}}
+  _r1sErr('R1A_COMMAND_UNSUPPORTED');
+}
+function _r1sIntakeProcessor(store,actor){
+  var options={config:_r1sDevConfig(store),store:store,pilotJob:true,actor:actor.id,createPrebookingTasks:function(job,s){
+    var fn=typeof createPrebookingTasksForSold==='function'?createPrebookingTasksForSold:null;
+    if(!fn&&typeof require==='function'){try{fn=require('../s06/gates.js').createPrebookingTasksForSold;}catch(e){fn=null;}}
+    return fn?fn(job,s):null;
+  }};
+  if(typeof S05Core!=='undefined'&&typeof S05Core.createIntakeProcessor==='function')return S05Core.createIntakeProcessor(options);
+  if(typeof createIntakeProcessor==='function')return createIntakeProcessor(options);
+  if(typeof require==='function'){try{return require('../s05/intake.js').createIntakeProcessor(options);}catch(e){}}
+  _r1sErr('R1A_COMMAND_UNSUPPORTED');
+}
+function _r1sEnsureMappings(store,formId,formType,idPrefix){
+  var builder=_r1sMappingBuilder();
+  var expected=builder(formId,formType,idPrefix);
+  var existing=store.list('MappingRules').filter(function(r){return r.form_id===formId;});
+  if(existing.length){
+    var have={};
+    existing.forEach(function(r){if(r.active===true)have[r.question_id]=true;});
+    if(expected.some(function(r){return !have[r.question_id];}))_r1sErr('R1A_INTAKE_MAPPING_INCOMPLETE');
+    return;
+  }
+  expected.forEach(function(r){
+    r.owner='R1A-appsheet';r.mapping_version='R1A-1.0';r.created_by='R1A-appsheet';r.updated_by='R1A-appsheet';
+    if(!store.get('MappingRules',r.id))store.insert('MappingRules',r);
+  });
+}
+function _r1sFieldValue(store,field,value){
+  if(_r1sBlank(value))return undefined;
+  if(field.type==='bool')return _r1sBoolText(value);
+  if(field.type==='date')return _r1sDate(value);
+  if(field.type==='int')return _r1sInt(value);
+  if(field.type==='person')return _r1sPersonName(store,value);
+  if(field.type==='company')return _r1sCompanyName(store,value);
+  if(field.key==='gross_amount')return _r1sPoundsToPence(value);
+  if(field.key==='cost'){var s=String(value).trim().replace(/[£,\s]/g,'');if(!/^\d+(\.\d{1,2})?$/.test(s))_r1sErr('R1A_INVALID_GROSS_AMOUNT');if(s.indexOf('.')<0)s+='.00';return s;}
+  return String(value).trim();
+}
+function _r1sRawPayload(store,fields,payload,extra){
+  var raw=extra||{};
+  fields.forEach(function(f){
+    if(f.qid==='sold_submitted_by'||f.qid==='booking_submitted_by')return;
+    var value=_r1sFieldValue(store,f,payload[f.key]);
+    if(value!==undefined)raw[f.qid]=value;
+  });
+  return raw;
+}
+function _r1sAppSheetEscape(col){return 'SUBSTITUTE(SUBSTITUTE(['+col+'], CHAR(34), "\'"), CHAR(10), " ")';}
+function _r1sAppSheetExpression(commandType,fields,top){
+  var lines=['CONCATENATE(','  "{\\"command_id\\":\\"", [command_id],','  "\\",\\"command_type\\":\\"'+commandType+'\\""'];
+  (top||[]).forEach(function(key){
+    if(key==='expected_version')lines.push('  , ",\\"expected_version\\":", TEXT([expected_version], "0")');
+    else lines.push('  , ",\\"'+key+'\\":\\"", ['+key+'], "\\""');
+  });
+  lines.push('  , ",\\"payload\\":{"');
+  fields.forEach(function(f,i){
+    var lead=i===0?'"\\"'+(f.key)+'\\":':'",\\"'+f.key+'\\":';
+    if(f.type==='bool')lines.push('  , '+lead+'", IF(OR(ISBLANK(['+f.key+']), ['+f.key+']=FALSE), "false", "true")');
+    else if(f.type==='number'||f.type==='int')lines.push('  , '+lead+'", IF(ISBLANK(['+f.key+']), "null", TEXT(['+f.key+']))');
+    else if(f.type==='date')lines.push('  , '+lead+'\\"", IF(ISBLANK(['+f.key+']), "", TEXT(['+f.key+'], "YYYY-MM-DD")), "\\""');
+    else lines.push('  , '+lead+'\\"", '+_r1sAppSheetEscape(f.key)+', "\\""');
+  });
+  lines.push('  , "}}"',' )');
+  return lines.join('\n');
+}
+function _r1sSoldExpression(){return _r1sAppSheetExpression('SOLD_INTAKE',R1A_SOLD_FIELDS,[]);}
+function _r1sBookingExpression(){return _r1sAppSheetExpression('BOOKING_INTAKE',R1A_BOOKING_FIELDS,['job_id','expected_version']);}
+function _r1sBeginJournal(store,commandId,entityType,entityId,expected,fingerprint,now){
+  var jid=_r1sJournalId(commandId),prior=store.get('CommitJournal',jid);
+  if(prior){if(prior.changes_json!==fingerprint)_r1sErr('R1A_COMMAND_CONFLICT');if(prior.state!=='Committed')_r1sErr('R1A_RECOVERY_REQUIRED');return{replay:true,id:jid};}
+  store.insert('CommitJournal',{id:jid,commit_id:'R1A-'+commandId,state:'Prepared',command_id:commandId,entity_type:entityType,entity_id:entityId||null,expected_version:expected||null,changes_json:fingerprint,prepared_at:now,committed_at:null,created_at:now});
+  return{replay:false,id:jid};
+}
+function _r1sSoldIntake(ctx){
+  var r=ctx.request,s=ctx.store,a=ctx.actor;
+  if(r.job_id||r.task_id||r.issue_id||r.work_package_id||r.old_allocation_id||r.expected_version!=null)_r1sErr('R1A_INVALID_FIELDS');
+  _r1sCommandId(r.command_id);
+  var allowed=R1A_SOLD_FIELDS.map(function(f){return f.key;});
+  var p=_r1sPayload(r,allowed,['customer_first_name','customer_last_name','street_address','city','postcode','finance_route']);
+  _r1sFinance(p.finance_route);
+  if(!_r1sBlank(p.salesperson_id))_r1sActivePerson(s,p.salesperson_id);
+  if(!_r1sBlank(p.submitted_by)&&!_r1sActorMatch(a,p.submitted_by))_r1sErr('R1A_ACTOR_MISMATCH');
+  var fingerprint=JSON.stringify({command_type:'SOLD_INTAKE',payload:JSON.parse(_r1sCanonPayload(R1A_SOLD_FIELDS,p))});
+  return s.withLock(function(){
+    var now=new Date().toISOString();
+    var journal=_r1sBeginJournal(s,r.command_id,'Intake','R1A-SOLD-'+r.command_id,null,fingerprint,now);
+    var jobsBefore=s.list('Jobs').length,customersBefore=s.list('Customers').length;
+    try{
+      _r1sEnsureMappings(s,R1A_SOLD_FORM_ID,'Sold','MAP-R1A-SOLD-');
+      var raw=_r1sRawPayload(s,R1A_SOLD_FIELDS,p,{});
+      var res=_r1sIntakeProcessor(s,a).processSold({intake_id:'R1A-SOLD-'+r.command_id,form_id:R1A_SOLD_FORM_ID,form_type:'Sold',submission_id:r.command_id,raw_payload:raw});
+      var jobsAfter=s.list('Jobs').length,customersAfter=s.list('Customers').length;
+      if(res.status==='Processed'&&!res.duplicate){
+        if(jobsAfter!==jobsBefore+1||customersAfter!==customersBefore+1)_r1sErr('R1A_INTAKE_CARDINALITY');
+      }else if(jobsAfter!==jobsBefore||customersAfter!==customersBefore){_r1sErr('R1A_INTAKE_CARDINALITY');}
+      var job=res.job_id?s.get('Jobs',res.job_id):null;
+      if(res.status==='Processed'&&job){
+        if(job.pilot_job!==true||job.release_scope!=='R1')_r1sErr('R1A_OUTSIDE_PILOT');
+        if(!/^SS-[A-Z]{4}-\d{4}$/.test(job.job_id))_r1sErr('R1A_JOB_ID_INVALID');
+      }
+      var out={status:journal.replay?'Replayed':res.status,duplicate:!!res.duplicate,intake_id:res.intake_id||('R1A-SOLD-'+r.command_id),job_id:res.job_id||null,job_id_human:job?job.job_id:null,customer_id:res.customer_id||(job?job.customer_id:null),version:job?Number(job.version):null,workflow_stage:job?job.workflow_stage:null,prebooking_tasks:res.prebooking_tasks||null,error:res.error||null,message:res.message||null,external_calls:0};
+      if(!journal.replay&&res.job_id)_r1sInsertAudit(s,'AE-R1A-'+r.command_id,'Jobs',res.job_id,'SoldIntake',null,job,a.id,r.command_id,res.message,'R1 AppSheet/S05',now);
+      s.update('CommitJournal',journal.id,{state:'Committed',committed_at:now,entity_id:res.job_id||('R1A-SOLD-'+r.command_id)});
+      return out;
+    }catch(e){if(s.get('CommitJournal',journal.id))s.update('CommitJournal',journal.id,{state:'RecoveryRequired'});throw e;}
+  });
+}
+function _r1sBookingIntake(ctx){
+  var r=ctx.request,s=ctx.store,a=ctx.actor;
+  if(r.task_id||r.issue_id||r.work_package_id||r.old_allocation_id)_r1sErr('R1A_INVALID_FIELDS');
+  if(!_r1sText(r.job_id))_r1sErr('R1A_JOB_NOT_FOUND');
+  _r1sCommandId(r.command_id);
+  var allowed=R1A_BOOKING_FIELDS.map(function(f){return f.key;});
+  var p=_r1sPayload(r,allowed,[]);
+  if(!_r1sBlank(p.submitted_by)&&!_r1sActorMatch(a,p.submitted_by))_r1sErr('R1A_ACTOR_MISMATCH');
+  if(!_r1sBlank(p.finance_route))_r1sFinance(p.finance_route);
+  var expected=_r1sVersion(r.expected_version);
+  var fingerprint=JSON.stringify({command_type:'BOOKING_INTAKE',job_id:r.job_id,payload:JSON.parse(_r1sCanonPayload(R1A_BOOKING_FIELDS,p))});
+  return s.withLock(function(){
+    var now=new Date().toISOString();
+    var prior=s.get('CommitJournal',_r1sJournalId(r.command_id));
+    var job=s.get('Jobs',r.job_id);
+    if(!job)_r1sErr('R1A_JOB_NOT_FOUND');
+    if(job.pilot_job!==true||job.release_scope!=='R1')_r1sErr('R1A_OUTSIDE_PILOT');
+    if(!_r1sText(job.job_id)||!/^SS-[A-Z]{4}-\d{4}$/.test(job.job_id))_r1sErr('R1A_JOB_ID_INVALID');
+    if(!prior){
+      if(Number(job.version)!==expected)_r1sErr('R1A_STALE_VERSION');
+      if(job.archived_at||['CancellationInProgress','Cancelled'].indexOf(job.workflow_stage)>=0)_r1sErr('R1A_JOB_NOT_ACTIONABLE');
+      if(['Prebooking','ReadyToBook','BookingInProgress'].indexOf(job.workflow_stage)<0)_r1sErr('R1A_STAGE_NOT_ELIGIBLE');
+    }
+    var journal=_r1sBeginJournal(s,r.command_id,'Jobs',r.job_id,expected,fingerprint,now);
+    var beforeStage=job.workflow_stage,jobsBefore=s.list('Jobs').length,customerBefore=s.get('Customers',job.customer_id);
+    try{
+      _r1sEnsureMappings(s,R1A_BOOKING_FORM_ID,'Booking','MAP-R1A-BOOK-');
+      var raw=_r1sRawPayload(s,R1A_BOOKING_FIELDS,p,{booking_job_id:job.job_id});
+      var res=_r1sIntakeProcessor(s,a).processBooking({intake_id:'R1A-BOOK-'+r.command_id,form_id:R1A_BOOKING_FORM_ID,form_type:'Booking',submission_id:r.command_id,raw_payload:raw});
+      if(s.list('Jobs').length!==jobsBefore)_r1sErr('R1A_INTAKE_CARDINALITY');
+      if(res.job_id&&res.job_id!==r.job_id)_r1sErr('R1A_JOB_LINK_MISMATCH');
+      var after=s.get('Jobs',r.job_id),customerAfter=s.get('Customers',job.customer_id);
+      if(customerBefore&&customerAfter){
+        ['first_name','last_name','address_line1','town','postcode','email','phone'].forEach(function(k){if(customerBefore[k]!==customerAfter[k])_r1sErr('R1A_CUSTOMER_OVERWRITE');});
+      }
+      if(beforeStage==='ReadyToBook'&&after&&after.workflow_stage!=='BookingInProgress'&&res.status!=='Review'&&!res.duplicate)_r1sErr('R1A_STAGE_RULE_BROKEN');
+      if(beforeStage==='Prebooking'&&after&&after.workflow_stage!=='Prebooking')_r1sErr('R1A_STAGE_RULE_BROKEN');
+      var out={status:journal.replay?'Replayed':res.status,duplicate:!!res.duplicate,intake_id:res.intake_id||('R1A-BOOK-'+r.command_id),job_id:r.job_id,job_id_human:after?after.job_id:job.job_id,version:after?Number(after.version):null,workflow_stage:after?after.workflow_stage:null,match_status:res.match_status||(after?after.sold_booking_match_status:null),customer_changes:(res.applied&&res.applied.customer_changes)||[],error:res.error||null,message:res.message||null,external_calls:0};
+      if(!journal.replay)_r1sInsertAudit(s,'AE-R1A-'+r.command_id,'Jobs',r.job_id,'BookingIntake',job,after,a.id,r.command_id,res.message,'R1 AppSheet/S05',now);
+      s.update('CommitJournal',journal.id,{state:'Committed',committed_at:now,entity_id:r.job_id});
+      return out;
+    }catch(e){if(s.get('CommitJournal',journal.id))s.update('CommitJournal',journal.id,{state:'RecoveryRequired'});throw e;}
+  });
+}
+
+var R1A_ISSUE_CREATE_FIELDS=[
+  {key:'issue_type',type:'enum'},
+  {key:'title',type:'text',required:true},
+  {key:'description',type:'text',required:true},
+  {key:'severity',type:'enum'},
+  {key:'owner_id',type:'person'},
+  {key:'customer_impact',type:'bool'},
+  {key:'requested_by',type:'text'},
+  {key:'requested_at',type:'timestamp'}
+];
+var R1A_ISSUE_CREATE_REQUEST_COLUMNS=['id','command_id','job_id','expected_version'].concat(R1A_ISSUE_CREATE_FIELDS.map(function(f){return f.key;})).concat(['result_status','result_issue_id','result_message']);
+
+function _r1sServices(){return{TASK_COMPLETE:_r1sTaskComplete,CALL_RECORD:_r1sCallRecord,ISSUE_UPDATE:_r1sIssueUpdate,ISSUE_CREATE:_r1sIssueCreate,PLANNER_UPDATE:_r1sPlannerUpdate,MOVE_JOB:_r1sMoveJob,CHANGE_INSTALLER:_r1sChangeInstaller,CANCEL_JOB:_r1sCancel,REINSTATE_JOB:_r1sReinstate,DEPOSIT_CONFIRM:_r1sDepositConfirm,OPERATIONAL_COMPLETE:_r1sOperationalComplete,BOOKING_GATES:_r1sBookingGates,SOLD_INTAKE:_r1sSoldIntake,BOOKING_INTAKE:_r1sBookingIntake};}
+
+if(typeof module!=='undefined')module.exports={_r1sServices:_r1sServices,R1A_SOLD_FIELDS:R1A_SOLD_FIELDS,R1A_BOOKING_FIELDS:R1A_BOOKING_FIELDS,R1A_ISSUE_CREATE_FIELDS:R1A_ISSUE_CREATE_FIELDS,R1A_SOLD_REQUEST_COLUMNS:R1A_SOLD_REQUEST_COLUMNS,R1A_BOOKING_REQUEST_COLUMNS:R1A_BOOKING_REQUEST_COLUMNS,R1A_ISSUE_CREATE_REQUEST_COLUMNS:R1A_ISSUE_CREATE_REQUEST_COLUMNS,_r1sSoldExpression:_r1sSoldExpression,_r1sBookingExpression:_r1sBookingExpression};

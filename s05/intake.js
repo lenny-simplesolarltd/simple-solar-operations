@@ -4,6 +4,7 @@
 
 const { applyMappings, buildSyntheticMapping, resolveBookingJob,
   generateJobId, generateInternalJobId, generateCustomerId } = require('./mapping.js');
+const { applyBookingStructured } = require('./booking-apply.js');
 
 const DEV_SHEET_ID = '1z7PNZtDdC4Z5eLbmTuQdqp0QpJSmuEvx3QvN3VyNTsc';
 const clone = value => JSON.parse(JSON.stringify(value));
@@ -65,8 +66,10 @@ function buildCustomer(mappedFields, intakeId) {
 }
 
 /* Build Job record from mapped fields */
-function buildJob(mappedFields, customerId, soldIntakeId) {
+function buildJob(mappedFields, customerId, soldIntakeId, extra) {
   const f = mappedFields.Jobs || {};
+  const flags = extra || {};
+  const actor = flags.actor || 'S05-intake';
   const now = new Date().toISOString();
   return {
     id: generateInternalJobId(),
@@ -76,10 +79,10 @@ function buildJob(mappedFields, customerId, soldIntakeId) {
     sold_submission_id: soldIntakeId,
     booking_submission_id: null,
     sold_at: now,
-    salesperson_id: null,
+    salesperson_id: f.salesperson_id || null,
     lead_source: f.lead_source || null,
     quote_reference: f.quote_reference || null,
-    presale_file_id: null,
+    presale_file_id: f.presale_file_id || null,
     finance_route: f.finance_route || 'Standard',
     contract_status: 'NotSent',
     contract_id: null, contract_signed_at: null, contract_evidence_id: null,
@@ -101,10 +104,10 @@ function buildJob(mappedFields, customerId, soldIntakeId) {
     handover_status: 'NotReady', financial_status: 'Pending',
     cancellation_at: null, cancellation_by: null, cancellation_reason: null,
     archived_at: null, next_action_at: null, account_policy_version: null,
-    pilot_job: false, release_scope: 'R1',
-    created_at: now, created_by: 'S05-intake',
-    updated_at: now, updated_by: 'S05-intake',
-    version: 1, source_system: 'S05-intake',
+    pilot_job: flags.pilot_job === true, release_scope: 'R1',
+    created_at: now, created_by: actor,
+    updated_at: now, updated_by: actor,
+    version: 1, source_system: flags.pilot_job === true ? 'R1-AppSheet' : 'S05-intake',
     source_record_id: soldIntakeId, commit_id: soldIntakeId
   };
 }
@@ -184,14 +187,47 @@ function processSoldIntake(options, input) {
   const customer = buildCustomer(mappedFields, intake.intake_id);
   store.insert('Customers', customer);
 
-  // Create Job
-  const job = buildJob(mappedFields, customer.id, intake.intake_id);
+  // Create Job — random human reference generated ONCE here
+  const job = buildJob(mappedFields, customer.id, intake.intake_id, {
+    pilot_job: options.pilotJob === true,
+    actor: options.actor || 'S05-intake'
+  });
   job.job_id = generateJobId(store);
+  if (customer.last_name && customer.postcode) {
+    job.display_name = customer.last_name + ' – ' + customer.postcode;
+  }
   store.insert('Jobs', job);
+
+  const tech = mappedFields.TechnicalDetails || {};
+  if ((tech.roof_notes && String(tech.roof_notes).trim()) || (tech.electrical_notes && String(tech.electrical_notes).trim())) {
+    const now = new Date().toISOString();
+    store.insert('TechnicalDetails', {
+      id: 'TD-' + job.id,
+      job_id: job.id,
+      roof_notes: tech.roof_notes || null,
+      electrical_notes: tech.electrical_notes || null,
+      created_at: now, created_by: options.actor || 'S05-intake',
+      updated_at: now, updated_by: options.actor || 'S05-intake',
+      version: 1, commit_id: intake.intake_id
+    });
+  }
 
   // Create Intake record
   const intakeRecord = buildIntakeRecord(intake, 'Processed', job.id, null);
   store.insert('Intake', intakeRecord);
+
+  // Prebooking tasks (idempotent) when S06 helpers are available
+  let prebooking_tasks = null;
+  if (typeof options.createPrebookingTasks === 'function') {
+    prebooking_tasks = options.createPrebookingTasks(job, store);
+  } else {
+    try {
+      const gates = require('../s06/gates.js');
+      if (typeof gates.createPrebookingTasksForSold === 'function') {
+        prebooking_tasks = gates.createPrebookingTasksForSold(job, store);
+      }
+    } catch (_) { /* optional in isolated mapping unit tests */ }
+  }
 
   return {
     status: 'Processed',
@@ -199,7 +235,8 @@ function processSoldIntake(options, input) {
     job_id: job.id,
     job_id_human: job.job_id,
     customer_id: customer.id,
-    message: 'Sold intake processed successfully'
+    prebooking_tasks,
+    message: 'Sold intake processed successfully — copy Job ID into Job Booking'
   };
 }
 
@@ -235,51 +272,61 @@ function processBookingIntake(options, input) {
   const rules = store.list('MappingRules');
   const { fields: mappedFields, missingRequired, errors } = applyMappings(intake.raw_payload, rules, intake.form_id);
 
-  // Resolve matching Job
+  // Missing/blank Job ID → Intake Review (never surname/address guess)
+  const ref = (mappedFields.Jobs || {}).job_id;
+  if (!ref || !String(ref).trim()) {
+    const reviewRecord = buildIntakeRecord(intake, 'Review', null,
+      [{ error: 'BLANK_JOB_REFERENCE', detail: 'Booking Job ID is blank — Intake Review only' }]);
+    store.insert('Intake', reviewRecord);
+    return { status: 'Review', intake_id: intake.intake_id,
+      error: 'BLANK_JOB_REFERENCE', message: 'Blank Job ID. Needs review — no surname/address matching.' };
+  }
+
+  // Resolve matching Job by exact human job_id only
   const job = resolveBookingJob(store, mappedFields);
   if (!job) {
     const reviewRecord = buildIntakeRecord(intake, 'Review', null,
-      [{ error: 'NO_MATCHING_JOB', detail: 'Could not resolve a unique matching job for this booking' }]);
+      [{ error: 'NO_MATCHING_JOB', detail: 'Unknown Job ID "' + String(ref).trim() + '" — never match by surname/address' }]);
     store.insert('Intake', reviewRecord);
     return { status: 'Review', intake_id: intake.intake_id,
-      error: 'NO_MATCHING_JOB', message: 'No unique job matched. Needs review.' };
+      error: 'NO_MATCHING_JOB', message: 'Unknown Job ID. Needs review — no surname/address matching.' };
   }
 
-  // Update Job with booking data
-  const jobUpdate = {};
-  const jobFields = mappedFields.Jobs || {};
-  if (jobFields.next_action_at) jobUpdate.next_action_at = jobFields.next_action_at;
-  if (jobFields.display_name && jobFields.display_name !== 'S05 synthetic job') {
-    jobUpdate.display_name = jobFields.display_name;
-  }
+  // Apply structured booking → CustomerChanges / WorkPackages / Materials / Equipment / Scaffold
+  const applied = applyBookingStructured(store, job, mappedFields, intake, options);
+
+  const jobUpdate = Object.assign({}, applied.job_patch || {});
   jobUpdate.booking_submission_id = intake.intake_id;
-  jobUpdate.sold_booking_match_status = 'Match';
-  jobUpdate.workflow_stage = 'BookingInProgress';
+  jobUpdate.sold_booking_match_status = applied.match_status; // Match or Review
+  // An early Booking intake may be linked, but it cannot skip the explicit ReadyToBook gate.
+  jobUpdate.workflow_stage = job.workflow_stage === 'ReadyToBook' ? 'BookingInProgress' : job.workflow_stage;
   jobUpdate.updated_at = new Date().toISOString();
   jobUpdate.updated_by = 'S05-intake';
   jobUpdate.version = (job.version || 0) + 1;
   store.update('Jobs', job.id, jobUpdate);
 
-  // Update customer if booking provides new data
-  const custFields = mappedFields.Customers || {};
-  if (custFields.email || custFields.phone) {
-    const custUpdate = { updated_at: new Date().toISOString(), updated_by: 'S05-intake' };
-    if (custFields.email) custUpdate.email = custFields.email;
-    if (custFields.phone) custUpdate.phone = custFields.phone;
-    custUpdate.version = (store.get('Customers', job.customer_id)?.version || 0) + 1;
-    store.update('Customers', job.customer_id, custUpdate);
-  }
+  // Do NOT silently overwrite customer identity fields. Proposals live in CustomerChanges.
+  // Optional non-identity contact proposals still require Accept in Intake Review when mismatched.
 
-  // Create Intake record
-  const intakeRecord = buildIntakeRecord(intake, 'Processed', job.id, null);
+  const intakeStatus = applied.needs_review ? 'Review' : 'Processed';
+  const intakeErrors = applied.needs_review
+    ? applied.review_reasons.map(r => ({ error: r, detail: 'Booking structured apply flagged for Intake Review' }))
+      .concat(applied.amount_mismatch ? [{ error: 'AMOUNT_MISMATCH', detail: JSON.stringify(applied.amount_mismatch) }] : [])
+      .concat(applied.customer_changes.map(c => ({ error: 'CUSTOMER_MISMATCH', field: c.field_name })))
+    : null;
+  const intakeRecord = buildIntakeRecord(intake, intakeStatus, job.id, intakeErrors);
   store.insert('Intake', intakeRecord);
 
   return {
-    status: 'Processed',
+    status: intakeStatus,
     intake_id: intake.intake_id,
     job_id: job.id,
     job_id_human: job.job_id,
-    message: 'Booking intake processed successfully'
+    match_status: applied.match_status,
+    applied,
+    message: intakeStatus === 'Processed'
+      ? 'Booking intake processed successfully'
+      : 'Booking linked but Intake Review required (mismatch/unresolved installer/amount)'
   };
 }
 

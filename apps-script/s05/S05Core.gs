@@ -5,12 +5,12 @@ const m0 = (function() {
 /* S05 mapping layer — Jotform question-to-field mapping.
  * Uses the existing MappingRules table from the canonical schema.
  * No guessed Jotform question IDs. Synthetic DEV mappings only.
- * Missing required mappings fail closed with NeedsReview. */
+ * Missing required mappings fail closed with NeedsReview.
+ * Real Job Booking column labels are mapped to synthetic question_ids
+ * that must be replaced with exported Jotform QIDs before live use. */
 
 function clone(v) { return JSON.parse(JSON.stringify(v)); }
 
-/* Build a field map from MappingRules rows.
- * Returns { byQuestion: { question_id: rule }, missingRequired: [field] } */
 function buildFieldMap(rules, formId) {
   const active = rules.filter(r => r.form_id === formId && r.active === true);
   const byQuestion = {};
@@ -20,8 +20,6 @@ function buildFieldMap(rules, formId) {
   return byQuestion;
 }
 
-/* Extract a single field value from raw payload using a mapping rule.
- * Returns the transformed value or undefined if not found. */
 function extractField(payload, rule) {
   const raw = payload[rule.question_id];
   if (raw === undefined || raw === null || raw === '') return undefined;
@@ -31,6 +29,17 @@ function extractField(payload, rule) {
   if (rule.transform === 'uppercase') return String(raw).toUpperCase().trim();
   if (rule.transform === 'integer') {
     const n = parseInt(String(raw).replace(/[^0-9-]/g, ''), 10);
+    return Number.isSafeInteger(n) ? n : undefined;
+  }
+  if (rule.transform === 'decimal_pence') {
+    // Pounds with decimals → pence; bare integer treated as pence if >= 1000 else pounds*100 heuristic avoided — require pounds.decimal or pence via integer map
+    const s = String(raw).trim().replace(/,/g, '');
+    if (!s) return undefined;
+    if (s.includes('.')) {
+      const n = Number(s);
+      return Number.isFinite(n) ? Math.round(n * 100) : undefined;
+    }
+    const n = parseInt(s.replace(/[^0-9-]/g, ''), 10);
     return Number.isSafeInteger(n) ? n : undefined;
   }
   if (rule.transform === 'boolean') {
@@ -49,8 +58,6 @@ function extractField(payload, rule) {
   return raw;
 }
 
-/* Apply all mapping rules to a raw payload.
- * Returns { fields: { table: { field: value } }, missingRequired: [rule], errors: [string] } */
 function applyMappings(payload, rules, formId) {
   const byQuestion = buildFieldMap(rules, formId);
   const fields = {};
@@ -70,14 +77,12 @@ function applyMappings(payload, rules, formId) {
   return { fields, missingRequired, errors };
 }
 
-/* Build a synthetic DEV mapping for a given form.
- * Returns MappingRules rows suitable for insertion. */
-function buildSyntheticMapping(formId, formType) {
+function buildSyntheticMapping(formId, formType, idPrefix) {
   const now = new Date().toISOString();
   const base = {
     form_id: formId,
-    mapping_version: 'S05-DEV-1.0',
-    effective_from: '2026-09-06',
+    mapping_version: 'S05-DEV-2.0',
+    effective_from: '2026-09-09',
     owner: 'S05-fixture',
     disposition: 'Import',
     active: true,
@@ -91,7 +96,7 @@ function buildSyntheticMapping(formId, formType) {
   function add(id, label, table, field, transform, requiredWhen) {
     rules.push({
       ...base,
-      id: 'MAP-' + formType + '-' + id,
+      id: (idPrefix || ('MAP-' + formType + '-')) + id,
       question_id: id,
       source_label: label,
       target_table: table,
@@ -102,7 +107,6 @@ function buildSyntheticMapping(formId, formType) {
   }
 
   if (formType === 'Sold') {
-    // Customer fields
     add('sold_first_name', 'First Name', 'Customers', 'first_name', 'trim', 'always');
     add('sold_last_name', 'Last Name', 'Customers', 'last_name', 'trim', 'always');
     add('sold_address1', 'Address Line 1', 'Customers', 'address_line1', 'trim', 'always');
@@ -111,45 +115,112 @@ function buildSyntheticMapping(formId, formType) {
     add('sold_postcode', 'Postcode', 'Customers', 'postcode', 'uppercase', 'always');
     add('sold_email', 'Email', 'Customers', 'email', 'lowercase', null);
     add('sold_phone', 'Phone', 'Customers', 'phone', 'trim', null);
-    // Job fields
     add('sold_lead_source', 'Lead Source', 'Jobs', 'lead_source', 'trim', null);
     add('sold_quote_ref', 'Quote Reference', 'Jobs', 'quote_reference', 'trim', null);
     add('sold_finance_route', 'Finance Route', 'Jobs', 'finance_route', 'trim', 'always');
+    add('sold_salesperson_id', 'Salesperson', 'Jobs', 'salesperson_id', 'trim', null);
+    add('sold_presale_file_id', 'Presale File', 'Jobs', 'presale_file_id', 'trim', null);
+    add('sold_roof_notes', 'Roof Notes', 'TechnicalDetails', 'roof_notes', 'trim', null);
+    add('sold_electrical_notes', 'Electrical Notes', 'TechnicalDetails', 'electrical_notes', 'trim', null);
     add('sold_roof', 'Roof Required', 'Jobs', 'roof_required', 'boolean', null);
     add('sold_electrical', 'Electrical Required', 'Jobs', 'electrical_required', 'boolean', null);
     add('sold_scaffold', 'Scaffold Required', 'Jobs', 'scaffold_required', 'boolean', null);
     add('sold_gross_pence', 'Contract Value (pence)', 'Jobs', 'original_gross_pence', 'integer', null);
     add('sold_valuation', 'Valuation Basis', 'Jobs', 'valuation_basis', 'trim', null);
   } else if (formType === 'Booking') {
-    // Job-matching field (must match sold job)
-    add('booking_sold_ref', 'Sold Reference / Job ID', 'Jobs', 'job_id', 'trim', 'always');
-    // Booking-specific fields
-    add('booking_install_date', 'Preferred Install Date', 'Jobs', 'next_action_at', 'trim', null);
-    add('booking_notes', 'Booking Notes', 'Jobs', 'display_name', 'trim', null);
-    // Customer updates
-    add('booking_email', 'Email', 'Customers', 'email', 'lowercase', null);
-    add('booking_phone', 'Phone', 'Customers', 'phone', 'trim', null);
+    // Exact Job ID reference — NEVER surname/address fallback
+    add('booking_job_id', 'Job ID', 'Jobs', 'job_id', 'trim', 'always');
+    // Customer proposals (checked, not silent overwrite)
+    add('booking_first_name', '1st name', 'Customers', 'first_name', 'trim', null);
+    add('booking_last_name', '2nd name', 'Customers', 'last_name', 'trim', null);
+    add('booking_address1', 'Address - Street Address', 'Customers', 'address_line1', 'trim', null);
+    add('booking_town', 'Address - City', 'Customers', 'town', 'trim', null);
+    add('booking_postcode', 'Post code', 'Customers', 'postcode', 'uppercase', null);
+    add('booking_phone', 'Customer Phone Number', 'Customers', 'phone', 'trim', null);
+    add('booking_email', 'Customer Email', 'Customers', 'email', 'lowercase', null);
+    // Value / finance / merchant (gross used for mismatch check only)
+    add('booking_solar_kw', 'Solar size (kW) 2 decimal place', 'Jobs', 'solar_kw', 'trim', null);
+    add('booking_cost', 'Cost of job', 'Jobs', 'booking_gross_pence', 'decimal_pence', null);
+    add('booking_finance', 'Finance', 'Jobs', 'finance_route', 'trim', null);
+    add('booking_merchant', 'Merchant Name', 'Jobs', 'merchant_name', 'trim', null);
+    add('booking_invoice_date', 'Date for invoice', 'Jobs', 'invoice_date', 'trim', null);
+    add('booking_annual_gen', 'Annual generation', 'Jobs', 'annual_generation', 'trim', null);
+    // Dates → WorkPackageDates / Scaffold (applied into WorkPackages / ScaffoldBookings)
+    add('booking_date_roofer', 'Date Roofer', 'WorkPackageDates', 'roof_date', 'trim', null);
+    add('booking_date_sparky', 'Date Sparky', 'WorkPackageDates', 'electrical_date', 'trim', null);
+    add('booking_date_scaffold', 'Date Scaffolding (at least 2 days before roofer)', 'WorkPackageDates', 'scaffold_erect', 'trim', null);
+    // Installers (resolved to People by exact display_name)
+    add('booking_roofer', 'Roofer', 'Installers', 'roofer', 'trim', null);
+    add('booking_sparky', 'Sparky', 'Installers', 'sparky', 'trim', null);
+    add('booking_second_sparky', '2nd Sparky', 'Installers', 'second_sparky', 'trim', null);
+    // Scaffold
+    add('booking_scaffold_company', 'Scaffold company', 'Scaffold', 'company_name', 'trim', null);
+    add('booking_scaffold_pdf', 'Scaffold PDF & additional', 'Scaffold', 'pdf', 'trim', null);
+    add('booking_scaffold_notes', 'Scaffolding notes', 'Notes', 'scaffolding', 'trim', null);
+    add('booking_roofing_notes', 'Roofing notes', 'Notes', 'roofing', 'trim', null);
+    add('booking_electrical_notes', 'Electrical notes', 'Notes', 'electrical', 'trim', null);
+    add('booking_ordering_notes', 'Ordering notes', 'Notes', 'ordering', 'trim', null);
+    // Materials — individual lines (totals preferred when present)
+    add('booking_roof_hooks_type', 'Roof hooks type', 'Notes', 'roof_hooks_type', 'trim', null);
+    add('booking_mat_slate_portrait', 'Slate Portrait - Renusol Roof Hook (R420181) - & screws', 'MaterialQty', 'renusol_hook_r420181_slate_portrait', 'integer', null);
+    add('booking_mat_slate_landscape', 'Slate Landscape - Renusol Roof Hook (R420181) - & screws', 'MaterialQty', 'renusol_hook_r420181_slate_landscape', 'integer', null);
+    add('booking_mat_r420181_total', 'Total Renusol Roof Hook (R420181) -& screws', 'MaterialQty', 'renusol_hook_r420181_total', 'integer', null);
+    add('booking_mat_concrete_portrait', 'Concrete Portrait - Renusol Roof hook (R420150) - & screws', 'MaterialQty', 'renusol_hook_r420150_concrete_portrait', 'integer', null);
+    add('booking_mat_concrete_landscape', 'Concrete Landscape - Renusol Roof Hook (R420150) - & screws', 'MaterialQty', 'renusol_hook_r420150_concrete_landscape', 'integer', null);
+    add('booking_mat_r420150_total', 'Total Renusol Roof Hook (R420150) -& screws', 'MaterialQty', 'renusol_hook_r420150_total', 'integer', null);
+    add('booking_mat_l_bracket', 'L bracket for landscape hooks - REN-420353', 'MaterialQty', 'renusol_l_bracket_ren_420353', 'integer', null);
+    add('booking_mat_hook_rest', 'Hook Rest Rubber Tile H-Rest', 'MaterialQty', 'renusol_hook_rest_rubber', 'integer', null);
+    add('booking_mat_end_clamps', 'Renusol End clamps REN-420081-B', 'MaterialQty', 'renusol_end_clamps_ren_420081_b', 'integer', null);
+    add('booking_mat_end_caps', 'Renusol End caps REN-900276', 'MaterialQty', 'renusol_end_caps_ren_900276', 'integer', null);
+    add('booking_mat_mid_clamps', 'Renusol Mid clamps REN-420082-B', 'MaterialQty', 'renusol_mid_clamps_ren_420082_b', 'integer', null);
+    add('booking_mat_rail', 'Renusol Rail REN-400572', 'MaterialQty', 'renusol_rail_ren_400572', 'integer', null);
+    add('booking_mat_splice', 'Renusol Splice REN-400531', 'MaterialQty', 'renusol_splice_ren_400531', 'integer', null);
+    add('booking_mat_k2_flat_multi', 'K2 Flat multi rail - landscape', 'MaterialQty', 'k2_flat_multi_rail_landscape', 'integer', null);
+    add('booking_mat_k2_curved_multi', 'K2 Curved multi rail - landscape', 'MaterialQty', 'k2_curved_multi_rail_landscape', 'integer', null);
+    add('booking_mat_k2_flat_mini', 'K2 Flat mini rail - portrait', 'MaterialQty', 'k2_flat_mini_rail_portrait', 'integer', null);
+    add('booking_mat_k2_curved_mini', 'K2 Curved mini rail - portrait', 'MaterialQty', 'k2_curved_mini_rail_portrait', 'integer', null);
+    add('booking_mat_genius', 'Genius Speed flashing', 'MaterialQty', 'genius_speed_flashing', 'integer', null);
+    add('booking_mat_k2_1000074', 'K2 1000074 15CM Roof Hook for Flat Tiles - Portrait & Landscape (NEED 1 x 1000041 T-bolt & 1000042 Nut WITH EVERY HOOK)', 'MaterialQty', 'k2_1000074_hook', 'integer', null);
+    add('booking_mat_k2_mid', 'K2 Mid Clamps 2004540 - Portrait & Landscape', 'MaterialQty', 'k2_mid_clamps_2004540', 'integer', null);
+    add('booking_mat_k2_end', 'K2 End Clamps 2004545 - Portrait & Landscape', 'MaterialQty', 'k2_end_clamps_2004545', 'integer', null);
+    add('booking_mat_k2_end_caps', 'K2 End Caps - Portrait & Landscape', 'MaterialQty', 'k2_end_caps', 'integer', null);
+    add('booking_mat_k2_rail', 'K2 Rail - Portrait & Landscape', 'MaterialQty', 'k2_rail', 'integer', null);
+    add('booking_mat_k2_splice', 'K2 Splice - Portrait & Landscape', 'MaterialQty', 'k2_splice', 'integer', null);
+    add('booking_mat_panel_515', 'Amount of 515 Panels', 'MaterialQty', 'panel_515', 'integer', null);
+    add('booking_mat_panel_460', 'Amount of 460 Panels', 'MaterialQty', 'panel_460', 'integer', null);
+    add('booking_mat_panel_m', 'Amount of M-Class Panels', 'MaterialQty', 'panel_m_class', 'integer', null);
+    add('booking_mat_bird_netting', 'Bird netting (m)', 'MaterialQty', 'bird_netting_m', 'integer', null);
+    add('booking_mat_optimisers', 'Optimisers', 'MaterialQty', 'optimisers', 'integer', null);
+    add('booking_mat_fox_jb', 'Fox Junction Box', 'MaterialQty', 'fox_junction_box', 'integer', null);
+    add('booking_mat_dongle', 'Dongle', 'MaterialQty', 'dongle', 'integer', null);
+    add('booking_mat_gateway', 'Gateway', 'MaterialQty', 'gateway', 'integer', null);
+    add('booking_mat_ev', 'EV Charger', 'MaterialQty', 'ev_charger', 'integer', null);
+    // Equipment
+    add('booking_inverter', 'Inverter to order', 'Equipment', 'inverter_to_order', 'trim', null);
+    add('booking_battery', 'Battery to order', 'Equipment', 'battery_to_order', 'trim', null);
+    add('booking_battery_qty', 'How many batteries?', 'Equipment', 'battery_quantity', 'integer', null);
+    add('booking_fox_jb_calc', 'Fox Junction Box Calculation', 'Notes', 'fox_jb_calc', 'trim', null);
+    add('booking_extras', 'Extras', 'Notes', 'extras', 'trim', null);
+    add('booking_sig_extras', 'Sig Extras To Order', 'Notes', 'sig_extras', 'trim', null);
+    add('booking_tesla_extras', 'Tesla Extras To Order', 'Notes', 'tesla_extras', 'trim', null);
+    // Submission identity retained on Intake; mapping retained for completeness
+    add('booking_submission_id_field', 'Submission ID', 'Jobs', 'external_submission_id', 'trim', null);
   }
 
   return rules;
 }
 
-/* Find a matching Job for a booking submission.
- * Uses the job_id field from the mapped booking data (SS-XXXX-XXXX).
- * Returns the Job record or null. */
+/* Exact job_id match only. Blank/unknown/ambiguous → null (Intake Review). */
 function resolveBookingJob(store, mappedFields) {
   const jobFields = mappedFields.Jobs || {};
   const jobId = jobFields.job_id;
-  if (!jobId || typeof jobId !== 'string') return null;
-  // Look up by human job_id (SS-XXXX-XXXX), not internal id
+  if (!jobId || typeof jobId !== 'string' || !String(jobId).trim()) return null;
   const allJobs = store.list('Jobs');
-  const matches = allJobs.filter(j => j.job_id === jobId);
+  const matches = allJobs.filter(j => j.job_id === String(jobId).trim());
   if (matches.length === 1) return matches[0];
-  return null; // zero or ambiguous matches
+  return null;
 }
 
-/* Generate a unique SS-XXXX-XXXX job_id.
- * Uses existing convention: SS-XXXX-XXXX format with collision retry. */
 function generateJobId(store) {
   const existing = new Set(store.list('Jobs').map(j => j.job_id));
   for (let attempt = 0; attempt < 20; attempt++) {
@@ -169,18 +240,496 @@ function generateJobId(store) {
   throw new Error('JOB_ID_COLLISION_EXHAUSTED');
 }
 
-/* Generate a stable internal Jobs.id */
 function generateInternalJobId() {
   return 'J-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 8);
 }
 
-/* Generate a stable internal Customers.id */
 function generateCustomerId() {
   return 'CUST-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 8);
 }
 
 
-return { clone, buildFieldMap, extractField, applyMappings, buildSyntheticMapping, resolveBookingJob, generateJobId, generateInternalJobId, generateCustomerId };
+return { buildFieldMap, extractField, applyMappings, buildSyntheticMapping, resolveBookingJob, generateJobId, generateInternalJobId, generateCustomerId };
+})();
+// Source: s05/booking-apply.js
+const mApply = (function() {
+/* Apply structured Booking fields onto existing Job records.
+ * Never writes Jotform directly into Jobs as the sole store.
+ * Customer/value mismatches → CustomerChanges + Review match status.
+ * Product SKUs without approval stay NEED_APPROVAL (no invented IDs).
+ * No surname/address job matching. No external sends. */
+
+'use strict';
+
+const DEFAULT_PRODUCT_MAP = JSON.parse("{\n  \"mapping_version\": \"R1-BOOKING-PRODUCTS-1.0\",\n  \"notes\": \"Approved product_id values only. Unapproved SKUs must stay NEED_APPROVAL — do not invent identities.\",\n  \"materials\": {\n    \"renusol_hook_r420181_slate_portrait\": { \"product_id\": \"NEED_APPROVAL\", \"description\": \"Slate Portrait - Renusol Roof Hook (R420181) - & screws\", \"unit\": \"ea\", \"category\": \"RoofHook\" },\n    \"renusol_hook_r420181_slate_landscape\": { \"product_id\": \"NEED_APPROVAL\", \"description\": \"Slate Landscape - Renusol Roof Hook (R420181) - & screws\", \"unit\": \"ea\", \"category\": \"RoofHook\" },\n    \"renusol_hook_r420181_total\": { \"product_id\": \"NEED_APPROVAL\", \"description\": \"Total Renusol Roof Hook (R420181) -& screws\", \"unit\": \"ea\", \"category\": \"RoofHook\", \"authoritative_total\": true },\n    \"renusol_hook_r420150_concrete_portrait\": { \"product_id\": \"NEED_APPROVAL\", \"description\": \"Concrete Portrait - Renusol Roof hook (R420150) - & screws\", \"unit\": \"ea\", \"category\": \"RoofHook\" },\n    \"renusol_hook_r420150_concrete_landscape\": { \"product_id\": \"NEED_APPROVAL\", \"description\": \"Concrete Landscape - Renusol Roof Hook (R420150) - & screws\", \"unit\": \"ea\", \"category\": \"RoofHook\" },\n    \"renusol_hook_r420150_total\": { \"product_id\": \"NEED_APPROVAL\", \"description\": \"Total Renusol Roof Hook (R420150) -& screws\", \"unit\": \"ea\", \"category\": \"RoofHook\", \"authoritative_total\": true },\n    \"renusol_l_bracket_ren_420353\": { \"product_id\": \"NEED_APPROVAL\", \"description\": \"L bracket for landscape hooks - REN-420353\", \"unit\": \"ea\" },\n    \"renusol_hook_rest_rubber\": { \"product_id\": \"NEED_APPROVAL\", \"description\": \"Hook Rest Rubber Tile H-Rest\", \"unit\": \"ea\" },\n    \"renusol_end_clamps_ren_420081_b\": { \"product_id\": \"NEED_APPROVAL\", \"description\": \"Renusol End clamps REN-420081-B\", \"unit\": \"ea\" },\n    \"renusol_end_caps_ren_900276\": { \"product_id\": \"NEED_APPROVAL\", \"description\": \"Renusol End caps REN-900276\", \"unit\": \"ea\" },\n    \"renusol_mid_clamps_ren_420082_b\": { \"product_id\": \"NEED_APPROVAL\", \"description\": \"Renusol Mid clamps REN-420082-B\", \"unit\": \"ea\" },\n    \"renusol_rail_ren_400572\": { \"product_id\": \"NEED_APPROVAL\", \"description\": \"Renusol Rail REN-400572\", \"unit\": \"ea\" },\n    \"renusol_splice_ren_400531\": { \"product_id\": \"NEED_APPROVAL\", \"description\": \"Renusol Splice REN-400531\", \"unit\": \"ea\" },\n    \"k2_flat_multi_rail_landscape\": { \"product_id\": \"NEED_APPROVAL\", \"description\": \"K2 Flat multi rail - landscape\", \"unit\": \"ea\" },\n    \"k2_curved_multi_rail_landscape\": { \"product_id\": \"NEED_APPROVAL\", \"description\": \"K2 Curved multi rail - landscape\", \"unit\": \"ea\" },\n    \"k2_flat_mini_rail_portrait\": { \"product_id\": \"NEED_APPROVAL\", \"description\": \"K2 Flat mini rail - portrait\", \"unit\": \"ea\" },\n    \"k2_curved_mini_rail_portrait\": { \"product_id\": \"NEED_APPROVAL\", \"description\": \"K2 Curved mini rail - portrait\", \"unit\": \"ea\" },\n    \"genius_speed_flashing\": { \"product_id\": \"NEED_APPROVAL\", \"description\": \"Genius Speed flashing\", \"unit\": \"ea\" },\n    \"k2_1000074_hook\": { \"product_id\": \"NEED_APPROVAL\", \"description\": \"K2 1000074 15CM Roof Hook for Flat Tiles\", \"unit\": \"ea\" },\n    \"k2_mid_clamps_2004540\": { \"product_id\": \"NEED_APPROVAL\", \"description\": \"K2 Mid Clamps 2004540\", \"unit\": \"ea\" },\n    \"k2_end_clamps_2004545\": { \"product_id\": \"NEED_APPROVAL\", \"description\": \"K2 End Clamps 2004545\", \"unit\": \"ea\" },\n    \"k2_end_caps\": { \"product_id\": \"NEED_APPROVAL\", \"description\": \"K2 End Caps\", \"unit\": \"ea\" },\n    \"k2_rail\": { \"product_id\": \"NEED_APPROVAL\", \"description\": \"K2 Rail\", \"unit\": \"ea\" },\n    \"k2_splice\": { \"product_id\": \"NEED_APPROVAL\", \"description\": \"K2 Splice\", \"unit\": \"ea\" },\n    \"panel_515\": { \"product_id\": \"NEED_APPROVAL\", \"description\": \"Amount of 515 Panels\", \"unit\": \"ea\", \"category\": \"Panel\" },\n    \"panel_460\": { \"product_id\": \"NEED_APPROVAL\", \"description\": \"Amount of 460 Panels\", \"unit\": \"ea\", \"category\": \"Panel\" },\n    \"panel_m_class\": { \"product_id\": \"NEED_APPROVAL\", \"description\": \"Amount of M-Class Panels\", \"unit\": \"ea\", \"category\": \"Panel\" },\n    \"bird_netting_m\": { \"product_id\": \"NEED_APPROVAL\", \"description\": \"Bird netting (m)\", \"unit\": \"m\" },\n    \"optimisers\": { \"product_id\": \"NEED_APPROVAL\", \"description\": \"Optimisers\", \"unit\": \"ea\", \"category\": \"Electrical\" },\n    \"fox_junction_box\": { \"product_id\": \"NEED_APPROVAL\", \"description\": \"Fox Junction Box\", \"unit\": \"ea\", \"category\": \"Electrical\" },\n    \"dongle\": { \"product_id\": \"NEED_APPROVAL\", \"description\": \"Dongle\", \"unit\": \"ea\", \"category\": \"Electrical\" },\n    \"gateway\": { \"product_id\": \"NEED_APPROVAL\", \"description\": \"Gateway\", \"unit\": \"ea\", \"category\": \"Electrical\" },\n    \"ev_charger\": { \"product_id\": \"NEED_APPROVAL\", \"description\": \"EV Charger\", \"unit\": \"ea\", \"category\": \"Electrical\" }\n  },\n  \"equipment\": {\n    \"inverter_to_order\": { \"equipment_type\": \"Inverter\", \"product_id\": \"NEED_APPROVAL\" },\n    \"battery_to_order\": { \"equipment_type\": \"Battery\", \"product_id\": \"NEED_APPROVAL\" }\n  },\n  \"skip_component_when_authoritative_total_present\": true\n}\n");
+
+function clone(v) { return JSON.parse(JSON.stringify(v)); }
+function norm(v) {
+  if (v === null || v === undefined) return '';
+  return String(v).trim().replace(/\s+/g, ' ').toLowerCase();
+}
+function moneyPence(v) {
+  if (v === null || v === undefined || v === '') return null;
+  if (typeof v === 'number' && Number.isFinite(v)) return Math.round(v);
+  const s = String(v).trim().replace(/,/g, '');
+  if (/^\d+$/.test(s)) return parseInt(s, 10);
+  const n = Number(s);
+  if (!Number.isFinite(n)) return null;
+  // Treat decimal pounds as pounds → pence when a decimal point is present
+  if (String(v).includes('.')) return Math.round(n * 100);
+  return Math.round(n);
+}
+function qty(v) {
+  if (v === null || v === undefined || v === '') return null;
+  const n = Number(String(v).replace(/,/g, ''));
+  return Number.isFinite(n) && n > 0 ? n : null;
+}
+function idSuffix() {
+  return Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 8);
+}
+
+function loadProductMap(options) {
+  if (options && options.productMap) return options.productMap;
+  return DEFAULT_PRODUCT_MAP;
+}
+
+function compareCustomerField(field, previous, incoming) {
+  if (incoming === undefined || incoming === null || incoming === '') return null;
+  const prev = previous === null || previous === undefined ? '' : String(previous);
+  if (norm(prev) === norm(incoming)) return null;
+  return { field_name: field, previous_value: prev || null, incoming_value: String(incoming).trim() };
+}
+
+function resolveInstallerByName(store, name) {
+  if (!name || !String(name).trim()) return { status: 'blank', person: null };
+  const target = norm(name);
+  const matches = store.list('People').filter(p =>
+    p.active === true && p.role === 'Installer' && norm(p.display_name) === target);
+  if (matches.length === 1) return { status: 'resolved', person: matches[0] };
+  if (matches.length === 0) return { status: 'unresolved', person: null, reason: 'INSTALLER_NOT_FOUND', name: String(name).trim() };
+  return { status: 'ambiguous', person: null, reason: 'INSTALLER_AMBIGUOUS', name: String(name).trim() };
+}
+
+function ensureWorkPackage(store, job, trade, plannedStart, plannedEnd, intakeId, notes) {
+  const existing = store.list('WorkPackages').find(w => w.job_id === job.id && w.trade === trade && w.status !== 'Cancelled');
+  const now = new Date().toISOString();
+  const start = plannedStart || null;
+  const end = plannedEnd || plannedStart || null;
+  if (existing) {
+    const patch = {
+      planned_start: start || existing.planned_start,
+      planned_end: end || existing.planned_end,
+      required: true,
+      updated_at: now,
+      updated_by: 'S05-booking-apply',
+      version: Number(existing.version || 0) + 1,
+      commit_id: intakeId
+    };
+    if (notes) patch.completion_outcome = existing.completion_outcome; // preserve
+    store.update('WorkPackages', existing.id, patch);
+    return store.get('WorkPackages', existing.id);
+  }
+  const row = {
+    id: 'WP-' + trade.toLowerCase() + '-' + idSuffix(),
+    job_id: job.id,
+    trade,
+    required: true,
+    planned_start: start,
+    planned_end: end,
+    actual_start: null,
+    actual_end: null,
+    status: start ? 'Scheduled' : 'Unscheduled',
+    need_by_date: start,
+    completion_outcome: null,
+    installer_confirmation_at: null,
+    installer_confirmation_by: null,
+    commissioning_required: trade === 'Electrical',
+    sequence: trade === 'Roof' ? 1 : (trade === 'Electrical' ? 2 : 9),
+    revision: 1,
+    parent_package_id: null,
+    created_at: now,
+    created_by: 'S05-booking-apply',
+    updated_at: now,
+    updated_by: 'S05-booking-apply',
+    version: 1,
+    source_system: 'S05-booking-apply',
+    commit_id: intakeId
+  };
+  store.insert('WorkPackages', row);
+  return row;
+}
+
+function ensureScaffold(store, job, dates, companyName, notes, intakeId) {
+  const existing = store.list('ScaffoldBookings').find(s => s.job_id === job.id && s.status !== 'Cancelled');
+  const now = new Date().toISOString();
+  let companyId = null;
+  if (companyName && String(companyName).trim()) {
+    const cos = store.list('Companies').filter(c =>
+      c.active !== false && (c.type === 'Scaffolder' || !c.type) && norm(c.name) === norm(companyName));
+    if (cos.length === 1) companyId = cos[0].id;
+  }
+  const erect = dates.scaffold_erect || null;
+  if (existing) {
+    store.update('ScaffoldBookings', existing.id, {
+      erect_planned_at: erect || existing.erect_planned_at,
+      access_notes: notes || existing.access_notes,
+      company_id: companyId || existing.company_id,
+      updated_at: now,
+      updated_by: 'S05-booking-apply',
+      version: Number(existing.version || 0) + 1,
+      commit_id: intakeId
+    });
+    return { scaffold: store.get('ScaffoldBookings', existing.id), company_resolved: !!companyId, company_name: companyName || null };
+  }
+  if (!erect && !companyName && !notes) return null;
+  const row = {
+    id: 'SCB-' + idSuffix(),
+    job_id: job.id,
+    company_id: companyId,
+    erect_planned_at: erect,
+    erect_confirmed_at: null,
+    erect_actual_at: null,
+    strip_forecast_at: null,
+    strip_authorised_at: null,
+    strip_authorised_by: null,
+    strip_planned_at: null,
+    strip_confirmed_at: null,
+    strip_actual_at: null,
+    status: erect ? 'Planned' : 'Draft',
+    revision: 1,
+    confirmed_revision: null,
+    access_notes: notes || null,
+    scope_file_id: null,
+    quoted_cost_pence: null,
+    actual_cost_pence: null,
+    invoice_reference: null,
+    related_issue_ids: null,
+    created_at: now,
+    created_by: 'S05-booking-apply',
+    updated_at: now,
+    updated_by: 'S05-booking-apply',
+    version: 1,
+    source_system: 'S05-booking-apply',
+    commit_id: intakeId
+  };
+  store.insert('ScaffoldBookings', row);
+  return { scaffold: row, company_resolved: !!companyId, company_name: companyName || null };
+}
+
+function materialIdempotencyKey(jobId, mapKey) {
+  return 'MAT-BOOKING-' + jobId + '-' + mapKey;
+}
+
+function createMaterialLines(store, job, roofWp, electricalWp, quantities, productMap, intakeId, merchantName) {
+  const created = [];
+  const requirements = [];
+  const materialsCfg = (productMap && productMap.materials) || {};
+  const skipComponents = productMap && productMap.skip_component_when_authoritative_total_present === true;
+  const hasR420181Total = qty(quantities.renusol_hook_r420181_total);
+  const hasR420150Total = qty(quantities.renusol_hook_r420150_total);
+
+  let merchantId = null;
+  if (merchantName && String(merchantName).trim()) {
+    const merchants = store.list('Companies').filter(c =>
+      c.active !== false && (c.type === 'Merchant' || !c.type) && norm(c.name) === norm(merchantName));
+    if (merchants.length === 1) merchantId = merchants[0].id;
+  }
+
+  for (const [key, rawQty] of Object.entries(quantities || {})) {
+    const q = qty(rawQty);
+    if (!q) continue;
+    const cfg = materialsCfg[key];
+    if (!cfg) {
+      requirements.push({ key, reason: 'NO_PRODUCT_MAP_ENTRY', quantity: q });
+      continue;
+    }
+    if (skipComponents && cfg.authoritative_total !== true) {
+      if (key.indexOf('r420181') >= 0 && !key.endsWith('_total') && hasR420181Total) continue;
+      if (key.indexOf('r420150') >= 0 && !key.endsWith('_total') && hasR420150Total) continue;
+    }
+    const mid = materialIdempotencyKey(job.id, key);
+    if (store.get('Materials', mid)) {
+      created.push({ id: mid, replayed: true });
+      continue;
+    }
+    const needApproval = !cfg.product_id || cfg.product_id === 'NEED_APPROVAL';
+    if (needApproval) requirements.push({ key, reason: 'PRODUCT_ID_NEED_APPROVAL', description: cfg.description, quantity: q });
+    const category = cfg.category || '';
+    const wpId = category === 'Electrical' || category === 'Panel' && key.indexOf('panel') === 0
+      ? (electricalWp && electricalWp.id) || (roofWp && roofWp.id) || null
+      : (roofWp && roofWp.id) || (electricalWp && electricalWp.id) || null;
+    const panelWp = category === 'Panel' ? ((roofWp && roofWp.id) || null) : wpId;
+    const now = new Date().toISOString();
+    const row = {
+      id: mid,
+      job_id: job.id,
+      work_package_id: panelWp,
+      product_id: needApproval ? null : cfg.product_id,
+      description: cfg.description,
+      required_quantity: q,
+      unit: cfg.unit || 'ea',
+      source: 'ToOrder',
+      need_by_date: (roofWp && roofWp.planned_start) || (electricalWp && electricalWp.planned_start) || null,
+      merchant_id: merchantId,
+      order_line_id: null,
+      already_ordered_reference: null,
+      notes: needApproval ? 'MAPPING_REQUIRED:' + key : null,
+      revision: 1,
+      cancelled_quantity: 0,
+      created_at: now,
+      created_by: 'S05-booking-apply',
+      updated_at: now,
+      updated_by: 'S05-booking-apply',
+      version: 1,
+      source_system: 'S05-booking-apply',
+      commit_id: intakeId
+    };
+    store.insert('Materials', row);
+    created.push({ id: mid, key, quantity: q, need_approval: needApproval });
+  }
+  return { created, requirements, merchant_id: merchantId };
+}
+
+function createEquipment(store, job, electricalWp, equipmentFields, productMap, intakeId) {
+  const created = [];
+  const requirements = [];
+  const cfg = (productMap && productMap.equipment) || {};
+  const now = new Date().toISOString();
+
+  function add(fieldKey, quantity) {
+    const map = cfg[fieldKey];
+    if (!map) {
+      requirements.push({ key: fieldKey, reason: 'NO_EQUIPMENT_MAP_ENTRY' });
+      return;
+    }
+    const text = equipmentFields[fieldKey];
+    if (!text && !quantity) return;
+    const needApproval = !map.product_id || map.product_id === 'NEED_APPROVAL';
+    if (needApproval) requirements.push({ key: fieldKey, reason: 'PRODUCT_ID_NEED_APPROVAL', value: text || quantity });
+    const eid = 'JEQ-BOOKING-' + job.id + '-' + fieldKey;
+    if (store.get('JobEquipment', eid)) {
+      created.push({ id: eid, replayed: true });
+      return;
+    }
+    store.insert('JobEquipment', {
+      id: eid,
+      job_id: job.id,
+      work_package_id: electricalWp ? electricalWp.id : null,
+      equipment_type: map.equipment_type,
+      planned_product_id: needApproval ? null : map.product_id,
+      installed_product_id: null,
+      quantity: quantity || 1,
+      planned_location: text ? String(text).trim() : null,
+      installed_location: null,
+      serial_number: null,
+      commissioning_submission_id: null,
+      variation_id: null,
+      technical_review_status: needApproval ? 'MappingRequired' : 'Planned',
+      created_at: now,
+      created_by: 'S05-booking-apply',
+      updated_at: now,
+      updated_by: 'S05-booking-apply',
+      version: 1,
+      commit_id: intakeId
+    });
+    created.push({ id: eid, equipment_type: map.equipment_type, need_approval: needApproval });
+  }
+
+  add('inverter_to_order', 1);
+  const batteryQty = qty(equipmentFields.battery_quantity) || (equipmentFields.battery_to_order ? 1 : null);
+  if (equipmentFields.battery_to_order || batteryQty) add('battery_to_order', batteryQty || 1);
+  return { created, requirements };
+}
+
+function writeCustomerChanges(store, job, customer, custFields, intakeId) {
+  const changes = [];
+  const fields = [
+    ['first_name', custFields.first_name],
+    ['last_name', custFields.last_name],
+    ['address_line1', custFields.address_line1],
+    ['address_line2', custFields.address_line2],
+    ['town', custFields.town],
+    ['postcode', custFields.postcode],
+    ['email', custFields.email],
+    ['phone', custFields.phone]
+  ];
+  const now = new Date().toISOString();
+  for (const [name, incoming] of fields) {
+    const diff = compareCustomerField(name, customer[name], incoming);
+    if (!diff) continue;
+    const cid = 'CC-' + job.id + '-' + name + '-' + intakeId;
+    if (!store.get('CustomerChanges', cid)) {
+      store.insert('CustomerChanges', {
+        id: cid,
+        job_id: job.id,
+        field_name: diff.field_name,
+        previous_value: diff.previous_value,
+        incoming_value: diff.incoming_value,
+        source_submission_id: intakeId,
+        resolution: null,
+        resolved_value: null,
+        resolved_at: null,
+        resolved_by: null,
+        reason: 'BOOKING_CUSTOMER_MISMATCH',
+        created_at: now,
+        commit_id: intakeId
+      });
+    }
+    changes.push(diff);
+  }
+  return changes;
+}
+
+function applyBookingStructured(store, job, mappedFields, intake, options) {
+  const productMap = loadProductMap(options || {});
+  const customer = store.get('Customers', job.customer_id);
+  const custFields = mappedFields.Customers || {};
+  const jobFields = mappedFields.Jobs || {};
+  const dates = mappedFields.WorkPackageDates || {};
+  const installers = mappedFields.Installers || {};
+  const materialsQty = mappedFields.MaterialQty || {};
+  const equipmentFields = mappedFields.Equipment || {};
+  const scaffoldFields = mappedFields.Scaffold || {};
+  const notes = mappedFields.Notes || {};
+  const out = {
+    customer_changes: [],
+    amount_mismatch: null,
+    match_status: 'Match',
+    needs_review: false,
+    review_reasons: [],
+    work_packages: [],
+    scaffold: null,
+    materials: [],
+    equipment: [],
+    installers: { resolved: [], unresolved: [] },
+    mapping_requirements: [],
+    display_name: null
+  };
+
+  if (!customer) {
+    out.needs_review = true;
+    out.review_reasons.push('CUSTOMER_MISSING');
+    out.match_status = 'Review';
+    return out;
+  }
+
+  out.customer_changes = writeCustomerChanges(store, job, customer, custFields, intake.intake_id);
+  if (out.customer_changes.length) {
+    out.needs_review = true;
+    out.review_reasons.push('CUSTOMER_MISMATCH');
+    out.match_status = 'Review';
+  }
+
+  const bookingGross = moneyPence(jobFields.booking_gross_pence);
+  if (bookingGross !== null && typeof job.original_gross_pence === 'number' && job.original_gross_pence > 0) {
+    if (bookingGross !== job.original_gross_pence) {
+      out.amount_mismatch = { previous: job.original_gross_pence, incoming: bookingGross };
+      out.needs_review = true;
+      out.review_reasons.push('AMOUNT_MISMATCH');
+      out.match_status = 'Review';
+    }
+  }
+
+  // Display name from surname + postcode when available (derived, not a match key)
+  const last = (custFields.last_name || customer.last_name || '').trim();
+  const pc = (custFields.postcode || customer.postcode || '').trim();
+  if (last && pc) out.display_name = last + ' – ' + pc;
+
+  const roofDate = dates.roof_date || null;
+  const elecDate = dates.electrical_date || null;
+  let roofWp = null;
+  let elecWp = null;
+  if (roofDate || job.roof_required || materialsQty && Object.keys(materialsQty).some(k => k.indexOf('panel') === 0 || k.indexOf('renusol') === 0 || k.indexOf('k2') === 0)) {
+    roofWp = ensureWorkPackage(store, job, 'Roof', roofDate, roofDate, intake.intake_id, notes.roofing);
+    out.work_packages.push(roofWp.id);
+  }
+  if (elecDate || job.electrical_required || equipmentFields.inverter_to_order || equipmentFields.battery_to_order) {
+    elecWp = ensureWorkPackage(store, job, 'Electrical', elecDate, elecDate, intake.intake_id, notes.electrical);
+    out.work_packages.push(elecWp.id);
+  }
+  // Job flags when dates imply work
+  const jobPatchFlags = {};
+  if (roofWp) jobPatchFlags.roof_required = true;
+  if (elecWp) jobPatchFlags.electrical_required = true;
+
+  if (dates.scaffold_erect || scaffoldFields.company_name || scaffoldFields.notes || job.scaffold_required) {
+    const sc = ensureScaffold(store, job, dates, scaffoldFields.company_name, scaffoldFields.notes || notes.scaffolding, intake.intake_id);
+    if (sc) {
+      out.scaffold = sc;
+      jobPatchFlags.scaffold_required = true;
+      if (scaffoldFields.company_name && !sc.company_resolved) {
+        out.review_reasons.push('SCAFFOLD_COMPANY_UNRESOLVED');
+        // advisory — does not alone force match Review unless no date linkage needed
+      }
+    }
+  }
+
+  for (const role of [
+    ['roofer', 'Roof', 'Lead'],
+    ['sparky', 'Electrical', 'Lead'],
+    ['second_sparky', 'Electrical', 'Second']
+  ]) {
+    const [field, trade, allocRole] = role;
+    const name = installers[field];
+    if (!name) continue;
+    const resolved = resolveInstallerByName(store, name);
+    if (resolved.status === 'resolved') {
+      out.installers.resolved.push({ field, person_id: resolved.person.id, trade, role: allocRole });
+      const wp = trade === 'Roof' ? roofWp : elecWp;
+      if (wp) {
+        const aid = 'ALLOC-BOOKING-' + job.id + '-' + field;
+        if (!store.get('Allocations', aid)) {
+          const now = new Date().toISOString();
+          store.insert('Allocations', {
+            id: aid,
+            work_package_id: wp.id,
+            person_id: resolved.person.id,
+            role: allocRole,
+            start_at: wp.planned_start,
+            end_at: wp.planned_end || wp.planned_start,
+            active: true,
+            replaced_allocation_id: null,
+            cancellation_reason: null,
+            calendar_link_id: null,
+            created_at: now,
+            created_by: 'S05-booking-apply',
+            updated_at: now,
+            updated_by: 'S05-booking-apply',
+            version: 1,
+            source_system: 'S05-booking-apply',
+            commit_id: intake.intake_id
+          });
+        }
+      }
+    } else if (resolved.status !== 'blank') {
+      out.installers.unresolved.push(resolved);
+      out.needs_review = true;
+      out.review_reasons.push(resolved.reason);
+      out.match_status = 'Review';
+    }
+  }
+
+  const mat = createMaterialLines(store, job, roofWp, elecWp, materialsQty, productMap, intake.intake_id, jobFields.merchant_name);
+  out.materials = mat.created;
+  out.mapping_requirements = out.mapping_requirements.concat(mat.requirements);
+
+  const eq = createEquipment(store, job, elecWp, equipmentFields, productMap, intake.intake_id);
+  out.equipment = eq.created;
+  out.mapping_requirements = out.mapping_requirements.concat(eq.requirements);
+
+  // Persist note snapshots on job next_action_at from earliest work date (derived summary only)
+  const summaryDates = [roofDate, elecDate, dates.scaffold_erect].filter(Boolean).sort();
+  out.job_patch = Object.assign({}, jobPatchFlags);
+  if (summaryDates.length) out.job_patch.next_action_at = summaryDates[0];
+  if (out.display_name) out.job_patch.display_name = out.display_name;
+  if (notes.ordering || notes.roofing || notes.electrical) {
+    out.job_patch.source_record_id = intake.intake_id;
+  }
+
+  return out;
+}
+
+return { applyBookingStructured, resolveInstallerByName, compareCustomerField, moneyPence, loadProductMap, DEFAULT_PRODUCT_MAP };
 })();
 // Source: s05/intake.js
 const m1 = (function() {
@@ -190,6 +739,7 @@ const m1 = (function() {
 
 const { applyMappings, buildSyntheticMapping, resolveBookingJob,
   generateJobId, generateInternalJobId, generateCustomerId } = m0;
+const { applyBookingStructured } = mApply;
 
 const DEV_SHEET_ID = '1z7PNZtDdC4Z5eLbmTuQdqp0QpJSmuEvx3QvN3VyNTsc';
 const clone = value => JSON.parse(JSON.stringify(value));
@@ -251,8 +801,10 @@ function buildCustomer(mappedFields, intakeId) {
 }
 
 /* Build Job record from mapped fields */
-function buildJob(mappedFields, customerId, soldIntakeId) {
+function buildJob(mappedFields, customerId, soldIntakeId, extra) {
   const f = mappedFields.Jobs || {};
+  const flags = extra || {};
+  const actor = flags.actor || 'S05-intake';
   const now = new Date().toISOString();
   return {
     id: generateInternalJobId(),
@@ -262,10 +814,10 @@ function buildJob(mappedFields, customerId, soldIntakeId) {
     sold_submission_id: soldIntakeId,
     booking_submission_id: null,
     sold_at: now,
-    salesperson_id: null,
+    salesperson_id: f.salesperson_id || null,
     lead_source: f.lead_source || null,
     quote_reference: f.quote_reference || null,
-    presale_file_id: null,
+    presale_file_id: f.presale_file_id || null,
     finance_route: f.finance_route || 'Standard',
     contract_status: 'NotSent',
     contract_id: null, contract_signed_at: null, contract_evidence_id: null,
@@ -287,10 +839,10 @@ function buildJob(mappedFields, customerId, soldIntakeId) {
     handover_status: 'NotReady', financial_status: 'Pending',
     cancellation_at: null, cancellation_by: null, cancellation_reason: null,
     archived_at: null, next_action_at: null, account_policy_version: null,
-    pilot_job: false, release_scope: 'R1',
-    created_at: now, created_by: 'S05-intake',
-    updated_at: now, updated_by: 'S05-intake',
-    version: 1, source_system: 'S05-intake',
+    pilot_job: flags.pilot_job === true, release_scope: 'R1',
+    created_at: now, created_by: actor,
+    updated_at: now, updated_by: actor,
+    version: 1, source_system: flags.pilot_job === true ? 'R1-AppSheet' : 'S05-intake',
     source_record_id: soldIntakeId, commit_id: soldIntakeId
   };
 }
@@ -370,14 +922,47 @@ function processSoldIntake(options, input) {
   const customer = buildCustomer(mappedFields, intake.intake_id);
   store.insert('Customers', customer);
 
-  // Create Job
-  const job = buildJob(mappedFields, customer.id, intake.intake_id);
+  // Create Job — random human reference generated ONCE here
+  const job = buildJob(mappedFields, customer.id, intake.intake_id, {
+    pilot_job: options.pilotJob === true,
+    actor: options.actor || 'S05-intake'
+  });
   job.job_id = generateJobId(store);
+  if (customer.last_name && customer.postcode) {
+    job.display_name = customer.last_name + ' – ' + customer.postcode;
+  }
   store.insert('Jobs', job);
+
+  const tech = mappedFields.TechnicalDetails || {};
+  if ((tech.roof_notes && String(tech.roof_notes).trim()) || (tech.electrical_notes && String(tech.electrical_notes).trim())) {
+    const now = new Date().toISOString();
+    store.insert('TechnicalDetails', {
+      id: 'TD-' + job.id,
+      job_id: job.id,
+      roof_notes: tech.roof_notes || null,
+      electrical_notes: tech.electrical_notes || null,
+      created_at: now, created_by: options.actor || 'S05-intake',
+      updated_at: now, updated_by: options.actor || 'S05-intake',
+      version: 1, commit_id: intake.intake_id
+    });
+  }
 
   // Create Intake record
   const intakeRecord = buildIntakeRecord(intake, 'Processed', job.id, null);
   store.insert('Intake', intakeRecord);
+
+  // Prebooking tasks (idempotent) when S06 helpers are available
+  let prebooking_tasks = null;
+  if (typeof options.createPrebookingTasks === 'function') {
+    prebooking_tasks = options.createPrebookingTasks(job, store);
+  } else {
+    try {
+      const gates = null;
+      if (typeof gates.createPrebookingTasksForSold === 'function') {
+        prebooking_tasks = gates.createPrebookingTasksForSold(job, store);
+      }
+    } catch (_) { /* optional in isolated mapping unit tests */ }
+  }
 
   return {
     status: 'Processed',
@@ -385,7 +970,8 @@ function processSoldIntake(options, input) {
     job_id: job.id,
     job_id_human: job.job_id,
     customer_id: customer.id,
-    message: 'Sold intake processed successfully'
+    prebooking_tasks,
+    message: 'Sold intake processed successfully — copy Job ID into Job Booking'
   };
 }
 
@@ -421,51 +1007,61 @@ function processBookingIntake(options, input) {
   const rules = store.list('MappingRules');
   const { fields: mappedFields, missingRequired, errors } = applyMappings(intake.raw_payload, rules, intake.form_id);
 
-  // Resolve matching Job
+  // Missing/blank Job ID → Intake Review (never surname/address guess)
+  const ref = (mappedFields.Jobs || {}).job_id;
+  if (!ref || !String(ref).trim()) {
+    const reviewRecord = buildIntakeRecord(intake, 'Review', null,
+      [{ error: 'BLANK_JOB_REFERENCE', detail: 'Booking Job ID is blank — Intake Review only' }]);
+    store.insert('Intake', reviewRecord);
+    return { status: 'Review', intake_id: intake.intake_id,
+      error: 'BLANK_JOB_REFERENCE', message: 'Blank Job ID. Needs review — no surname/address matching.' };
+  }
+
+  // Resolve matching Job by exact human job_id only
   const job = resolveBookingJob(store, mappedFields);
   if (!job) {
     const reviewRecord = buildIntakeRecord(intake, 'Review', null,
-      [{ error: 'NO_MATCHING_JOB', detail: 'Could not resolve a unique matching job for this booking' }]);
+      [{ error: 'NO_MATCHING_JOB', detail: 'Unknown Job ID "' + String(ref).trim() + '" — never match by surname/address' }]);
     store.insert('Intake', reviewRecord);
     return { status: 'Review', intake_id: intake.intake_id,
-      error: 'NO_MATCHING_JOB', message: 'No unique job matched. Needs review.' };
+      error: 'NO_MATCHING_JOB', message: 'Unknown Job ID. Needs review — no surname/address matching.' };
   }
 
-  // Update Job with booking data
-  const jobUpdate = {};
-  const jobFields = mappedFields.Jobs || {};
-  if (jobFields.next_action_at) jobUpdate.next_action_at = jobFields.next_action_at;
-  if (jobFields.display_name && jobFields.display_name !== 'S05 synthetic job') {
-    jobUpdate.display_name = jobFields.display_name;
-  }
+  // Apply structured booking → CustomerChanges / WorkPackages / Materials / Equipment / Scaffold
+  const applied = applyBookingStructured(store, job, mappedFields, intake, options);
+
+  const jobUpdate = Object.assign({}, applied.job_patch || {});
   jobUpdate.booking_submission_id = intake.intake_id;
-  jobUpdate.sold_booking_match_status = 'Match';
-  jobUpdate.workflow_stage = 'BookingInProgress';
+  jobUpdate.sold_booking_match_status = applied.match_status; // Match or Review
+  // An early Booking intake may be linked, but it cannot skip the explicit ReadyToBook gate.
+  jobUpdate.workflow_stage = job.workflow_stage === 'ReadyToBook' ? 'BookingInProgress' : job.workflow_stage;
   jobUpdate.updated_at = new Date().toISOString();
   jobUpdate.updated_by = 'S05-intake';
   jobUpdate.version = (job.version || 0) + 1;
   store.update('Jobs', job.id, jobUpdate);
 
-  // Update customer if booking provides new data
-  const custFields = mappedFields.Customers || {};
-  if (custFields.email || custFields.phone) {
-    const custUpdate = { updated_at: new Date().toISOString(), updated_by: 'S05-intake' };
-    if (custFields.email) custUpdate.email = custFields.email;
-    if (custFields.phone) custUpdate.phone = custFields.phone;
-    custUpdate.version = (store.get('Customers', job.customer_id)?.version || 0) + 1;
-    store.update('Customers', job.customer_id, custUpdate);
-  }
+  // Do NOT silently overwrite customer identity fields. Proposals live in CustomerChanges.
+  // Optional non-identity contact proposals still require Accept in Intake Review when mismatched.
 
-  // Create Intake record
-  const intakeRecord = buildIntakeRecord(intake, 'Processed', job.id, null);
+  const intakeStatus = applied.needs_review ? 'Review' : 'Processed';
+  const intakeErrors = applied.needs_review
+    ? applied.review_reasons.map(r => ({ error: r, detail: 'Booking structured apply flagged for Intake Review' }))
+      .concat(applied.amount_mismatch ? [{ error: 'AMOUNT_MISMATCH', detail: JSON.stringify(applied.amount_mismatch) }] : [])
+      .concat(applied.customer_changes.map(c => ({ error: 'CUSTOMER_MISMATCH', field: c.field_name })))
+    : null;
+  const intakeRecord = buildIntakeRecord(intake, intakeStatus, job.id, intakeErrors);
   store.insert('Intake', intakeRecord);
 
   return {
-    status: 'Processed',
+    status: intakeStatus,
     intake_id: intake.intake_id,
     job_id: job.id,
     job_id_human: job.job_id,
-    message: 'Booking intake processed successfully'
+    match_status: applied.match_status,
+    applied,
+    message: intakeStatus === 'Processed'
+      ? 'Booking intake processed successfully'
+      : 'Booking linked but Intake Review required (mismatch/unresolved installer/amount)'
   };
 }
 
@@ -480,5 +1076,5 @@ function createIntakeProcessor(options) {
 
 return { createIntakeProcessor, processSoldIntake, processBookingIntake, validateIntake, intakeHash, buildIntakeRecord, buildCustomer, buildJob, generateJobId, generateInternalJobId, guard, DEV_SHEET_ID };
 })();
-return { createIntakeProcessor: m1.createIntakeProcessor, validateIntake: m1.validateIntake, intakeHash: m1.intakeHash, buildIntakeRecord: m1.buildIntakeRecord, guard: m1.guard, DEV_SHEET_ID: m1.DEV_SHEET_ID, buildSyntheticMapping: m0.buildSyntheticMapping, applyMappings: m0.applyMappings, resolveBookingJob: m0.resolveBookingJob, generateJobId: m0.generateJobId, generateInternalJobId: m0.generateInternalJobId, generateCustomerId: m0.generateCustomerId };
+return { createIntakeProcessor: m1.createIntakeProcessor, validateIntake: m1.validateIntake, intakeHash: m1.intakeHash, buildIntakeRecord: m1.buildIntakeRecord, guard: m1.guard, DEV_SHEET_ID: m1.DEV_SHEET_ID, buildSyntheticMapping: m0.buildSyntheticMapping, applyMappings: m0.applyMappings, resolveBookingJob: m0.resolveBookingJob, generateJobId: m0.generateJobId, generateInternalJobId: m0.generateInternalJobId, generateCustomerId: m0.generateCustomerId, applyBookingStructured: mApply.applyBookingStructured };
 })();

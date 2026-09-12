@@ -23,11 +23,27 @@ const {
 
 function makeStore() {
   const data = {};
-  const tables = ['Intake', 'Jobs', 'Customers', 'CustomerChanges', 'MappingRules', 'ReleaseModes', 'People', 'TaskEvents', 'AuditEvents', 'CommitJournal', 'TaskDependencies', 'Tasks'];
+  const tables = ['Intake', 'Jobs', 'Customers', 'CustomerChanges', 'MappingRules', 'ReleaseModes', 'People', 'PersonRoles', 'TaskEvents', 'AuditEvents', 'CommitJournal', 'TaskDependencies', 'Tasks', 'TaskTemplates', 'WorkPackages', 'Allocations', 'Materials', 'Products', 'JobEquipment', 'ScaffoldBookings', 'Companies', 'Outbox', 'CalendarLinks', 'Holidays', 'Settings'];
   for (const t of tables) data[t] = [];
 
   data.People = [
-    { id: 'PERSON-tanya', email: 'lenny@simplesolarltd.co.uk', display_name: 'Tanya', role: 'Office', active: true, calendar_id: null, notification_email: null, capacity_per_day: null, available_from: null, available_to: null, backup_person_id: null, company_id: null, created_at: '2026-01-01T00:00:00.000Z', created_by: 'seed', updated_at: '2026-01-01T00:00:00.000Z', updated_by: 'seed', version: 1, source_system: 'seed', source_record_id: null, commit_id: 'seed' }
+    { id: 'PERSON-tanya', email: 'lenny@simplesolarltd.co.uk', display_name: 'Tanya', role: 'Office', active: true, calendar_id: null, notification_email: null, capacity_per_day: null, available_from: null, available_to: null, backup_person_id: null, company_id: null, created_at: '2026-01-01T00:00:00.000Z', created_by: 'seed', updated_at: '2026-01-01T00:00:00.000Z', updated_by: 'seed', version: 1, source_system: 'seed', source_record_id: null, commit_id: 'seed' },
+    { id: 'PERSON-ben', email: 'ben@s05.example.invalid', display_name: 'Ben', role: 'Admin', active: true, calendar_id: null, notification_email: null, capacity_per_day: null, available_from: null, available_to: null, backup_person_id: null, company_id: null, created_at: '2026-01-01T00:00:00.000Z', created_by: 'seed', updated_at: '2026-01-01T00:00:00.000Z', updated_by: 'seed', version: 1, source_system: 'seed', source_record_id: null, commit_id: 'seed' },
+    { id: 'PERSON-roofer-a', email: 'roofera@s05.example.invalid', display_name: 'RooferA', role: 'Installer', active: true, calendar_id: 'CAL-roofer-a', notification_email: null, capacity_per_day: 2, available_from: null, available_to: null, backup_person_id: null, company_id: null, created_at: '2026-01-01T00:00:00.000Z', created_by: 'seed', updated_at: '2026-01-01T00:00:00.000Z', updated_by: 'seed', version: 1, source_system: 'seed', source_record_id: null, commit_id: 'seed' },
+    { id: 'PERSON-sparky-a', email: 'sparkya@s05.example.invalid', display_name: 'ElectricianA', role: 'Installer', active: true, calendar_id: 'CAL-sparky-a', notification_email: null, capacity_per_day: 2, available_from: null, available_to: null, backup_person_id: null, company_id: null, created_at: '2026-01-01T00:00:00.000Z', created_by: 'seed', updated_at: '2026-01-01T00:00:00.000Z', updated_by: 'seed', version: 1, source_system: 'seed', source_record_id: null, commit_id: 'seed' }
+  ];
+  data.PersonRoles = [
+    { id: 'ROLE-tanya-office', person_id: 'PERSON-tanya', role: 'Office', active: true, created_at: '2026-01-01T00:00:00.000Z', created_by: 'seed', updated_at: '2026-01-01T00:00:00.000Z', updated_by: 'seed', version: 1, commit_id: 'seed' },
+    { id: 'ROLE-ben-admin', person_id: 'PERSON-ben', role: 'Admin', active: true, created_at: '2026-01-01T00:00:00.000Z', created_by: 'seed', updated_at: '2026-01-01T00:00:00.000Z', updated_by: 'seed', version: 1, commit_id: 'seed' }
+  ];
+  data.TaskTemplates = [
+    { id: 'TPL-PRE01', template_code: 'PRE01', title: 'Send deposit invoice', group: 'Prebooking', active: true, template_version: '1.0' },
+    { id: 'TPL-PRE02', template_code: 'PRE02', title: 'Check contract sent/signed', group: 'Prebooking', active: true, template_version: '1.0' },
+    { id: 'TPL-PRE03', template_code: 'PRE03', title: 'Confirm bank deposit', group: 'Prebooking', active: true, template_version: '1.0' }
+  ];
+  data.Settings = [
+    { id: 'SET-tz', key: 'office.timezone', typed_value: 'Europe/London', version: 1 },
+    { id: 'SET-days', key: 'office.staffed_weekdays', typed_value: '[1,2,3,4,5]', version: 1 }
   ];
   data.ReleaseModes = [
     { id: 'RM-FN01', function_id: 'FN-01', function_name: 'Office core', mode: 'Disabled', mode_record_basis: 'seed', authorised_job_scope: 'None', target_release: 'R1', planned_target_mode: 'Automated', current_system: 'manual', fallback: 'manual', external_ids_protected_reference: null, activation_time: null, approved_version: null, ben_approval_reference: null, scope_boundary_notes: null, created_at: '2026-01-01T00:00:00.000Z', created_by: 'seed', updated_at: '2026-01-01T00:00:00.000Z', updated_by: 'seed', version: 1, commit_id: 'seed' }
@@ -100,7 +116,8 @@ test('S05: booking attaches to exact correct internal job', () => {
   const r = runBookingHappyPath(store, sha256);
   assert.equal(r.pass, true, JSON.stringify(r));
   assert.equal(r.result.status, 'Processed');
-  assert.equal(r.job_after_stage, 'BookingInProgress');
+  // Early Booking links the Job but must not skip the explicit ReadyToBook gate.
+  assert.equal(r.job_after_stage, 'Prebooking');
 });
 
 /* --- Test 6: Booking identical replay idempotent --- */
@@ -333,7 +350,7 @@ test('S05: cloud test happy path runner is idempotent via VM', () => {
   grids.MappingRules.push(['MAP-Sold-first_name','260185763834060','sold_first_name','First Name','Customers','first_name','trim','always',true,'S05-DEV-1.0','2026-09-06','test','Import','2026-01-01T00:00:00.000Z','test','2026-01-01T00:00:00.000Z','test',1,'test']);
   grids.MappingRules.push(['MAP-Sold-last_name','260185763834060','sold_last_name','Last Name','Customers','last_name','trim','always',true,'S05-DEV-1.0','2026-09-06','test','Import','2026-01-01T00:00:00.000Z','test','2026-01-01T00:00:00.000Z','test',1,'test']);
   grids.MappingRules.push(['MAP-Sold-finance','260185763834060','sold_finance_route','Finance','Jobs','finance_route','trim','always',true,'S05-DEV-1.0','2026-09-06','test','Import','2026-01-01T00:00:00.000Z','test','2026-01-01T00:00:00.000Z','test',1,'test']);
-  grids.MappingRules.push(['MAP-Book-ref','250293237424050','booking_sold_ref','Sold Ref','Jobs','job_id','trim','always',true,'S05-DEV-1.0','2026-09-06','test','Import','2026-01-01T00:00:00.000Z','test','2026-01-01T00:00:00.000Z','test',1,'test']);
+  grids.MappingRules.push(['MAP-Book-ref','250293237424050','booking_job_id','Job ID','Jobs','job_id','trim','always',true,'S05-DEV-2.0','2026-09-09','test','Import','2026-01-01T00:00:00.000Z','test','2026-01-01T00:00:00.000Z','test',1,'test']);
 
   // Create mock Sheets
   var sheets = {};
@@ -512,4 +529,277 @@ test('S05: cloud test wrong environment refusal via VM', () => {
   vm.runInContext(fs.readFileSync('apps-script/s05/S05Core.gs', 'utf8'), ctx);
   vm.runInContext(fs.readFileSync('apps-script/s05/S05Intake.js', 'utf8'), ctx);
   assert.throws(function() { ctx.runS05FixtureDryRun(); }, /S05_REFUSED/);
+});
+
+const { applyBookingStructured } = require('../s05/booking-apply.js');
+
+function columnMapStore(colMap) {
+  const data = {};
+  Object.keys(colMap).forEach(n => { data[n] = []; });
+  return {
+    getSheetId: () => DEV_SHEET_ID,
+    list: n => {
+      if (!colMap[n]) throw new Error('S05_SCHEMA: no column map for ' + n);
+      return clone(data[n] || []);
+    },
+    get: (n, id) => {
+      if (!colMap[n]) throw new Error('S05_SCHEMA: no column map for ' + n);
+      return clone((data[n] || []).find(r => r.id === id) || null);
+    },
+    insert(n, row) {
+      if (!colMap[n]) throw new Error('S05_SCHEMA: no column map for ' + n);
+      // Prove adapter would be able to map every written field.
+      colMap[n].forEach(() => {});
+      const shaped = {};
+      colMap[n].forEach(h => { shaped[h] = row[h] === undefined ? null : row[h]; });
+      if (!data[n]) data[n] = [];
+      if (data[n].find(r => r.id === shaped.id)) throw new Error('dup ' + shaped.id);
+      data[n].push(clone(shaped));
+    },
+    update(n, id, patch) {
+      if (!colMap[n]) throw new Error('S05_SCHEMA: no column map for ' + n);
+      const r = data[n].find(x => x.id === id);
+      if (!r) throw new Error('missing');
+      Object.assign(r, patch);
+    },
+    _data: data
+  };
+}
+
+function s05IntakeColumnMapFromSource() {
+  const src = fs.readFileSync('apps-script/s05/S05Intake.js', 'utf8');
+  const ctx = vm.createContext({});
+  vm.runInContext(src.replace(/function _s05Guard[\s\S]*$/, 'true;'), ctx);
+  // Re-eval only the column map by extracting from source.
+  const m = src.match(/var _S05_COLS = (\{[\s\S]*?\n\});/);
+  assert.ok(m, '_S05_COLS missing');
+  return vm.runInNewContext('(' + m[1] + ')');
+}
+
+test('S05: bound store column map covers all structured Booking write tables', () => {
+  const cols = s05IntakeColumnMapFromSource();
+  for (const name of ['CustomerChanges', 'WorkPackages', 'ScaffoldBookings', 'Materials', 'JobEquipment', 'Allocations', 'People', 'Companies']) {
+    assert.ok(Array.isArray(cols[name]) && cols[name].length > 0, name);
+    assert.equal(cols[name][0], 'id');
+  }
+});
+
+test('S05: cloud-compatible store can insert CustomerChanges and all Booking output tables', () => {
+  const cols = s05IntakeColumnMapFromSource();
+  const store = columnMapStore(cols);
+  store.insert('Customers', {
+    id: 'CUST-1', first_name: 'Alice', last_name: 'Synthetic', address_line1: '1 Test Street',
+    address_line2: '', town: 'Testville', postcode: 'TS1 1AA', email: 'alice@s05.example.invalid',
+    phone: '07123456789', alternate_contact: null, contact_notes: null, created_at: '2026-01-01T00:00:00.000Z',
+    created_by: 't', updated_at: '2026-01-01T00:00:00.000Z', updated_by: 't', version: 1,
+    source_system: 't', source_record_id: null, commit_id: 't'
+  });
+  store.insert('Jobs', {
+    id: 'J-1', job_id: 'SS-TEST-0001', customer_id: 'CUST-1', display_name: 'Synthetic – TS1 1AA',
+    sold_submission_id: 'SOLD-1', booking_submission_id: null, sold_at: '2026-01-01T00:00:00.000Z',
+    salesperson_id: null, lead_source: 'Website', quote_reference: 'Q1', presale_file_id: null,
+    finance_route: 'Standard', contract_status: 'Signed', contract_id: null, contract_signed_at: null,
+    contract_evidence_id: 'E1', original_net_pence: null, original_vat_pence: null, original_gross_pence: 500000,
+    approved_change_pence: null, current_contract_gross_pence: 500000, valuation_basis: 'Standard',
+    sold_booking_match_status: 'Pending', customer_details_verified_at: '2026-01-01T00:00:00.000Z',
+    customer_details_verified_by: 'PERSON-tanya', deposit_bank_confirmed_at: '2026-01-01T00:00:00.000Z',
+    deposit_bank_confirmed_by: 'PERSON-ben', deposit_bank_reference: 'DEP', roof_required: true,
+    electrical_required: true, scaffold_required: true, workflow_stage: 'ReadyToBook',
+    booking_approved_at: null, booking_approved_by: null, operational_complete_at: null,
+    operational_complete_by: null, customer_happy_at: null, customer_happy_by: null,
+    handover_status: 'NotReady', financial_status: 'Pending', cancellation_at: null, cancellation_by: null,
+    cancellation_reason: null, archived_at: null, next_action_at: null, account_policy_version: null,
+    pilot_job: true, release_scope: 'R1', created_at: '2026-01-01T00:00:00.000Z', created_by: 't',
+    updated_at: '2026-01-01T00:00:00.000Z', updated_by: 't', version: 1, source_system: 't',
+    source_record_id: null, commit_id: 't'
+  });
+  store.insert('People', {
+    id: 'PERSON-roofer-a', email: 'r@example.invalid', display_name: 'RooferA', role: 'Installer',
+    company_id: null, active: true, calendar_id: null, notification_email: null, capacity_per_day: 2,
+    available_from: null, available_to: null, backup_person_id: null, created_at: '2026-01-01T00:00:00.000Z',
+    created_by: 't', updated_at: '2026-01-01T00:00:00.000Z', updated_by: 't', version: 1,
+    source_system: 't', source_record_id: null, commit_id: 't'
+  });
+  store.insert('People', {
+    id: 'PERSON-sparky-a', email: 's@example.invalid', display_name: 'ElectricianA', role: 'Installer',
+    company_id: null, active: true, calendar_id: null, notification_email: null, capacity_per_day: 2,
+    available_from: null, available_to: null, backup_person_id: null, created_at: '2026-01-01T00:00:00.000Z',
+    created_by: 't', updated_at: '2026-01-01T00:00:00.000Z', updated_by: 't', version: 1,
+    source_system: 't', source_record_id: null, commit_id: 't'
+  });
+  store.insert('Companies', {
+    id: 'CO-scaffold-a', name: 'ScaffoldA', type: 'Scaffolder', active: true, standard_lead_days: 7,
+    delivery_weekday: null, notes: null, created_at: '2026-01-01T00:00:00.000Z', created_by: 't',
+    updated_at: '2026-01-01T00:00:00.000Z', updated_by: 't', version: 1, source_system: 't', commit_id: 't'
+  });
+
+  const job = store.get('Jobs', 'J-1');
+  const applied = applyBookingStructured(store, job, {
+    Customers: { email: 'changed@s05.example.invalid', phone: '07999999999', last_name: 'Synthetic', postcode: 'TS1 1AA' },
+    Jobs: { booking_gross_pence: '5000.00' },
+    WorkPackageDates: { roof_date: '2026-10-06', electrical_date: '2026-10-08', scaffold_erect: '2026-10-03' },
+    Installers: { roofer: 'RooferA', sparky: 'ElectricianA' },
+    MaterialQty: { panel_515: '12' },
+    Equipment: { inverter_to_order: 'Fox 5.0' },
+    Scaffold: { company_name: 'ScaffoldA' },
+    Notes: {}
+  }, { intake_id: 'INT-BOOK-1' }, { productMap: require('../config/booking-product-map.example.json') });
+
+  assert.ok(applied.customer_changes.length >= 1);
+  assert.ok(store.list('CustomerChanges').length >= 1);
+  assert.ok(store.list('WorkPackages').some(w => w.trade === 'Roof'));
+  assert.ok(store.list('WorkPackages').some(w => w.trade === 'Electrical'));
+  assert.ok(store.list('ScaffoldBookings').length >= 1);
+  assert.ok(store.list('Materials').length >= 1);
+  assert.ok(store.list('JobEquipment').length >= 1);
+  assert.ok(store.list('Allocations').length >= 1);
+  assert.doesNotThrow(() => store.insert('CustomerChanges', {
+    id: 'CC-extra', job_id: 'J-1', field_name: 'town', previous_value: 'Testville',
+    incoming_value: 'Other', source_submission_id: 'X', resolution: null, resolved_value: null,
+    resolved_at: null, resolved_by: null, reason: 'TEST', created_at: '2026-01-01T00:00:00.000Z', commit_id: 'X'
+  }));
+});
+
+test('S05: ReadyToBook Booking advances to BookingInProgress; Prebooking Booking stays Prebooking', () => {
+  const store = makeStore();
+  installBaseFixture(store);
+  installSyntheticMappings(store);
+  const sold = createIntakeProcessor({ config: { environment: 'DEV', sheetId: DEV_SHEET_ID }, store, sha256 }).processSold({
+    intake_id: 'S05-RTB-SOLD', form_id: SOLD_FORM_ID, form_type: 'Sold', submission_id: 'SUB-RTB-SOLD',
+    raw_payload: soldPayload()
+  });
+  assert.equal(sold.status, 'Processed');
+  assert.equal(store.get('Jobs', sold.job_id).workflow_stage, 'Prebooking');
+
+  const early = createIntakeProcessor({ config: { environment: 'DEV', sheetId: DEV_SHEET_ID }, store, sha256 }).processBooking({
+    intake_id: 'S05-RTB-BOOK-EARLY', form_id: BOOKING_FORM_ID, form_type: 'Booking', submission_id: 'SUB-RTB-EARLY',
+    raw_payload: bookingPayload(sold.job_id_human)
+  });
+  assert.equal(early.status, 'Processed');
+  assert.equal(store.get('Jobs', sold.job_id).workflow_stage, 'Prebooking');
+  assert.equal(store.list('Jobs').length, 1);
+
+  store.update('Jobs', sold.job_id, {
+    workflow_stage: 'ReadyToBook',
+    booking_submission_id: null,
+    sold_booking_match_status: 'Pending',
+    version: Number(store.get('Jobs', sold.job_id).version) + 1
+  });
+  // Clear early booking intake so a fresh booking can apply against ReadyToBook.
+  const store2 = makeStore();
+  installBaseFixture(store2);
+  installSyntheticMappings(store2);
+  const sold2 = createIntakeProcessor({ config: { environment: 'DEV', sheetId: DEV_SHEET_ID }, store: store2, sha256 }).processSold({
+    intake_id: 'S05-RTB-SOLD2', form_id: SOLD_FORM_ID, form_type: 'Sold', submission_id: 'SUB-RTB-SOLD2',
+    raw_payload: soldPayload()
+  });
+  store2.update('Jobs', sold2.job_id, { workflow_stage: 'ReadyToBook', version: 2 });
+  const readyBook = createIntakeProcessor({ config: { environment: 'DEV', sheetId: DEV_SHEET_ID }, store: store2, sha256 }).processBooking({
+    intake_id: 'S05-RTB-BOOK-READY', form_id: BOOKING_FORM_ID, form_type: 'Booking', submission_id: 'SUB-RTB-READY',
+    raw_payload: bookingPayload(sold2.job_id_human)
+  });
+  assert.equal(readyBook.status, 'Processed');
+  assert.equal(store2.get('Jobs', sold2.job_id).workflow_stage, 'BookingInProgress');
+  assert.equal(store2.list('Jobs').length, 1);
+
+  const replay = createIntakeProcessor({ config: { environment: 'DEV', sheetId: DEV_SHEET_ID }, store: store2, sha256 }).processBooking({
+    intake_id: 'S05-RTB-BOOK-READY', form_id: BOOKING_FORM_ID, form_type: 'Booking', submission_id: 'SUB-RTB-READY',
+    raw_payload: bookingPayload(sold2.job_id_human)
+  });
+  assert.equal(replay.duplicate, true);
+  assert.equal(store2.list('Jobs').length, 1);
+});
+
+test('S05: stale Processed Booking fixture linked to another Job cannot false-PASS via VM harness', () => {
+  const cols = s05IntakeColumnMapFromSource();
+  const grids = {};
+  Object.keys(cols).forEach(n => { grids[n] = [cols[n].slice()]; });
+
+  function pushRow(table, obj) {
+    grids[table].push(cols[table].map(h => (obj[h] === undefined || obj[h] === null) ? '' : obj[h]));
+  }
+
+  pushRow('ReleaseModes', {
+    id: 'RM-FN01', function_id: 'FN-01', function_name: 'Office', mode: 'Automated',
+    mode_record_basis: 't', authorised_job_scope: 'Pilot', target_release: 'R1',
+    planned_target_mode: 'Automated', current_system: 't', fallback: 't',
+    external_ids_protected_reference: null, activation_time: null, approved_version: null,
+    ben_approval_reference: null, scope_boundary_notes: null, created_at: '2026-01-01T00:00:00.000Z',
+    created_by: 't', updated_at: '2026-01-01T00:00:00.000Z', updated_by: 't', version: 1, commit_id: 't'
+  });
+  pushRow('Customers', {
+    id: 'CUST-current', first_name: 'Alice', last_name: 'Synthetic', address_line1: '1', address_line2: '',
+    town: 'T', postcode: 'TS1 1AA', email: 'alice@s05.example.invalid', phone: '07123456789',
+    alternate_contact: null, contact_notes: null, created_at: '2026-01-01T00:00:00.000Z', created_by: 't',
+    updated_at: '2026-01-01T00:00:00.000Z', updated_by: 't', version: 1, source_system: 'S05-intake',
+    source_record_id: null, commit_id: 't'
+  });
+  pushRow('Jobs', {
+    id: 'J-current', job_id: 'SS-CURR-0001', customer_id: 'CUST-current', display_name: 'Synthetic – TS1 1AA',
+    sold_submission_id: 'S05-DEV-SOLD-001', booking_submission_id: null, sold_at: '2026-01-01T00:00:00.000Z',
+    salesperson_id: null, lead_source: 'Website', quote_reference: 'Q', presale_file_id: null,
+    finance_route: 'Standard', contract_status: null, contract_id: null, contract_signed_at: null,
+    contract_evidence_id: null, original_net_pence: null, original_vat_pence: null, original_gross_pence: 500000,
+    approved_change_pence: null, current_contract_gross_pence: null, valuation_basis: 'Standard',
+    sold_booking_match_status: 'Pending', customer_details_verified_at: null, customer_details_verified_by: null,
+    deposit_bank_confirmed_at: null, deposit_bank_confirmed_by: null, deposit_bank_reference: null,
+    roof_required: false, electrical_required: false, scaffold_required: false, workflow_stage: 'ReadyToBook',
+    booking_approved_at: null, booking_approved_by: null, operational_complete_at: null, operational_complete_by: null,
+    customer_happy_at: null, customer_happy_by: null, handover_status: null, financial_status: null,
+    cancellation_at: null, cancellation_by: null, cancellation_reason: null, archived_at: null, next_action_at: null,
+    account_policy_version: null, pilot_job: true, release_scope: 'R1', created_at: '2026-01-01T00:00:00.000Z',
+    created_by: 't', updated_at: '2026-01-01T00:00:00.000Z', updated_by: 't', version: 1,
+    source_system: 'S05-intake', source_record_id: null, commit_id: 't'
+  });
+  pushRow('Intake', {
+    id: 'S05-DEV-SOLD-001', intake_id: 'S05-DEV-SOLD-001', form_type: 'Sold', form_id: '260185763834060',
+    submission_id: 'SUB', source_revision: null, received_at: '2026-01-01T00:00:00.000Z',
+    raw_payload_json: '{}', payload_hash: 'h', job_id: 'J-current', processing_status: 'Processed',
+    validation_errors: null, processed_at: '2026-01-01T00:00:00.000Z', retry_count: 0,
+    created_at: '2026-01-01T00:00:00.000Z', commit_id: 't'
+  });
+  // Stale booking linked to a different job id
+  pushRow('Intake', {
+    id: 'S05-DEV-BOOKING-001', intake_id: 'S05-DEV-BOOKING-001', form_type: 'Booking', form_id: '250293237424050',
+    submission_id: 'SUB-B', source_revision: null, received_at: '2026-01-01T00:00:00.000Z',
+    raw_payload_json: '{}', payload_hash: 'hb', job_id: 'J-OTHER', processing_status: 'Processed',
+    validation_errors: null, processed_at: '2026-01-01T00:00:00.000Z', retry_count: 0,
+    created_at: '2026-01-01T00:00:00.000Z', commit_id: 't'
+  });
+
+  const sheets = {};
+  for (const tn of Object.keys(grids)) {
+    sheets[tn] = {
+      getName: () => tn,
+      getLastColumn: () => grids[tn][0].length,
+      getLastRow: () => grids[tn].length,
+      getMaxRows: () => 1000,
+      getRange(row, col, h, w) {
+        h = h || 1; w = w || 1;
+        return {
+          getValues: () => Array.from({ length: h }, (_, r) =>
+            Array.from({ length: w }, (_, c) => (grids[tn][row - 1 + r] || [])[col - 1 + c] || '')),
+          setValues: (vals) => vals.forEach((rv, ri) => rv.forEach((v, ci) => {
+            if (!grids[tn][row - 1 + ri]) grids[tn][row - 1 + ri] = [];
+            grids[tn][row - 1 + ri][col - 1 + ci] = v;
+          }))
+        };
+      }
+    };
+  }
+  const mockSs = { getId: () => DEV_SHEET_ID, getSheets: () => Object.values(sheets) };
+  const ctx = vm.createContext({
+    console: { log() {} },
+    SpreadsheetApp: { getActiveSpreadsheet: () => mockSs, flush() {} },
+    PropertiesService: { getScriptProperties: () => ({ getProperty: () => JSON.stringify({ environment: 'DEV', sheetId: DEV_SHEET_ID }) }) },
+    Utilities: {
+      DigestAlgorithm: { SHA_256: 'sha256' }, Charset: { UTF_8: 'utf8' },
+      computeDigest: (_, text) => Array.from(crypto.createHash('sha256').update(text).digest())
+    }
+  });
+  vm.runInContext(fs.readFileSync('apps-script/s05/S05Core.gs', 'utf8'), ctx);
+  vm.runInContext(fs.readFileSync('apps-script/s05/S05Intake.js', 'utf8'), ctx);
+  const r = ctx.runS05BookingHappyPathTest();
+  assert.equal(r.pass, false);
+  assert.match(r.detail, /Stale Processed Booking fixture/);
 });

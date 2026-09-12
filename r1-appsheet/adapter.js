@@ -2,9 +2,9 @@
 'use strict';
 
 const R1A_BOUND_DEV_SHEET_ID = '1z7PNZtDdC4Z5eLbmTuQdqp0QpJSmuEvx3QvN3VyNTsc';
-const R1A_BOUND_READS = ['IDENTITY_PROBE','OFFICE_HOME','JOB_SEARCH','JOB_OVERVIEW','OPERATIONAL_QUEUE','RELEASE_MODE_STATUS','SYSTEM_STATUS','AUDIT_HISTORY','ACTION_AVAILABILITY','TASK_ACTION_AVAILABILITY'];
-const R1A_BOUND_COMMANDS = ['TASK_COMPLETE','CALL_RECORD','ISSUE_UPDATE','PLANNER_UPDATE','CANCEL_JOB','REINSTATE_JOB','DEPOSIT_CONFIRM','OPERATIONAL_COMPLETE','BOOKING_GATES','SOLD_INTAKE','BOOKING_INTAKE'];
-const R1A_BOUND_QUEUES = ['booking','calls','issues','payments','ghl','cancellation'];
+const R1A_BOUND_READS = ['IDENTITY_PROBE','OFFICE_HOME','JOB_SEARCH','JOB_OVERVIEW','OPERATIONAL_QUEUE','RELEASE_MODE_STATUS','SYSTEM_STATUS','AUDIT_HISTORY','ACTION_AVAILABILITY','TASK_ACTION_AVAILABILITY','MY_TASKS','TEAM_TASKS','PLANNER_3_WEEKS','PLANNER_6_WEEKS','INTAKE_REVIEW'];
+const R1A_BOUND_COMMANDS = ['TASK_COMPLETE','CALL_RECORD','ISSUE_UPDATE','ISSUE_CREATE','PLANNER_UPDATE','MOVE_JOB','CHANGE_INSTALLER','CANCEL_JOB','REINSTATE_JOB','DEPOSIT_CONFIRM','OPERATIONAL_COMPLETE','BOOKING_GATES','SOLD_INTAKE','BOOKING_INTAKE'];
+const R1A_BOUND_QUEUES = ['booking','calls','issues','payments','ghl','cancellation','intake_review'];
 
 function _r1aCopy(v) { return JSON.parse(JSON.stringify(v)); }
 function _r1aRefuse(code) { var e=new Error(code); e.code=code; throw e; }
@@ -24,7 +24,8 @@ function _r1aActor(store,email) {
   return {id:person.id,email:normalized,roles:roles};
 }
 function _r1aAdmin(a){return a.roles.indexOf('Admin')>=0||a.roles.indexOf('Manager')>=0;}
-function _r1aOffice(a){return _r1aAdmin(a)||a.roles.indexOf('Office')>=0||a.roles.indexOf('VariationApprover')>=0;}
+function _r1aDirector(a){return _r1aAdmin(a)||a.roles.indexOf('Director')>=0;}
+function _r1aOffice(a){return _r1aDirector(a)||a.roles.indexOf('Office')>=0||a.roles.indexOf('VariationApprover')>=0;}
 function _r1aOfficeManager(a){return _r1aAdmin(a)||a.roles.indexOf('Office')>=0;}
 function _r1aGuardEnvironment(options){
   if(!options||!options.store||!options.config||options.config.environment!=='DEV'||options.config.sheetId!==R1A_BOUND_DEV_SHEET_ID||options.store.getSheetId()!==R1A_BOUND_DEV_SHEET_ID||options.store.getEnvironment()!=='DEV') _r1aRefuse('R1A_DEV_ONLY');
@@ -82,19 +83,45 @@ function _r1aCreate(options){
     } else if(input.read_type==='ACTION_AVAILABILITY'){
       var aj=_r1aAuthorizeJob(store,a,input.job_id);out=reads.actionAvailability(store,input.job_id);
       var active=!aj.archived_at&&['CancellationInProgress','Cancelled'].indexOf(aj.workflow_stage)<0,fn01=_r1aModeAvailable(store,'FN-01','Automated'),cancelModes=fn01&&_r1aModeAvailable(store,'FN-17','Manual')&&_r1aModeAvailable(store,'FN-20','Manual'),fn15=_r1aModeAvailable(store,'FN-15','Manual'),fn19=_r1aModeAvailable(store,'FN-19','Manual'),fn11=_r1aModeAvailable(store,'FN-11','Manual'),officeMgr=_r1aOfficeManager(a),isAdmin=_r1aAdmin(a);
-      var depOk=active&&fn15&&isAdmin&&!aj.deposit_bank_confirmed_at,opcOk=active&&fn19&&fn11&&officeMgr&&!aj.operational_complete_at&&['InProgress','Aftercare'].indexOf(aj.workflow_stage)>=0,bkgOk=active&&fn01&&['Prebooking','ReadyToBook','BookingInProgress'].indexOf(aj.workflow_stage)>=0,reinOk=aj.workflow_stage==='Cancelled'&&cancelModes;
+      var depOk=active&&fn15&&_r1aDirector(a)&&!aj.deposit_bank_confirmed_at,opcOk=active&&fn19&&fn11&&officeMgr&&!aj.operational_complete_at&&['InProgress','Aftercare'].indexOf(aj.workflow_stage)>=0,bkgOk=active&&fn01&&['Prebooking','ReadyToBook','BookingInProgress'].indexOf(aj.workflow_stage)>=0,reinOk=aj.workflow_stage==='Cancelled'&&cancelModes,bookInOk=active&&fn01&&['Prebooking','ReadyToBook','BookingInProgress'].indexOf(aj.workflow_stage)>=0;
+      var moveOk=active&&fn01&&['Booked','AwaitingInstallation','InProgress','BookingInProgress'].indexOf(aj.workflow_stage)>=0;
+      var changeOk=moveOk;
       out.appsheet_commands={
         call_record:_r1aFlag(active&&fn01,'CALL_RECORD','Tasks',!active?'JOB_NOT_ACTIONABLE':'MODE_UNAVAILABLE'),
         issue_update:_r1aFlag(active&&fn01,'ISSUE_UPDATE','Issues',!active?'JOB_NOT_ACTIONABLE':'MODE_UNAVAILABLE'),
+        issue_create:_r1aFlag(active&&fn01,'ISSUE_CREATE','Jobs',!active?'JOB_NOT_ACTIONABLE':'MODE_UNAVAILABLE'),
         planner_update:_r1aFlag(active&&fn01,'PLANNER_UPDATE','WorkPackages',!active?'JOB_NOT_ACTIONABLE':'MODE_UNAVAILABLE'),
+        move_job:_r1aFlag(moveOk,'MOVE_JOB','Jobs',!active?'JOB_NOT_ACTIONABLE':!fn01?'MODE_UNAVAILABLE':'STAGE_NOT_ELIGIBLE'),
+        change_installer:_r1aFlag(changeOk,'CHANGE_INSTALLER','WorkPackages',!active?'JOB_NOT_ACTIONABLE':!fn01?'MODE_UNAVAILABLE':'STAGE_NOT_ELIGIBLE'),
         cancel_job:_r1aFlag(active&&cancelModes,'CANCEL_JOB','Jobs',!active?'JOB_NOT_ACTIONABLE':'MODE_UNAVAILABLE'),
         reinstate_job:_r1aFlag(reinOk,'REINSTATE_JOB','Jobs',aj.workflow_stage!=='Cancelled'?'STAGE_NOT_CANCELLED':'MODE_UNAVAILABLE'),
-        deposit_confirm:_r1aFlag(depOk,'DEPOSIT_CONFIRM','Jobs',!active?'JOB_NOT_ACTIONABLE':!isAdmin?'ADMIN_OR_MANAGER_REQUIRED':!fn15?'MODE_UNAVAILABLE':'ALREADY_CONFIRMED'),
+        deposit_confirm:_r1aFlag(depOk,'DEPOSIT_CONFIRM','Jobs',!active?'JOB_NOT_ACTIONABLE':!_r1aDirector(a)?'DIRECTOR_REQUIRED':!fn15?'MODE_UNAVAILABLE':'ALREADY_CONFIRMED'),
         operational_complete:_r1aFlag(opcOk,'OPERATIONAL_COMPLETE','Jobs',!active?'JOB_NOT_ACTIONABLE':!officeMgr?'OFFICE_OR_ADMIN_REQUIRED':!(fn19&&fn11)?'MODE_UNAVAILABLE':aj.operational_complete_at?'ALREADY_COMPLETE':'STAGE_NOT_ELIGIBLE'),
         booking_gates:_r1aFlag(bkgOk,'BOOKING_GATES','Jobs',!active?'JOB_NOT_ACTIONABLE':!fn01?'MODE_UNAVAILABLE':'STAGE_NOT_ELIGIBLE'),
-        sold_intake:_r1aFlag(false,'SOLD_INTAKE',null,'INTAKE_POLICY_NOT_APPROVED'),
-        booking_intake:_r1aFlag(false,'BOOKING_INTAKE',null,'INTAKE_POLICY_NOT_APPROVED')
+        sold_intake:_r1aFlag(fn01,'SOLD_INTAKE',null,fn01?null:'MODE_UNAVAILABLE'),
+        booking_intake:_r1aFlag(bookInOk,'BOOKING_INTAKE','Jobs',!active?'JOB_NOT_ACTIONABLE':!fn01?'MODE_UNAVAILABLE':'STAGE_NOT_ELIGIBLE')
       };
+    } else if(input.read_type==='MY_TASKS'){
+      var home=reads.officeHome(store,{as_of:input.as_of});
+      var mine=_r1aFilterTasks(store,a,(home.overdue||[]).concat(home.due_today||[]).concat(home.due_soon||[]).concat(home.booking_review||[]));
+      // Deduplicate by id
+      var seen={},tasks=[];mine.forEach(function(t){if(!seen[t.id]){seen[t.id]=true;tasks.push(t);}});
+      out={scope:'my',as_of:home.as_of||input.as_of||null,count:tasks.length,tasks:tasks};
+    } else if(input.read_type==='TEAM_TASKS'){
+      if(!_r1aOfficeManager(a)&&!_r1aAdmin(a))_r1aRefuse('R1A_ROLE_DENIED');
+      var teamHome=reads.officeHome(store,{as_of:input.as_of});
+      var team=(teamHome.overdue||[]).concat(teamHome.due_today||[]).concat(teamHome.due_soon||[]).concat(teamHome.booking_review||[]);
+      var tseen={},ttasks=[];team.forEach(function(t){if(!tseen[t.id]&&(!t.job_id||(store.get('Jobs',t.job_id)||{}).pilot_job===true)){tseen[t.id]=true;ttasks.push(t);}});
+      out={scope:'team',as_of:teamHome.as_of||input.as_of||null,count:ttasks.length,tasks:ttasks};
+    } else if(input.read_type==='PLANNER_3_WEEKS'||input.read_type==='PLANNER_6_WEEKS'){
+      if(!_r1aOffice(a))_r1aRefuse('R1A_ROLE_DENIED');
+      var weeks=input.read_type==='PLANNER_3_WEEKS'?3:6;
+      if(typeof reads.planner!=='function')_r1aRefuse('R1A_READ_UNSUPPORTED');
+      out=reads.planner(store,input.as_of||null,weeks);
+    } else if(input.read_type==='INTAKE_REVIEW'){
+      if(!_r1aOfficeManager(a)&&!_r1aAdmin(a))_r1aRefuse('R1A_ROLE_DENIED');
+      var reviews=store.list('Intake').filter(function(i){return i.processing_status==='Review';}).map(function(i){return{id:i.id,intake_id:i.intake_id,form_type:i.form_type,submission_id:i.submission_id,job_id:i.job_id,validation_errors:i.validation_errors,received_at:i.received_at};});
+      out={queue:'intake_review',count:reviews.length,items:reviews};
     } else {
       var t=store.get('Tasks',input.task_id);if(!t)_r1aRefuse('R1A_TASK_NOT_FOUND');if(t.job_id)_r1aAuthorizeJob(store,a,t.job_id);else if(t.owner_id!==a.id&&!_r1aAdmin(a))_r1aRefuse('R1A_TASK_ACCESS_DENIED');
       out=reads.taskActionAvailability(store,input.task_id);
@@ -104,7 +131,7 @@ function _r1aCreate(options){
     return {ok:true,read_type:input.read_type,actor_id:a.id,data:_r1aCopy(out)};
   }
   function command(input){
-    var a=_r1aGuard(options);_r1aKeys(input,['command_id','command_type','job_id','task_id','issue_id','work_package_id','expected_version','payload']);
+    var a=_r1aGuard(options);_r1aKeys(input,['command_id','command_type','job_id','task_id','issue_id','work_package_id','old_allocation_id','expected_version','payload']);
     if(!_r1aText(input.command_id))_r1aRefuse('R1A_COMMAND_ID_REQUIRED');
     if(R1A_BOUND_COMMANDS.indexOf(input.command_type)<0)_r1aRefuse('R1A_UNKNOWN_COMMAND');
     if(!_r1aOffice(a))_r1aRefuse('R1A_ROLE_DENIED');
@@ -115,10 +142,17 @@ function _r1aCreate(options){
       if(task.job_id)_r1aAuthorizeJob(store,a,task.job_id);else if(task.owner_id!==a.id&&!_r1aAdmin(a))_r1aRefuse('R1A_TASK_ACCESS_DENIED');
       if(task.owner_id!==a.id&&task.backup_id!==a.id&&!_r1aAdmin(a))_r1aRefuse('R1A_TASK_ACCESS_DENIED');
       _r1aMode(store,'FN-01','Automated');
-    } else if(input.command_type==='SOLD_INTAKE'||input.command_type==='BOOKING_INTAKE') {
-      _r1aRefuse('R1A_INTAKE_POLICY_NOT_APPROVED');
+    } else if(input.command_type==='SOLD_INTAKE') {
+      /* Office/Admin/Manager, and Director because existing _r1aOffice includes Director. Installer/Store/Scaffolder already refused. No job mutation envelope. */
+      _r1aMode(store,'FN-01','Automated');
+    } else if(input.command_type==='BOOKING_INTAKE') {
+      if(!_r1aText(input.job_id))_r1aRefuse('R1A_JOB_NOT_FOUND');
+      _r1aAuthorizeJob(store,a,input.job_id);_r1aMode(store,'FN-01','Automated');
+    } else if(input.command_type==='ISSUE_CREATE') {
+      if(!_r1aText(input.job_id))_r1aRefuse('R1A_JOB_NOT_FOUND');
+      _r1aAuthorizeJob(store,a,input.job_id);_r1aMode(store,'FN-01','Automated');
     } else if(input.command_type==='DEPOSIT_CONFIRM') {
-      if(!_r1aAdmin(a))_r1aRefuse('R1A_ROLE_DENIED');
+      if(!_r1aDirector(a))_r1aRefuse('R1A_ROLE_DENIED');
       _r1aAuthorizeJob(store,a,input.job_id);_r1aMode(store,'FN-15','Manual');
     } else if(input.command_type==='OPERATIONAL_COMPLETE') {
       if(!_r1aOfficeManager(a))_r1aRefuse('R1A_ROLE_DENIED');
@@ -130,6 +164,8 @@ function _r1aCreate(options){
       if(input.command_type==='CALL_RECORD'){var ct=store.get('Tasks',input.task_id);if(!ct||ct.job_id!==input.job_id)_r1aRefuse('R1A_TASK_JOB_MISMATCH');if(ct.owner_id!==a.id&&ct.backup_id!==a.id&&!_r1aAdmin(a))_r1aRefuse('R1A_TASK_ACCESS_DENIED');}
       if(input.command_type==='ISSUE_UPDATE'){var ci=store.get('Issues',input.issue_id);if(!ci||ci.job_id!==input.job_id)_r1aRefuse('R1A_ISSUE_JOB_MISMATCH');}
       if(input.command_type==='PLANNER_UPDATE'){var cw=store.get('WorkPackages',input.work_package_id);if(!cw||cw.job_id!==input.job_id)_r1aRefuse('R1A_WORK_PACKAGE_JOB_MISMATCH');}
+      if(input.command_type==='MOVE_JOB'){/* job-scoped; activities validated in service */}
+      if(input.command_type==='CHANGE_INSTALLER'){var cwp=store.get('WorkPackages',input.work_package_id);if(!cwp||cwp.job_id!==input.job_id)_r1aRefuse('R1A_WORK_PACKAGE_JOB_MISMATCH');}
       if(input.command_type==='CANCEL_JOB'||input.command_type==='REINSTATE_JOB'){_r1aMode(store,'FN-17','Manual');_r1aMode(store,'FN-20','Manual');}
     }
     var result=service({request:_r1aCopy(input),actor:a,store:store});

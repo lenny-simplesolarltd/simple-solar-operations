@@ -27,12 +27,21 @@ function _findSheet(ss, name) {
   return null;
 }
 
+/* Column maps must cover every table S05Core reads/writes for Sold+Booking structured apply. */
 var _S05_COLS = {
   Intake: ['id','intake_id','form_type','form_id','submission_id','source_revision','received_at','raw_payload_json','payload_hash','job_id','processing_status','validation_errors','processed_at','retry_count','created_at','commit_id'],
   Jobs: ['id','job_id','customer_id','display_name','sold_submission_id','booking_submission_id','sold_at','salesperson_id','lead_source','quote_reference','presale_file_id','finance_route','contract_status','contract_id','contract_signed_at','contract_evidence_id','original_net_pence','original_vat_pence','original_gross_pence','approved_change_pence','current_contract_gross_pence','valuation_basis','sold_booking_match_status','customer_details_verified_at','customer_details_verified_by','deposit_bank_confirmed_at','deposit_bank_confirmed_by','deposit_bank_reference','roof_required','electrical_required','scaffold_required','workflow_stage','booking_approved_at','booking_approved_by','operational_complete_at','operational_complete_by','customer_happy_at','customer_happy_by','handover_status','financial_status','cancellation_at','cancellation_by','cancellation_reason','archived_at','next_action_at','account_policy_version','pilot_job','release_scope','created_at','created_by','updated_at','updated_by','version','source_system','source_record_id','commit_id'],
   Customers: ['id','first_name','last_name','address_line1','address_line2','town','postcode','email','phone','alternate_contact','contact_notes','created_at','created_by','updated_at','updated_by','version','source_system','source_record_id','commit_id'],
+  CustomerChanges: ['id','job_id','field_name','previous_value','incoming_value','source_submission_id','resolution','resolved_value','resolved_at','resolved_by','reason','created_at','commit_id'],
   MappingRules: ['id','form_id','question_id','source_label','target_table','target_field','transform','required_when','active','mapping_version','effective_from','owner','disposition','created_at','created_by','updated_at','updated_by','version','commit_id'],
-  ReleaseModes: ['id','function_id','function_name','mode','mode_record_basis','authorised_job_scope','target_release','planned_target_mode','current_system','fallback','external_ids_protected_reference','activation_time','approved_version','ben_approval_reference','scope_boundary_notes','created_at','created_by','updated_at','updated_by','version','commit_id']
+  ReleaseModes: ['id','function_id','function_name','mode','mode_record_basis','authorised_job_scope','target_release','planned_target_mode','current_system','fallback','external_ids_protected_reference','activation_time','approved_version','ben_approval_reference','scope_boundary_notes','created_at','created_by','updated_at','updated_by','version','commit_id'],
+  WorkPackages: ['id','job_id','trade','required','planned_start','planned_end','actual_start','actual_end','status','need_by_date','completion_outcome','installer_confirmation_at','installer_confirmation_by','commissioning_required','sequence','revision','parent_package_id','created_at','created_by','updated_at','updated_by','version','source_system','commit_id'],
+  ScaffoldBookings: ['id','job_id','company_id','erect_planned_at','erect_confirmed_at','erect_actual_at','strip_forecast_at','strip_authorised_at','strip_authorised_by','strip_planned_at','strip_confirmed_at','strip_actual_at','status','revision','confirmed_revision','access_notes','scope_file_id','quoted_cost_pence','actual_cost_pence','invoice_reference','related_issue_ids','created_at','created_by','updated_at','updated_by','version','source_system','commit_id'],
+  Materials: ['id','job_id','work_package_id','product_id','description','required_quantity','unit','source','need_by_date','merchant_id','order_line_id','already_ordered_reference','notes','revision','cancelled_quantity','created_at','created_by','updated_at','updated_by','version','source_system','commit_id'],
+  JobEquipment: ['id','job_id','work_package_id','equipment_type','planned_product_id','installed_product_id','quantity','planned_location','installed_location','serial_number','commissioning_submission_id','variation_id','technical_review_status','created_at','created_by','updated_at','updated_by','version','commit_id'],
+  Allocations: ['id','work_package_id','person_id','role','start_at','end_at','active','replaced_allocation_id','cancellation_reason','calendar_link_id','created_at','created_by','updated_at','updated_by','version','source_system','commit_id'],
+  People: ['id','email','display_name','role','company_id','active','calendar_id','notification_email','capacity_per_day','available_from','available_to','backup_person_id','created_at','created_by','updated_at','updated_by','version','source_system','source_record_id','commit_id'],
+  Companies: ['id','name','type','active','standard_lead_days','delivery_weekday','notes','created_at','created_by','updated_at','updated_by','version','source_system','commit_id']
 };
 
 function _readTbl(ss, name) {
@@ -54,10 +63,16 @@ function _readTbl(ss, name) {
   return out;
 }
 
+function _s05Headers(name) {
+  var hdrs = _S05_COLS[name];
+  if (!hdrs || !hdrs.length) throw new Error('S05_SCHEMA: no column map for ' + name);
+  return hdrs;
+}
+
 function _insRow(ss, name, data) {
   var sheet = _findSheet(ss, name);
   if (!sheet) throw new Error('Tab not found: ' + name);
-  var hdrs = _S05_COLS[name];
+  var hdrs = _s05Headers(name);
   var tr = sheet.getLastRow() + 1;
   if (tr > sheet.getMaxRows()) throw new Error('ROW_CAPACITY: ' + name);
   var vals = hdrs.map(function(h) {
@@ -73,7 +88,7 @@ function _insRow(ss, name, data) {
 function _updRow(ss, name, id, patch) {
   var sheet = _findSheet(ss, name);
   if (!sheet) throw new Error('Tab not found: ' + name);
-  var hdrs = _S05_COLS[name];
+  var hdrs = _s05Headers(name);
   var rows = _readTbl(ss, name), ri = -1;
   for (var i = 0; i < rows.length; i++) { if (rows[i].id === id) { ri = i + 2; break; } }
   if (ri < 0) throw new Error('Row not found: ' + name + ' ' + id);
@@ -120,14 +135,22 @@ function _s05SoldPayload() {
   };
 }
 
-function _s05BookingPayload(jobRef) {
-  return {
+function _s05BookingPayload(jobRef, extra) {
+  var payload = {
     booking_sold_ref: jobRef,
+    booking_job_id: jobRef,
     booking_install_date: '2026-10-01',
     booking_notes: 'S05 synthetic booking',
-    booking_email: 'alice_updated@s05.example.invalid',
-    booking_phone: '07987654321'
+    // Match Sold contact fields for Match happy path; mismatches use CustomerChanges + Review.
+    booking_email: 'alice@s05.example.invalid',
+    booking_phone: '07123456789'
   };
+  if (extra) {
+    for (var k in extra) {
+      if (extra.hasOwnProperty(k)) payload[k] = extra[k];
+    }
+  }
+  return payload;
 }
 
 /* --- Fixture functions --- */
@@ -179,8 +202,15 @@ function runS05FixtureApply() {
   add('MAP-Sold-val',S05_SOLD_FORM,'sold_valuation','Valuation Basis','Jobs','valuation_basis','trim',null);
 
   add('MAP-Book-ref',S05_BOOKING_FORM,'booking_sold_ref','Sold Reference','Jobs','job_id','trim','always');
+  add('MAP-Book-job-id',S05_BOOKING_FORM,'booking_job_id','Job ID','Jobs','job_id','trim',null);
   add('MAP-Book-date',S05_BOOKING_FORM,'booking_install_date','Install Date','Jobs','next_action_at','trim',null);
-  add('MAP-Book-notes',S05_BOOKING_FORM,'booking_notes','Booking Notes','Jobs','display_name','trim',null);
+  add('MAP-Book-roof',S05_BOOKING_FORM,'booking_date_roofer','Roof Date','WorkPackageDates','roof_date','trim',null);
+  add('MAP-Book-elec',S05_BOOKING_FORM,'booking_date_sparky','Electrical Date','WorkPackageDates','electrical_date','trim',null);
+  add('MAP-Book-scaffold',S05_BOOKING_FORM,'booking_date_scaffold','Scaffold Erect','WorkPackageDates','scaffold_erect','trim',null);
+  add('MAP-Book-roofer',S05_BOOKING_FORM,'booking_roofer','Roofer','Installers','roofer','trim',null);
+  add('MAP-Book-sparky',S05_BOOKING_FORM,'booking_sparky','Sparky','Installers','sparky','trim',null);
+  add('MAP-Book-scaffold-co',S05_BOOKING_FORM,'booking_scaffold_company','Scaffold Company','Scaffold','company_name','trim',null);
+  add('MAP-Book-notes',S05_BOOKING_FORM,'booking_notes','Booking Notes','Notes','ordering','trim',null);
   add('MAP-Book-email',S05_BOOKING_FORM,'booking_email','Email','Customers','email','lowercase',null);
   add('MAP-Book-phone',S05_BOOKING_FORM,'booking_phone','Phone','Customers','phone','trim',null);
 
@@ -313,6 +343,20 @@ function runS05SoldConflictTest() {
     'FAIL. Status=' + result.status + ' error=' + result.error + ' intake_status=' + (intake ? intake.processing_status : '?'));
 }
 
+function _s05ExpectedBookingStage(stageBefore) {
+  // Early Booking may link while Prebooking, but must not skip ReadyToBook.
+  // Booking against ReadyToBook advances to BookingInProgress.
+  if (stageBefore === 'ReadyToBook') return 'BookingInProgress';
+  return stageBefore;
+}
+
+function _s05BookingLinkedOk(bookingIntake, soldJob, intakeId) {
+  return !!(bookingIntake && bookingIntake.processing_status === 'Processed' &&
+    bookingIntake.job_id === soldJob.id &&
+    soldJob.booking_submission_id === intakeId &&
+    soldJob.sold_booking_match_status === 'Match');
+}
+
 function runS05BookingHappyPathTest() {
   var ss = _s05Guard(), store = _s05Store(ss);
   var fn = _checkFn01(store);
@@ -327,8 +371,23 @@ function runS05BookingHappyPathTest() {
 
   var intakeId = 'S05-DEV-BOOKING-001';
   var existing = store.get('Intake', intakeId);
+  var jobsBefore = store.list('Jobs').length;
+  var stageBefore = job.workflow_stage;
+  var expectedStage = _s05ExpectedBookingStage(stageBefore);
+
   if (existing && existing.processing_status === 'Processed') {
-    return _mkResult('Booking happy path', true, 'Already processed. Intake: ' + intakeId + ' linked to Job: ' + job.id);
+    var linkedJob = store.get('Jobs', existing.job_id);
+    var stale = !linkedJob || linkedJob.id !== job.id || linkedJob.booking_submission_id !== intakeId;
+    if (stale) {
+      return _mkResult('Booking happy path', false,
+        'Stale Processed Booking fixture linked to ' + (existing.job_id || 'null') +
+        '; expected current Sold Job ' + job.id + ' (' + job.job_id + '). Delete S05-DEV-BOOKING-001 and rerun.');
+    }
+    var replayPass = _s05BookingLinkedOk(existing, linkedJob, intakeId) &&
+      store.list('Jobs').length === jobsBefore;
+    return _mkResult('Booking happy path', replayPass, replayPass ?
+      'PASS. Existing Booking intake already linked to current Sold Job ' + job.id + ' (' + job.job_id + '), stage=' + linkedJob.workflow_stage :
+      'FAIL. Existing Booking intake is not correctly linked to current Sold Job.');
   }
 
   var proc = S05Core.createIntakeProcessor({ config: { environment: 'DEV', sheetId: ss.getId() }, store: store, sha256: _s05Sha256, projectId: function() { return 's05-bound'; } });
@@ -342,15 +401,14 @@ function runS05BookingHappyPathTest() {
   var updatedJob = store.get('Jobs', job.id);
   var bookingIntake = store.get('Intake', intakeId);
 
-  var pass = updatedJob && updatedJob.booking_submission_id === intakeId &&
-    updatedJob.sold_booking_match_status === 'Match' &&
-    updatedJob.workflow_stage === 'BookingInProgress' &&
-    bookingIntake && bookingIntake.processing_status === 'Processed' &&
+  var pass = _s05BookingLinkedOk(bookingIntake, updatedJob, intakeId) &&
+    updatedJob.workflow_stage === expectedStage &&
+    store.list('Jobs').length === jobsBefore &&
     bookingIntake.form_type === 'Booking';
 
   return _mkResult('Booking happy path', pass, pass ?
-    'PASS. Booking linked to Job ' + job.id + ' (' + job.job_id + '). Sold+Booking share same job.' :
-    'FAIL. Result: ' + JSON.stringify(result));
+    'PASS. Booking linked to Job ' + job.id + ' (' + job.job_id + '). Stage ' + stageBefore + ' → ' + updatedJob.workflow_stage + '. No duplicate Job.' :
+    'FAIL. Result: ' + JSON.stringify(result) + ' stage=' + (updatedJob ? updatedJob.workflow_stage : '?') + ' expected=' + expectedStage);
 }
 
 function runS05BookingReplayTest() {

@@ -44,6 +44,102 @@ function _s11UpdatePlannedDates(input,store){
   _s11Audit(store,'WorkPackages',wp.id,'PlanDates',wp,after,input);_s11Commit(store,input.command_id,now);return{status:'Updated',work_package:store.get('WorkPackages',wp.id),external_calls:0};
 }
 
+function _s11ImpactTasks(store,job,input,impacts){
+  const now=input.at||new Date().toISOString(),tanya=store.list('PersonRoles').filter(r=>r.role==='Office'&&r.active===true)[0],owner=(tanya&&tanya.person_id)||input.actor,created=[];
+  for(const impact of impacts){
+    const key='S11-MOVE-'+impact.code+'-'+input.command_id;
+    if(store.list('Tasks').some(t=>t.instance_key===key))continue;
+    const task={id:'TASK-'+key,job_id:job.id,template_code:'S11-MOVE-'+impact.code,instance_key:key,group:impact.group||'Booking',title:impact.title,owner_id:owner,backup_id:null,related_entity_type:impact.entity_type||'Jobs',related_entity_id:impact.entity_id||job.id,due_at:now,original_due_at:now,priority:1,status:'Open',blocking_reason:null,next_followup_at:null,completed_at:null,completed_by:null,completion_note:null,evidence_id:null,revision_required:false,created_rule_version:'S11-1.0',created_at:now,created_by:input.actor,updated_at:now,updated_by:input.actor,version:1,source_system:'S11-move',commit_id:'S11-'+input.command_id};
+    store.insert('Tasks',task);created.push({code:impact.code,task_id:task.id});
+  }
+  return created;
+}
+
+/* R1 Move Job — select activities; preserve unrelated dates; CAPTURE_ONLY calendar; no real sends. */
+function _s11MoveJobR1(input,store){
+  const job=_s11AssertR1Scope(input.job_id,store);
+  if(!input.reason)throw new Error('S11_REVIEW: move reason required');
+  const activities=Array.isArray(input.activities)?input.activities:[];
+  if(!activities.length)throw new Error('S11_REVIEW: select at least one activity (Roof|Electrical|Return|Scaffold)');
+  const allowed=['Roof','Electrical','Return','Scaffold'];
+  for(const a of activities){if(allowed.indexOf(a)<0)throw new Error('S11_REVIEW: invalid activity '+a);}
+  const changes={activities:activities.slice().sort(),planned_start:input.planned_start?_s11LocalDate(input.planned_start):null,planned_end:input.planned_end?_s11LocalDate(input.planned_end):null,scaffold_erect:input.scaffold_erect?_s11LocalDate(input.scaffold_erect):null,scaffold_strip:input.scaffold_strip?_s11LocalDate(input.scaffold_strip):null,reason:input.reason,expected_version:input.expected_version};
+  if(changes.planned_start&&changes.planned_end)_s11Dates(changes.planned_start,changes.planned_end);
+  const existing=_s11ExistingCommand(store,input,'Jobs',job.id,changes);if(existing){if(existing.state!=='Committed')throw new Error('S11_RECOVERY_REQUIRED: incomplete move command');return{status:'Replayed',job:store.get('Jobs',job.id),external_calls:0,impacts:[]};}
+  if(Number(job.version)!==Number(input.expected_version))throw new Error('S11_STALE: job version');
+  _s11Command(store,input,'Jobs',job.id,changes);
+  const now=input.at||new Date().toISOString(),moved=[],preserved=[],calendar=[],impacts=[];
+  for(const trade of ['Roof','Electrical','Return']){
+    if(activities.indexOf(trade)<0){
+      for(const wp of store.list('WorkPackages').filter(w=>w.job_id===job.id&&w.trade===(trade==='Return'?'ReturnVisit':trade)&&w.status!=='Cancelled'))preserved.push({work_package_id:wp.id,trade:wp.trade,planned_start:wp.planned_start,planned_end:wp.planned_end});
+      continue;
+    }
+    const tradeName=trade==='Return'?'ReturnVisit':trade;
+    const wps=store.list('WorkPackages').filter(w=>w.job_id===job.id&&w.trade===tradeName&&w.status!=='Cancelled');
+    if(!wps.length)throw new Error('S11_REVIEW: no '+tradeName+' work package to move');
+    if(!changes.planned_start||!changes.planned_end)throw new Error('S11_REVIEW: planned_start/planned_end required for '+trade);
+    for(const wp of wps){
+      const before=wp,after=Object.assign({},wp,{planned_start:changes.planned_start,planned_end:changes.planned_end,revision:Number(wp.revision||0)+1,updated_at:now,updated_by:input.actor,version:Number(wp.version)+1});
+      store.update('WorkPackages',wp.id,{planned_start:after.planned_start,planned_end:after.planned_end,revision:after.revision,updated_at:now,updated_by:input.actor,version:after.version,commit_id:'S11-'+input.command_id});
+      _s11Audit(store,'WorkPackages',wp.id,'MoveJob',before,after,input);
+      moved.push({work_package_id:wp.id,trade:tradeName});
+      for(const alloc of store.list('Allocations').filter(a=>a.work_package_id===wp.id&&a.active===true)){
+        store.update('Allocations',alloc.id,{start_at:changes.planned_start,end_at:changes.planned_end,updated_at:now,updated_by:input.actor,version:Number(alloc.version||0)+1});
+        const link=store.get('CalendarLinks',alloc.calendar_link_id);
+        if(link||(store.get('People',alloc.person_id)||{}).calendar_id){
+          try{const cal=_s11QueueCalendar(store,job,after,Object.assign({},alloc,{start_at:changes.planned_start,end_at:changes.planned_end}),input.command_id,'MOVE_'+wp.id,link||null);calendar.push(cal.outbox.id);}catch(e){/* capture failure becomes impact task */}
+        }
+        impacts.push({code:'ASSIGNED_PEOPLE',title:'Notify assigned installer of '+tradeName+' date change',entity_type:'Allocations',entity_id:alloc.id,group:'Install'});
+      }
+      impacts.push({code:'CALENDAR',title:'Confirm calendar update for '+tradeName+' (CAPTURE_ONLY — no real Calendar API)',entity_type:'WorkPackages',entity_id:wp.id,group:'Booking'});
+      impacts.push({code:'MATERIALS',title:'Review materials/delivery need-by for moved '+tradeName,entity_type:'WorkPackages',entity_id:wp.id,group:'Materials'});
+    }
+  }
+  if(activities.indexOf('Scaffold')>=0){
+    const scbs=store.list('ScaffoldBookings').filter(s=>s.job_id===job.id&&s.status!=='Cancelled');
+    if(!scbs.length)throw new Error('S11_REVIEW: no scaffold booking to move');
+    for(const scb of scbs){
+      const patch={updated_at:now,updated_by:input.actor,version:Number(scb.version||0)+1,revision:Number(scb.revision||0)+1};
+      if(changes.scaffold_erect)patch.erect_planned_at=changes.scaffold_erect;
+      if(changes.scaffold_strip)patch.strip_planned_at=changes.scaffold_strip;
+      if(!patch.erect_planned_at&&!patch.strip_planned_at)throw new Error('S11_REVIEW: scaffold_erect or scaffold_strip required');
+      store.update('ScaffoldBookings',scb.id,patch);
+      moved.push({scaffold_booking_id:scb.id});
+      impacts.push({code:'SCAFFOLD',title:'Notify scaffolder of erect/strip date change (manual — no real send)',entity_type:'ScaffoldBookings',entity_id:scb.id,group:'Materials'});
+    }
+  } else {
+    for(const scb of store.list('ScaffoldBookings').filter(s=>s.job_id===job.id&&s.status!=='Cancelled'))preserved.push({scaffold_booking_id:scb.id,erect_planned_at:scb.erect_planned_at,strip_planned_at:scb.strip_planned_at});
+  }
+  impacts.push({code:'CUSTOMER_NOTICE',title:'Customer notice of agreed date change (manual — no real email)',entity_type:'Jobs',entity_id:job.id,group:'Booking'});
+  impacts.push({code:'INTERIM_INVOICE',title:'Review interim invoice timing after move',entity_type:'Jobs',entity_id:job.id,group:'Finance'});
+  const impactTasks=_s11ImpactTasks(store,job,input,impacts);
+  store.update('Jobs',job.id,{updated_at:now,updated_by:input.actor,version:Number(job.version)+1,commit_id:'S11-'+input.command_id});
+  _s11Audit(store,'Jobs',job.id,'MoveJob',job,store.get('Jobs',job.id),input);_s11Commit(store,input.command_id,now);
+  return{status:'Moved',moved,preserved,calendar_outbox_ids:calendar,impact_tasks:impactTasks,impacts,external_calls:0,job:store.get('Jobs',job.id)};
+}
+
+/* R1 Change Installer — verified People IDs only; calendar CAPTURE_ONLY. */
+function _s11ChangeInstallerR1(input,store){
+  const job=_s11AssertR1Scope(input.job_id,store),wp=store.get('WorkPackages',input.work_package_id),old=store.get('Allocations',input.old_allocation_id);
+  if(!wp||wp.job_id!==job.id||!old||old.work_package_id!==wp.id)throw new Error('S11_REVIEW: allocation linkage invalid');
+  if(!['Replace','Add'].includes(input.mode)||!input.reason)throw new Error('S11_REVIEW: mode and reason required');
+  if(Number(wp.version)!==Number(input.expected_version))throw new Error('S11_STALE: work package version');
+  const newId=input.allocation_id||'ALLOC-R1-'+input.command_id,changes={work_package_id:wp.id,old_allocation_id:old.id,new_allocation_id:newId,person_id:input.person_id,mode:input.mode,reason:input.reason,role:input.role||null};
+  if(_s11ExistingCommand(store,input,'Allocations',old.id,changes))return{status:'Replayed',allocation:store.get('Allocations',newId),external_calls:0};
+  if(old.active!==true)throw new Error('S11_REVIEW: active allocation linkage invalid');
+  const check=_s11ValidatePerson(store,input.person_id,old.start_at||wp.planned_start,old.end_at||wp.planned_end||wp.planned_start);if(!check.ready)return{status:'NeedsReview',reason:check.reason,external_calls:0};
+  const cap=_s11Capacity(store,check.person,old.start_at||wp.planned_start,old.end_at||wp.planned_end||wp.planned_start,null);if(!cap.ready)return{status:'NeedsReview',reason:cap.reason,external_calls:0};
+  _s11Command(store,input,'Allocations',old.id,changes);
+  const now=input.at||new Date().toISOString(),nextRevision=Number(wp.revision||0)+1;
+  const newAllocation={id:newId,work_package_id:wp.id,person_id:input.person_id,role:input.mode==='Add'?(input.role||'Second'):(input.role||old.role),start_at:old.start_at,end_at:old.end_at,active:true,replaced_allocation_id:input.mode==='Replace'?old.id:null,cancellation_reason:null,calendar_link_id:'CL-'+newId,created_at:now,created_by:input.actor,updated_at:now,updated_by:input.actor,version:1,source_system:'S11-R1',commit_id:'S11-'+input.command_id};
+  if(input.mode==='Replace'){store.update('Allocations',old.id,{active:false,cancellation_reason:input.reason,updated_at:now,updated_by:input.actor,version:Number(old.version)+1});_s11QueueCalendarCancel(store,store.get('CalendarLinks',old.calendar_link_id),input.command_id,nextRevision);}
+  store.insert('Allocations',newAllocation);store.update('WorkPackages',wp.id,{revision:nextRevision,updated_at:now,updated_by:input.actor,version:Number(wp.version)+1});
+  const updatedWp=Object.assign({},wp,{revision:nextRevision,version:Number(wp.version)+1});
+  let cal=null;try{cal=_s11QueueCalendar(store,job,updatedWp,newAllocation,input.command_id,'NEW_INSTALLER',null);}catch(e){cal={error:String(e.message||e)};}
+  _s11Audit(store,'Allocations',old.id,input.mode==='Replace'?'ReplaceInstaller':'AddInstaller',old,newAllocation,input);_s11Commit(store,input.command_id,now);
+  return{status:input.mode==='Replace'?'Replaced':'Added',created:true,allocation:newAllocation,calendar:cal,external_calls:0};
+}
+
 function _s11PlanWorkPackage(input,store){
   /* S15: stop normal work during cancellation and controlled reopen review. */
   var S15_job = store.get('Jobs',input.job_id); if (S15_job && (S15_job.cancellation_at || ['CancellationInProgress','Cancelled'].includes(S15_job.workflow_stage) || store.list('Tasks').some(function(t){return t.job_id===S15_job.id&&t.template_code==='S15-REOPEN-REVIEW'&&!['Complete','NotRequired'].includes(t.status);}))) throw new Error('S15_REVIEW: normal work suppressed');
@@ -61,4 +157,4 @@ const job=_s11AssertScope(input.job_id,store),wp=store.get('WorkPackages',input.
 
 function _s11BuildPlanner(store,start,weeks){const from=_s11LocalDate(start),d=new Date(from+'T12:00:00Z');d.setUTCDate(d.getUTCDate()+Number(weeks)*7-1);const to=d.toISOString().slice(0,10),rows=[];for(const wp of store.list('WorkPackages').filter(w=>w.planned_start&&w.planned_end&&_s11LocalDate(w.planned_end)>=from&&_s11LocalDate(w.planned_start)<=to&&w.status!=='Cancelled'))for(const a of store.list('Allocations').filter(x=>x.work_package_id===wp.id&&x.active===true))rows.push({job_id:wp.job_id,work_package_id:wp.id,allocation_id:a.id,person_id:a.person_id,trade:wp.trade,start_at:_s11LocalDate(a.start_at),end_at:_s11LocalDate(a.end_at)});return{from,to,weeks:Number(weeks),rows};}
 
-module.exports={S11_DEV_SHEET_ID,localDate:_s11LocalDate,planWorkPackage:_s11PlanWorkPackage,moveWorkPackage:_s11MoveWorkPackage,changeInstaller:_s11ChangeInstaller,updatePlannedDates:_s11UpdatePlannedDates,buildPlanner:_s11BuildPlanner};
+module.exports={S11_DEV_SHEET_ID,localDate:_s11LocalDate,planWorkPackage:_s11PlanWorkPackage,moveWorkPackage:_s11MoveWorkPackage,changeInstaller:_s11ChangeInstaller,updatePlannedDates:_s11UpdatePlannedDates,moveJobR1:_s11MoveJobR1,changeInstallerR1:_s11ChangeInstallerR1,buildPlanner:_s11BuildPlanner};
