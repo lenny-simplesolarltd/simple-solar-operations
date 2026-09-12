@@ -49,3 +49,11 @@ Chronological record of autonomous implementation batches. Newest last. Each ent
 - Tests: `tests/resource.test.cjs` 12 pass; full suite 758/758.
 - Cloud/browser: BLOCKED. Steps in `docs/RESOURCE-implementation.md`. The DEV sheet may already contain tabs created by the browser agent; `runRpProvisionCheck()` reports missing/extra columns before anything is added.
 - Decisions: PersonSkills.level reuses the confirmed Lead/Member/Apprentice enum; skills limited to Roof/Electrical; teams may be Mixed; one active Lead per team; configuration actors must be active Admin/Manager/Office people; no team compositions seeded.
+
+## 2026-09-12 — Batch 6 (Claude): real Drive data backups + restore procedure; backlog reconciliation
+
+- Inspected: S16 backup (count-only manifest, optional Drive manifest file) and restore (dry-run, always blocked), S16 Drive adapter contract and fake Drive in tests, ReportSnapshots schema. Evidence for reconciliation: S10 reminder holiday-aware via staffed-day helper; S12 commissioning/handover frameworks; S13/S14/S06 finance stages and chase tasks; S16 archive/reopen; S16/S17 health.
+- Implemented: `backup/service.js` + cloud adapter → `apps-script/backup/BackupService.js`: full-data JSON export of all 64 tables to the configured DEV Drive folder with DataBackup manifest and audit; read-back verification; compare; retention review (no deletion); non-destructive restore rehearsal into a NEW spreadsheet (REHEARSAL mode + confirm token; DEV workbook never written); in-place restore refused by construction; daily idempotent backup entry point. Cloud store restricted to ReportSnapshots/AuditEvents writes.
+- Tests: `tests/backup.test.cjs` 10 pass (incl. Drive/Spreadsheet stubs proving DEV tables untouched); full suite 768/768.
+- Cloud/browser: BLOCKED. Steps in `docs/BACKUP-implementation.md`.
+- Backlog reconciled as done with pointers: Commissioning framework, Missing commissioning reminder, Handover framework, 25/35/40 finance workflow, Payment status, Payment call tasks, Health dashboard, Archive/restore.

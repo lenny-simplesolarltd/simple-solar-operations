@@ -37,22 +37,22 @@ CLAUDE:
 - [ ] Completion evidence
 - [ ] Remedials/issues
 
-- [ ] Commissioning framework
-- [ ] Missing commissioning reminder
-- [ ] Handover framework
+- [x] Commissioning framework — already implemented in S12 (templates/questions/submissions/answers/review/equipment; no live thresholds; forms NOT_CONFIGURED per spec); reconciled 12 Sep 2026.
+- [x] Missing commissioning reminder — already implemented in S10 (`scheduleMissingCommissioning`: INS02 two staffed days after completion, holiday-aware, idempotent); reconciled 12 Sep 2026.
+- [x] Handover framework — already implemented in S12 (`evaluateHandover`/`createHandover`, states only; PDF/layout deferred per spec); reconciled 12 Sep 2026.
 
-- [ ] 25/35/40 finance workflow
-- [ ] Payment status
-- [ ] Payment call tasks
+- [x] 25/35/40 finance workflow — already implemented in S13/S14 (InvoiceStages Deposit/Interim/Final, Final gated on operational completion, Xero intents CAPTURE_ONLY); reconciled 12 Sep 2026.
+- [x] Payment status — already implemented in S13/S14 (payment recording, financial completion requires all stages paid); reconciled 12 Sep 2026.
+- [x] Payment call tasks — already implemented (S06 unpaid-interim chase task, S13 `createInterimChaseTask`, FIN01/FIN03 templates; interim unpaid never blocks installation); reconciled 12 Sep 2026.
 - [ ] Xero adapter disabled by default
 
-- [ ] Health dashboard
+- [x] Health dashboard — already implemented: S16 `_s16HealthStatus` (+ heartbeat alerts), S17 `_s17AdminSystemStatus`/office home health alerts, R1 adapter SYSTEM_STATUS read; reconciled 12 Sep 2026. AppSheet dashboard view wiring remains UX work.
 - [x] Processing heartbeat — CLAUDE 12 Sep 2026: `s16/heartbeat.js` records last successful processing per component (HealthChecks `Processing:<component>`), staffed-window staleness, Fresh/Stale/Failing/Quiet/Never states, alerts merged into S16 health; cloud entry points `runS16HeartbeatStatus/RecordHeartbeat/Tick/Smoke`; 16 local tests. DEV cloud smoke and hourly trigger not yet run/installed. See docs/S16-implementation.md.
 - [ ] Failure alerts
 - [ ] Outbound uncertain state handling
-- [ ] Real Drive backups
-- [ ] Restore procedure
-- [ ] Archive/restore
+- [x] Real Drive backups — CLAUDE 12 Sep 2026: `backup/service.js` full-data JSON snapshot of every schema table to `S01_CONFIG.backupFolderId` with DataBackup manifest, read-back verification (checksum/counts/bytes), compare, retention review (no deletion); daily idempotent `runBkDailyBackup()`. 10 tests. DEV cloud NOT RUN. See docs/BACKUP-implementation.md.
+- [x] Restore procedure — CLAUDE 12 Sep 2026: documented path + non-destructive rehearsal (`_bkRestoreRehearsal` writes a Verified backup into a NEW spreadsheet under `restoreMode: REHEARSAL` with confirm token; DEV workbook untouched); in-place destructive restore refused by construction (needs approval + isolated environment).
+- [x] Archive/restore — already implemented in S16 (`_s16ArchiveEligibility/_s16ArchiveJob/_s16ReopenArchivedJob`, 6-month rule, history preserved); reconciled 12 Sep 2026.
 
 - [ ] Role-specific UX cleanup
 - [ ] DEV integration walkthrough

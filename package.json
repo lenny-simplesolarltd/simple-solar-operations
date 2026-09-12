@@ -46,7 +46,9 @@
     "build:materials": "node scripts/build-materials.cjs",
     "test:materials": "npm run build:materials && node --test tests/materials.test.cjs",
     "build:resource": "node scripts/build-resource.cjs",
-    "test:resource": "npm run build:resource && node --test tests/resource.test.cjs"
+    "test:resource": "npm run build:resource && node --test tests/resource.test.cjs",
+    "build:backup": "node scripts/build-backup.cjs",
+    "test:backup": "npm run build:backup && node --test tests/backup.test.cjs"
   },
   "engines": {
     "node": ">=22"
