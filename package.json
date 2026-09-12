@@ -50,7 +50,9 @@
     "build:backup": "node scripts/build-backup.cjs",
     "test:backup": "npm run build:backup && node --test tests/backup.test.cjs",
     "build:resilience": "node scripts/build-resilience.cjs",
-    "test:resilience": "npm run build:resilience && node --test tests/resilience.test.cjs"
+    "test:resilience": "npm run build:resilience && node --test tests/resilience.test.cjs",
+    "build:installer": "node scripts/build-installer.cjs",
+    "test:installer": "npm run build:installer && node --test tests/installer.test.cjs"
   },
   "engines": {
     "node": ">=22"

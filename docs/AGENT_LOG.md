@@ -65,3 +65,11 @@ Chronological record of autonomous implementation batches. Newest last. Each ent
 - Tests: `tests/resilience.test.cjs` 11 pass; full suite 779/779.
 - Cloud/browser: BLOCKED. Steps in `docs/RESILIENCE-implementation.md`.
 - Decisions: review/alert task codes are module defaults (no new seed templates); calendar outbox rows stay with the calendar service; uncertain Xero outcomes go straight to review, transient errors retry up to 3 times; a Confirmed stage keeps its status on callback.
+
+## 2026-09-12 — Batch 8 (Claude): installer mobile workflow backend
+
+- Inspected: spec WorkPackages/Submissions/Evidence vocabularies, installer rules (assigned work only, report-then-confirm, no finance exposure), 04 S12 installer screen requirements (progress/variation/problem/return before final form, immutable versions, duplicate sync, cross-job denial), S10 INS01/INS02 scheduling and issue shape, S12 submission functions, seeded roles.
+- Implemented: `installer/workflow.js` + cloud adapter → `apps-script/installer/InstallerWorkflow.js` (prefix `_iw`; `_ins` already existed). My-work read, start, progress, completion outcomes (ReportedComplete with commissioning Draft at `template_version: NOT_CONFIGURED`; ReturnRequired → Remedial issue, return package with the same trade + `parent_package_id`, dateless allocation for the original installer, REM01 + BKG02 for Tanya), problem/variation issues (ISS02/ISS01, VariationApprover owner), evidence dedup + cross-job denial, commissioning draft/resume/submit/supersede (Accepted checked first). AppSheet entry `appSheetInstallerCommand` takes the actor from the session and requires a device-generated command id.
+- Tests: `tests/installer.test.cjs` 9 pass; full suite 788/788.
+- Cloud/browser: BLOCKED. Steps in `docs/INSTALLER-implementation.md`.
+- Decisions: return visits keep the original trade (confirmed Roof/Electrical constraint) instead of a ReturnVisit trade string; office actors may act on installer packages only with a reason; Safety/Technical problems block completion by default; a same-id command with different content is rejected.

@@ -33,9 +33,9 @@ CLAUDE:
 - [x] Received/store workflow — CLAUDE 12 Sep 2026: `_matReceiveDelivery` (ReceiptLines; Receipt movements supplier→store for good, Damage movements →quarantine, idempotent keys; short/damaged → Supply issues; PartReceived/Received; follow-up delivery for balance), `_matStoreQueue`. FN-05 gated.
 - [x] Ordering evidence — CLAUDE 12 Sep 2026: immutable order/list/cancellation snapshots in Communications, Acknowledgements per revision, delivery-note Evidence rows and receipt-line evidence ids, AuditEvents per mutation, order view exposing the full trail.
 
-- [ ] Installer mobile workflow
-- [ ] Completion evidence
-- [ ] Remedials/issues
+- [x] Installer mobile workflow — CLAUDE 12 Sep 2026 (backend): `installer/workflow.js` assigned-work read (no finance/private data), start/progress, completion outcome (Complete → ReportedComplete + commissioning draft; ReturnRequired → remedial + linked return package same trade + original installer retained + Tanya REM01/BKG02), problem/variation reports, commissioning draft/submit/supersede; session-derived actor, idempotent per device command id; `appSheetInstallerCommand`. FN-06 R3. 9 tests. AppSheet installer screens pending (browser). See docs/INSTALLER-implementation.md.
+- [x] Completion evidence — CLAUDE 12 Sep 2026: Evidence rows per Drive file (dedup per package, cross-job denial), categories Progress/Completion/Commissioning/Problem/Variation/Return, linked to submissions/issues; photo upload UI pending.
+- [x] Remedials/issues — CLAUDE 12 Sep 2026: installer-raised Remedial (ReturnRequired/problem categories, Safety/Technical block completion) and Variation issues with IssueEvents, owners (Tanya / VariationApprover Hannah), ISS01/ISS02/REM01 tasks; S10 office issue handling unchanged.
 
 - [x] Commissioning framework — already implemented in S12 (templates/questions/submissions/answers/review/equipment; no live thresholds; forms NOT_CONFIGURED per spec); reconciled 12 Sep 2026.
 - [x] Missing commissioning reminder — already implemented in S10 (`scheduleMissingCommissioning`: INS02 two staffed days after completion, holiday-aware, idempotent); reconciled 12 Sep 2026.
