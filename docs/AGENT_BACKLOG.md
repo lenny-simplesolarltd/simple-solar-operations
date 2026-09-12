@@ -8,14 +8,14 @@ CLAUDE:
 
 # Autonomous Build Backlog
 
-- [ ] Finish PersonSkills configuration
-- [ ] Finish PersonAvailability configuration
-- [ ] Implement flexible Teams / TeamMembers
-- [ ] Make planner skill-aware
-- [ ] Make planner leave-aware
-- [ ] Make planner team-aware
-- [ ] Improve Move Job UX
-- [ ] Improve Change Installer UX
+- [ ] Finish PersonSkills configuration — backend ready 12 Sep 2026 (`PersonSkills` table, `_rpSetSkill`, `runRpProvisionMissingTabs`); AppSheet UI still to configure (browser blocked this session). See docs/RESOURCE-implementation.md.
+- [ ] Finish PersonAvailability configuration — backend ready 12 Sep 2026 (`PersonAvailability` table, `_rpSetAvailability/_rpCancelAvailability` with allocation-conflict warnings); AppSheet UI still to configure.
+- [x] Implement flexible Teams / TeamMembers — CLAUDE 12 Sep 2026: `Teams`/`TeamMembers` tables (role Lead/Member/Apprentice per confirmed decision), `_rpUpsertTeam/_rpSetTeamMember/_rpTeams`, one active Lead per team, no fake crews seeded. 12 tests.
+- [x] Make planner skill-aware — CLAUDE 12 Sep 2026: S11 plan/change-installer refuse `SKILL_MISMATCH` when the installer has skills configured that exclude the trade (no skills = flexible); `_rpAssess` ranks by skill level.
+- [x] Make planner leave-aware — CLAUDE 12 Sep 2026: S11 refuses `ON_LEAVE` from PersonAvailability; leave entry reports allocation conflicts to re-plan; optional reads fail open when tabs are absent.
+- [x] Make planner team-aware — CLAUDE 12 Sep 2026: `_rpTeamPlanner` (team-grouped allocations + leave + unassigned installers), team assessment (`all_ready`, `lead_ready`). AppSheet planner view wiring pending.
+- [ ] Improve Move Job UX — backend preview ready 12 Sep 2026: `_rpMoveJobPreview` (per-person readiness at new dates, preserved packages, calendar links, material need-by flags, scaffold impacts, `ok_to_move`); AppSheet journey wiring pending.
+- [ ] Improve Change Installer UX — backend options ready 12 Sep 2026: `_rpChangeInstallerOptions` (ranked candidates excluding the replaced allocation, team suggestions); AppSheet picker wiring pending.
 
 - [x] Implement DEV calendar write service — CLAUDE 12 Sep 2026: `calendar/service.js` drains S11/S15 Calendar* Outbox rows into the exact DEV calendar via injectable adapter; gated by DEV sheet/env, FN-02 Automated/Pilot, `S01_CONFIG.calendarMode=LIVE` (default CAPTURE sends nothing), hardcoded DEV calendar + allowlist; S11 targets the single shared DEV calendar (People.calendar_id unused, confirmed 12 Sep). 21 tests. DEV cloud smoke NOT RUN (browser blocked). See docs/CALENDAR-implementation.md.
 - [x] Persist calendar event IDs — CLAUDE 12 Sep 2026: `CalendarLinks.external_event_id/event_uid`, `Outbox.external_id`, `last_success_at`, `last_synced_revision` written on every success.

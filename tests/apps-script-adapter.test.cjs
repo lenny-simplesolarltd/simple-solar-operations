@@ -54,12 +54,12 @@ for (const name of ['Companies', 'People', 'Jobs']) {
   });
 }
 
-test('Apps Script validation reads all 60 tables without named lookup, active sheet or writes', () => {
+test('Apps Script validation reads all tables without named lookup, active sheet or writes', () => {
   const { context, calls } = fixture();
   const result = context.runS02Validate();
   assert.equal(result.success, true, JSON.stringify(result.errors));
-  assert.equal(result.actual_table_count, 60);
-  assert.equal(result.primary_key_columns_present.length, 60);
+  assert.equal(result.actual_table_count, schema.tables.length);
+  assert.equal(result.primary_key_columns_present.length, schema.tables.length);
   assert.equal(result.seed_row_counts.Companies, seed.Companies.length);
   assert.equal(result.seed_row_counts.People, seed.People.length);
   assert.deepEqual(calls, { named: 0, active: 0, writes: 0 });
@@ -80,7 +80,7 @@ test('diagnostic retains successful header reads despite named lookup failures a
   assert.equal(result.tests.length, 3);
   for (const row of result.tests) {
     assert.equal(row.get_sheets_ok, true);
-    assert.equal(row.enumerated_sheet_count, 60);
+    assert.equal(row.enumerated_sheet_count, schema.tables.length);
     assert.equal(row.enumerated_lookup_found, true);
     assert.equal(row.enumerated_sheet_name, row.tab);
     assert.ok(row.enumerated_sheet_id > 0);

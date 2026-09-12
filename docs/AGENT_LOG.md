@@ -41,3 +41,11 @@ Chronological record of autonomous implementation batches. Newest last. Each ent
 - Tests: `tests/materials.test.cjs` 16 pass (spec example 4 Nov → 29 Oct → 23 Oct verified); full suite 746/746.
 - Cloud/browser: BLOCKED. Steps in `docs/MATERIALS-implementation.md`.
 - Decisions: `quantity_short` is an explicit merchant shortfall (raises an issue) while any other outstanding quantity is a balance to follow (follow-up delivery); build-orders replay identity is job + command id, not the derived material set; Other lines without a stock-tracked product create no ledger movement; received orders cannot be cancelled (return/credit review instead).
+
+## 2026-09-12 — Batch 5 (Claude): resource planning backend
+
+- Inspected: spec (no skills/availability/team tables defined; People capacity advisory; "capacity warnings optional and per person/team"), S11 validation/capacity rules, provisioner additive capabilities, bridge/S17 store behaviour on missing tabs (throws), schema test audit rules, absence of any repo definition for PersonSkills/PersonAvailability/Teams despite runbook STATUS.
+- Implemented: additive schema tables PersonSkills, PersonAvailability, Teams, TeamMembers (64 tables; embedded schema regenerated; provisioner/adapter tests made count-agnostic). `resource/planning.js` + cloud adapter with header-name-mapped store and `runRpProvisionMissingTabs` (creates only missing tabs/columns). S11 now leave-aware (`ON_LEAVE`) and skill-aware (`SKILL_MISMATCH`, only when skills are configured), reading the new tables optionally so missing tabs never break planning; NeedsReview results carry detail. Readiness assessment, change-installer options, Move Job preview, team planner, status.
+- Tests: `tests/resource.test.cjs` 12 pass; full suite 758/758.
+- Cloud/browser: BLOCKED. Steps in `docs/RESOURCE-implementation.md`. The DEV sheet may already contain tabs created by the browser agent; `runRpProvisionCheck()` reports missing/extra columns before anything is added.
+- Decisions: PersonSkills.level reuses the confirmed Lead/Member/Apprentice enum; skills limited to Roof/Electrical; teams may be Mixed; one active Lead per team; configuration actors must be active Admin/Manager/Office people; no team compositions seeded.

@@ -44,7 +44,9 @@
     "build:scaffold": "node scripts/build-scaffold.cjs",
     "test:scaffold": "npm run build:scaffold && node --test tests/scaffold.test.cjs",
     "build:materials": "node scripts/build-materials.cjs",
-    "test:materials": "npm run build:materials && node --test tests/materials.test.cjs"
+    "test:materials": "npm run build:materials && node --test tests/materials.test.cjs",
+    "build:resource": "node scripts/build-resource.cjs",
+    "test:resource": "npm run build:resource && node --test tests/resource.test.cjs"
   },
   "engines": {
     "node": ">=22"

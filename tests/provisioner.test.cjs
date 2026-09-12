@@ -379,25 +379,25 @@ function createFullyProvisionedAdapter() {
   return createMockSheetAdapter(initialTabs);
 }
 
-test('validateSchema with 60 fully provisioned tables returns success', () => {
+test('validateSchema with all fully provisioned tables returns success', () => {
   const adapter = createFullyProvisionedAdapter();
   const validation = validateSchema(tables, configSeed, adapter);
 
-  assert.equal(validation.expected_table_count, 60);
-  assert.equal(validation.actual_table_count, 60);
+  assert.equal(validation.expected_table_count, tables.tables.length);
+  assert.equal(validation.actual_table_count, tables.tables.length);
   assert.equal(validation.missing_tabs.length, 0, 'no missing tabs: ' + JSON.stringify(validation.missing_tabs));
   assert.equal(validation.missing_columns.length, 0, 'no missing columns');
   assert.equal(validation.errors.length, 0, 'no errors: ' + JSON.stringify(validation.errors));
   assert.equal(validation.success, true, 'should succeed');
 });
 
-test('validateSchema detects all 60 primary key columns', () => {
+test('validateSchema detects all primary key columns', () => {
   const adapter = createFullyProvisionedAdapter();
   const validation = validateSchema(tables, configSeed, adapter);
 
-  // All 60 tables have 'id' as primary key
-  assert.equal(validation.primary_key_columns_present.length, 60,
-    'all 60 PKs present, got ' + validation.primary_key_columns_present.length);
+  // All tables have 'id' as primary key
+  assert.equal(validation.primary_key_columns_present.length, tables.tables.length,
+    'all PKs present, got ' + validation.primary_key_columns_present.length);
   assert.equal(validation.primary_key_columns_missing.length, 0,
     'no missing PKs: ' + JSON.stringify(validation.primary_key_columns_missing));
 });
@@ -454,12 +454,12 @@ test('validateSchema performs zero writes (read-only)', () => {
   assert.ok(peopleData.length > 0, 'People data should still exist');
 });
 
-test('validateSchema with empty sheet (no tabs) reports all 60 missing', () => {
+test('validateSchema with empty sheet (no tabs) reports all tables missing', () => {
   const adapter = createMockSheetAdapter([]);
   const validation = validateSchema(tables, configSeed, adapter);
 
   assert.equal(validation.actual_table_count, 0);
-  assert.equal(validation.missing_tabs.length, 60, 'all 60 missing');
+  assert.equal(validation.missing_tabs.length, tables.tables.length, 'all tables missing');
   assert.equal(validation.success, false);
 });
 
@@ -475,8 +475,8 @@ test('validateSchema with only directory tables reports correct missing count', 
 
   const validation = validateSchema(tables, configSeed, adapter);
   assert.equal(validation.actual_table_count, dirTables.length);
-  assert.equal(validation.missing_tabs.length, 60 - dirTables.length,
-    'missing ' + (60 - dirTables.length) + ' operational tables');
+  assert.equal(validation.missing_tabs.length, tables.tables.length - dirTables.length,
+    'missing ' + (tables.tables.length - dirTables.length) + ' operational tables');
 });
 
 test('validateSchema schema.tables is used as array, not object keys', () => {

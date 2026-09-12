@@ -2,7 +2,7 @@
   "schema_version": "S02-1.0",
   "authority": "01 Developer Build Specification §4, edition 2.0; RA01 v1.0",
   "generated": "2026-09-05",
-  "notes": "Money is integer pence. IDs are immutable text, never row numbers. TEXT columns must be Format > Number > Plain text in Sheets. Columns ending _at are UTC timestamps. Columns ending _pence are integer pence. Nullable means unknown/not yet supplied, not zero or No.",
+  "notes": "Money is integer pence. IDs are immutable text, never row numbers. TEXT columns must be Format > Number > Plain text in Sheets. Columns ending _at are UTC timestamps. Columns ending _pence are integer pence. Nullable means unknown/not yet supplied, not zero or No. 12 Sep 2026: PersonSkills, PersonAvailability, Teams, TeamMembers added for resource planning (runbook §A); additive, provision missing tabs only.",
   "tables": [
     {
       "name": "People",
@@ -175,6 +175,302 @@
         {
           "name": "source_system",
           "type": "TEXT",
+          "required": true
+        },
+        {
+          "name": "commit_id",
+          "type": "TEXT",
+          "required": true
+        }
+      ]
+    },
+    {
+      "name": "PersonSkills",
+      "purpose": "Installer trade competence (resource planning); absence of rows means no skill constraint",
+      "columns": [
+        {
+          "name": "id",
+          "type": "TEXT",
+          "required": true,
+          "key": true,
+          "notes": "SK-<person_id>-<skill>"
+        },
+        {
+          "name": "person_id",
+          "type": "TEXT",
+          "required": true,
+          "notes": "FK People"
+        },
+        {
+          "name": "skill",
+          "type": "TEXT",
+          "required": true,
+          "notes": "Roof/Electrical (WorkPackages.trade taxonomy)"
+        },
+        {
+          "name": "level",
+          "type": "TEXT",
+          "required": true,
+          "notes": "Lead/Member/Apprentice"
+        },
+        {
+          "name": "certified_until",
+          "type": "DATE",
+          "nullable": true
+        },
+        {
+          "name": "active",
+          "type": "BOOLEAN",
+          "required": true
+        },
+        {
+          "name": "notes",
+          "type": "TEXT",
+          "nullable": true
+        },
+        {
+          "name": "created_at",
+          "type": "TIMESTAMP",
+          "required": true
+        },
+        {
+          "name": "created_by",
+          "type": "TEXT",
+          "required": true
+        },
+        {
+          "name": "updated_at",
+          "type": "TIMESTAMP",
+          "required": true
+        },
+        {
+          "name": "updated_by",
+          "type": "TEXT",
+          "required": true
+        },
+        {
+          "name": "version",
+          "type": "INTEGER",
+          "required": true
+        },
+        {
+          "name": "commit_id",
+          "type": "TEXT",
+          "required": true
+        }
+      ]
+    },
+    {
+      "name": "PersonAvailability",
+      "purpose": "Leave and other unavailability periods (resource planning)",
+      "columns": [
+        {
+          "name": "id",
+          "type": "TEXT",
+          "required": true,
+          "key": true
+        },
+        {
+          "name": "person_id",
+          "type": "TEXT",
+          "required": true,
+          "notes": "FK People"
+        },
+        {
+          "name": "type",
+          "type": "TEXT",
+          "required": true,
+          "notes": "Leave/Sick/Training/Unavailable/Available"
+        },
+        {
+          "name": "from_date",
+          "type": "DATE",
+          "required": true
+        },
+        {
+          "name": "to_date",
+          "type": "DATE",
+          "nullable": true,
+          "notes": "Inclusive; null = single day"
+        },
+        {
+          "name": "reason",
+          "type": "TEXT",
+          "nullable": true
+        },
+        {
+          "name": "approved_by",
+          "type": "TEXT",
+          "nullable": true,
+          "notes": "FK People"
+        },
+        {
+          "name": "active",
+          "type": "BOOLEAN",
+          "required": true
+        },
+        {
+          "name": "created_at",
+          "type": "TIMESTAMP",
+          "required": true
+        },
+        {
+          "name": "created_by",
+          "type": "TEXT",
+          "required": true
+        },
+        {
+          "name": "updated_at",
+          "type": "TIMESTAMP",
+          "required": true
+        },
+        {
+          "name": "updated_by",
+          "type": "TEXT",
+          "required": true
+        },
+        {
+          "name": "version",
+          "type": "INTEGER",
+          "required": true
+        },
+        {
+          "name": "commit_id",
+          "type": "TEXT",
+          "required": true
+        }
+      ]
+    },
+    {
+      "name": "Teams",
+      "purpose": "Flexible installer teams (no fixed crews invented)",
+      "columns": [
+        {
+          "name": "id",
+          "type": "TEXT",
+          "required": true,
+          "key": true
+        },
+        {
+          "name": "name",
+          "type": "TEXT",
+          "required": true
+        },
+        {
+          "name": "trade",
+          "type": "TEXT",
+          "required": true,
+          "notes": "Roof/Electrical/Mixed"
+        },
+        {
+          "name": "active",
+          "type": "BOOLEAN",
+          "required": true
+        },
+        {
+          "name": "notes",
+          "type": "TEXT",
+          "nullable": true
+        },
+        {
+          "name": "created_at",
+          "type": "TIMESTAMP",
+          "required": true
+        },
+        {
+          "name": "created_by",
+          "type": "TEXT",
+          "required": true
+        },
+        {
+          "name": "updated_at",
+          "type": "TIMESTAMP",
+          "required": true
+        },
+        {
+          "name": "updated_by",
+          "type": "TEXT",
+          "required": true
+        },
+        {
+          "name": "version",
+          "type": "INTEGER",
+          "required": true
+        },
+        {
+          "name": "commit_id",
+          "type": "TEXT",
+          "required": true
+        }
+      ]
+    },
+    {
+      "name": "TeamMembers",
+      "purpose": "Team membership with role",
+      "columns": [
+        {
+          "name": "id",
+          "type": "TEXT",
+          "required": true,
+          "key": true,
+          "notes": "TM-<team_id>-<person_id>"
+        },
+        {
+          "name": "team_id",
+          "type": "TEXT",
+          "required": true,
+          "notes": "FK Teams"
+        },
+        {
+          "name": "person_id",
+          "type": "TEXT",
+          "required": true,
+          "notes": "FK People"
+        },
+        {
+          "name": "role",
+          "type": "TEXT",
+          "required": true,
+          "notes": "Lead/Member/Apprentice (confirmed 12 Sep 2026)"
+        },
+        {
+          "name": "from_date",
+          "type": "DATE",
+          "nullable": true
+        },
+        {
+          "name": "to_date",
+          "type": "DATE",
+          "nullable": true
+        },
+        {
+          "name": "active",
+          "type": "BOOLEAN",
+          "required": true
+        },
+        {
+          "name": "created_at",
+          "type": "TIMESTAMP",
+          "required": true
+        },
+        {
+          "name": "created_by",
+          "type": "TEXT",
+          "required": true
+        },
+        {
+          "name": "updated_at",
+          "type": "TIMESTAMP",
+          "required": true
+        },
+        {
+          "name": "updated_by",
+          "type": "TEXT",
+          "required": true
+        },
+        {
+          "name": "version",
+          "type": "INTEGER",
           "required": true
         },
         {
@@ -6309,6 +6605,30 @@
       "from_column": "backup_person_id",
       "to_table": "People",
       "to_column": "id"
+    },
+    {
+      "from_table": "PersonSkills",
+      "from_column": "person_id",
+      "to_table": "People",
+      "to_column": "id"
+    },
+    {
+      "from_table": "PersonAvailability",
+      "from_column": "person_id",
+      "to_table": "People",
+      "to_column": "id"
+    },
+    {
+      "from_table": "TeamMembers",
+      "from_column": "team_id",
+      "to_table": "Teams",
+      "to_column": "id"
+    },
+    {
+      "from_table": "TeamMembers",
+      "from_column": "person_id",
+      "to_table": "People",
+      "to_column": "id"
     }
   ],
   "text_columns_must_be_plain_text": [
@@ -6343,6 +6663,10 @@
     "Contacts",
     "People",
     "PersonRoles",
+    "PersonSkills",
+    "PersonAvailability",
+    "Teams",
+    "TeamMembers",
     "PermissionRules",
     "Products",
     "StockLocations",
