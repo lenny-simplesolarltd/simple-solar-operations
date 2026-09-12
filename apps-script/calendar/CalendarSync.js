@@ -6,6 +6,9 @@ var CAL_HEADERS={"Outbox":["id","idempotency_key","action_type","target","payloa
  * create once, persist external ID, update on move, cancel appropriately, no duplicates, audit every
  * external mutation, DEV calendar only, starts disabled/manual).
  *
+ * DEV uses ONE shared calendar (confirmed 12 Sep 2026): S11 queues every link against CAL_DEV_CALENDAR_ID and
+ * People.calendar_id is never consulted.
+ *
  * Safety model (all must hold before any external call):
  *   - exact DEV sheet + DEV environment (store guard)
  *   - FN-02 Calendar entries ReleaseMode Automated/Pilot/R2
@@ -400,7 +403,7 @@ function _calResolveReview(store, input) {
   _calGuardStore(store);
   input = input || {};
   if (!_calText(input.actor) || !_calText(input.command_id) || !_calText(input.outbox_id) || !_calText(input.reason)) _calRefuse('CAL_REVIEW: actor, command_id, outbox_id and reason required');
-  if (['AdoptEvent', 'MarkCancelled', 'Retry'].indexOf(input.resolution) === -1) _calRefuse('CAL_REVIEW: resolution must be AdoptEvent, MarkCancelled or Retry');
+  if (['AdoptEvent', 'MarkCancelled', 'Retry', 'RetargetDev'].indexOf(input.resolution) === -1) _calRefuse('CAL_REVIEW: resolution must be AdoptEvent, MarkCancelled, Retry or RetargetDev');
   var now = _calNow(input);
   var auditId = 'AUD-CAL-RESOLVE-' + input.command_id;
   if (store.get('AuditEvents', auditId)) return { replay: true, resolved: false, outbox_id: input.outbox_id, resolution: input.resolution };
@@ -417,6 +420,10 @@ function _calResolveReview(store, input) {
   } else if (input.resolution === 'MarkCancelled') {
     after = _calPatchLink(store, link, { status: 'Cancelled', error: null, last_synced_revision: link.entity_revision }, now, input.actor);
     patchOut = { status: 'Cancelled', response_summary: 'RESOLVED by ' + input.actor + ': cancelled without external change — ' + input.reason };
+  } else if (input.resolution === 'RetargetDev') {
+    /* Legacy links captured before the shared-calendar decision may carry placeholder ids; point them at the DEV calendar and re-queue. */
+    after = _calPatchLink(store, link, { calendar_id: CAL_DEV_CALENDAR_ID, status: link.external_event_id ? 'UpdatePending' : 'Pending', error: null }, now, input.actor);
+    patchOut = { status: 'Pending', next_attempt: null, target: CAL_DEV_CALENDAR_ID, response_summary: 'RESOLVED by ' + input.actor + ': retargeted to DEV shared calendar — ' + input.reason };
   } else {
     after = _calPatchLink(store, link, { status: link.external_event_id ? 'UpdatePending' : 'Pending', error: null }, now, input.actor);
     patchOut = { status: 'Pending', next_attempt: null, response_summary: 'RESOLVED by ' + input.actor + ': queued for retry — ' + input.reason };
@@ -424,27 +431,6 @@ function _calResolveReview(store, input) {
   store.update('Outbox', out.id, patchOut);
   store.insert('AuditEvents', { id: auditId, entity_type: 'CalendarLinks', entity_id: link.id, action: 'CalendarReview' + input.resolution, before_json: JSON.stringify(before), after_json: JSON.stringify(after), initiating_actor: input.actor, executing_service: CAL_SERVICE, timestamp: now, correlation_id: out.id, reason: input.reason, commit_id: 'CAL-RESOLVE-' + input.command_id, created_at: now });
   return { replay: false, resolved: true, outbox_id: out.id, link_id: link.id, resolution: input.resolution, outbox_status: patchOut.status, link_status: after.status };
-}
-
-/* --- 4. DEV calendar assignment for installers (explicit IDs only, audited, idempotent) --- */
-
-function _calAssignDevCalendar(store, input) {
-  _calGuardStore(store);
-  input = input || {};
-  if (!_calText(input.actor) || !_calText(input.command_id) || !Array.isArray(input.person_ids) || input.person_ids.length === 0) _calRefuse('CAL_REVIEW: actor, command_id and person_ids required');
-  var now = _calNow(input), changed = [], unchanged = [], refused = [];
-  input.person_ids.forEach(function (pid) {
-    var p = store.get('People', pid);
-    if (!p || !_calIsTrue(p.active) || p.role !== 'Installer') { refused.push({ person_id: pid, reason: 'NOT_ACTIVE_INSTALLER' }); return; }
-    if (p.calendar_id === CAL_DEV_CALENDAR_ID) { unchanged.push(pid); return; }
-    var auditId = 'AUD-CAL-ASSIGN-' + input.command_id + '-' + pid;
-    if (store.get('AuditEvents', auditId)) { unchanged.push(pid); return; }
-    var before = { calendar_id: p.calendar_id };
-    store.update('People', pid, { calendar_id: CAL_DEV_CALENDAR_ID, updated_at: now, updated_by: input.actor, version: Number(p.version || 0) + 1 });
-    store.insert('AuditEvents', { id: auditId, entity_type: 'People', entity_id: pid, action: 'AssignDevCalendar', before_json: JSON.stringify(before), after_json: JSON.stringify({ calendar_id: CAL_DEV_CALENDAR_ID }), initiating_actor: input.actor, executing_service: CAL_SERVICE, timestamp: now, correlation_id: input.command_id, reason: input.reason || 'DEV calendar assignment', commit_id: 'CAL-ASSIGN-' + input.command_id, created_at: now });
-    changed.push(pid);
-  });
-  return { changed: changed, unchanged: unchanged, refused: refused, calendar_id: CAL_DEV_CALENDAR_ID };
 }
 
 
@@ -561,13 +547,6 @@ function runCalResolveReview(outboxId, resolution, externalEventId, reason) {
   return _calResult('CAL resolve review', function () {
     var s = _calCloudStore();
     return s.withLock(function () { return Object.assign({ ok: true }, _calResolveReview(s, { actor: _calActor(), command_id: 'RESOLVE-' + outboxId + '-' + new Date().toISOString().replace(/[^0-9]/g, '').substring(0, 14), outbox_id: outboxId, resolution: resolution, external_event_id: externalEventId || null, reason: reason || 'Manual review resolution' })); });
-  });
-}
-function runCalAssignDevCalendar(personIdsCsv) {
-  return _calResult('CAL assign DEV calendar', function () {
-    var ids = String(personIdsCsv || '').split(',').map(function (x) { return x.trim(); }).filter(Boolean);
-    var s = _calCloudStore();
-    return s.withLock(function () { return Object.assign({ ok: true }, _calAssignDevCalendar(s, { actor: _calActor(), command_id: 'ASSIGN-' + new Date().toISOString().replace(/[^0-9]/g, '').substring(0, 14), person_ids: ids, reason: 'DEV calendar assignment for installer allocations' })); });
   });
 }
 /* Controlled DEV happy path: one synthetic link → create → update → cancel (delete). Touches only its own outbox rows. Leaves the DEV calendar clean.

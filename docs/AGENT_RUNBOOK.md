@@ -149,6 +149,16 @@ Already substantially implemented:
 - real People seed data
 - Holidays
 
+## Confirmed decisions (12 September 2026)
+
+Confirmed by the user after browser-agent review. Treat as business facts.
+
+- TeamMembers.role enum = Lead, Member, Apprentice.
+- DEV uses ONE shared calendar only:
+  c_78af3ebb19540667b0e233ef74f02738e5a813073a6c55ee33898aacb3f39b91@group.calendar.google.com
+- Do not depend on People.calendar_id for the current DEV calendar architecture.
+- WorkPackages.trade is constrained to Roof / Electrical.
+
 ## Current trade taxonomy
 
 WorkPackages currently use:

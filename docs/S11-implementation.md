@@ -9,7 +9,7 @@
 | `WorkPackages` | Planned work — `planned_start`, `planned_end`, `status`, `revision`, `trade` |
 | `Allocations` | Person assignment — `person_id`, `role` (Lead/Second/Support), `active`, `replaced_allocation_id`, `calendar_link_id` |
 | `CalendarLinks` | Calendar intent — `calendar_id`, `external_event_id`, `status` (Pending/Active/UpdatePending/Cancelled/Error), `outbox_id` |
-| `People` | Installer — `capacity_per_day`, `available_from`, `available_to`, `calendar_id` |
+| `People` | Installer — `capacity_per_day`, `available_from`, `available_to` (`calendar_id` is NOT used: DEV has one shared calendar, confirmed 12 Sep 2026) |
 | `Holidays` | Office closure dates |
 | `Outbox` | Outbound calendar intent (CAPTURE_ONLY in DEV) |
 | `CommitJournal` | Command idempotency and recovery |
@@ -57,7 +57,7 @@ Both must be enabled for S11 cloud smoke.
 ## Calendar safety
 
 No real Calendar API calls. All calendar operations produce:
-- `CalendarLinks` rows with `status: Pending`
+- `CalendarLinks` rows with `status: Pending` targeting the shared DEV calendar (`S11_SHARED_CALENDAR_ID`)
 - `Outbox` rows with `response_summary: CAPTURE_ONLY: no Calendar API call`
 - External event ID remains null until real cutover
 

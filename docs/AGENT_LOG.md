@@ -18,3 +18,10 @@ Chronological record of autonomous implementation batches. Newest last. Each ent
 - Tests: `tests/calendar.test.cjs` 21 pass including a zero-arg cloud simulation with a CalendarApp stub asserting only the DEV calendar id is ever addressed; full suite green.
 - Cloud/browser: BLOCKED in this session. Steps listed in `docs/CALENDAR-implementation.md` (paste bundle, confirm `S01_CONFIG.allowedCalendarIds`, `runCalStatus()`, `runCalDispatchDryRun()`, set `calendarMode` LIVE for `runCalLiveDevSmoke()`, assign installer calendars, restore).
 - Decisions: calendar ID hardcoded to DEV (runbook "DEV calendar only"); no guests invited; cancellation deletes the DEV event (runbook "cancel or mark appropriately"); S15 cancellation rows stay human-reviewed as designed, with Retry handing deletion to the service.
+
+## 2026-09-12 — Batch 2b (Claude): shared DEV calendar decision applied
+
+- Decisions received from the user (browser agent confirmed): TeamMembers.role enum = Lead/Member/Apprentice; DEV uses one shared calendar only; do not depend on People.calendar_id; WorkPackages.trade constrained to Roof/Electrical. Recorded in AGENT_RUNBOOK.md "Confirmed decisions".
+- Changed: `s11/planner.js` queues every CalendarLink against `S11_SHARED_CALENDAR_ID` (the DEV calendar) and no longer refuses when `People.calendar_id` is missing; Move Job queues calendar updates for every active allocation. `calendar/service.js` drops the People.calendar_id assignment function; new `RetargetDev` review resolution repairs legacy placeholder links. Bundles rebuilt (S11, standalone bridge, R1 AppSheet adapter, calendar).
+- Tests: calendar tests now prove the flow with `People.calendar_id = NOT_CONFIGURED`; full suite green.
+- Flag: S11 Move Job still maps the `Return` activity to a `ReturnVisit` work-package trade string, which is outside the confirmed Roof/Electrical constraint. Left unchanged pending an intentional migration decision (runbook taxonomy rule).

@@ -17,7 +17,7 @@ CLAUDE:
 - [ ] Improve Move Job UX
 - [ ] Improve Change Installer UX
 
-- [x] Implement DEV calendar write service — CLAUDE 12 Sep 2026: `calendar/service.js` drains S11/S15 Calendar* Outbox rows into the exact DEV calendar via injectable adapter; gated by DEV sheet/env, FN-02 Automated/Pilot, `S01_CONFIG.calendarMode=LIVE` (default CAPTURE sends nothing), hardcoded DEV calendar + allowlist. 21 tests. DEV cloud smoke NOT RUN (browser blocked). See docs/CALENDAR-implementation.md.
+- [x] Implement DEV calendar write service — CLAUDE 12 Sep 2026: `calendar/service.js` drains S11/S15 Calendar* Outbox rows into the exact DEV calendar via injectable adapter; gated by DEV sheet/env, FN-02 Automated/Pilot, `S01_CONFIG.calendarMode=LIVE` (default CAPTURE sends nothing), hardcoded DEV calendar + allowlist; S11 targets the single shared DEV calendar (People.calendar_id unused, confirmed 12 Sep). 21 tests. DEV cloud smoke NOT RUN (browser blocked). See docs/CALENDAR-implementation.md.
 - [x] Persist calendar event IDs — CLAUDE 12 Sep 2026: `CalendarLinks.external_event_id/event_uid`, `Outbox.external_id`, `last_success_at`, `last_synced_revision` written on every success.
 - [x] Idempotent calendar create — CLAUDE 12 Sep 2026: Processing marked before the call; `[SSO:<link id>]` tag reconcile adopts an existing event after uncertain attempts; duplicates → NeedsReview.
 - [x] Calendar update on move — CLAUDE 12 Sep 2026: S11 move/replace rows update the same event id; missing event → EVENT_MISSING review, never a silent recreate.

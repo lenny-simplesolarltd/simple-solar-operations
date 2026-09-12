@@ -37,7 +37,8 @@ function makeStore() {
   s.update('ReleaseModes', 'RM-FN01', { mode: 'Automated', authorised_job_scope: 'Pilot' });
   s.update('ReleaseModes', 'RM-FN02', { mode: 'Automated', authorised_job_scope: 'Pilot' });
   fx.seed(s);
-  s.update('People', 'PERSON-s11-installer', { calendar_id: DEV });
+  /* Shared DEV calendar: People.calendar_id must play no part. */
+  s.update('People', 'PERSON-s11-installer', { calendar_id: 'NOT_CONFIGURED' });
   return s;
 }
 function plan(s, extra = {}) {
@@ -232,7 +233,7 @@ test('CAL 09: replacing the installer cancels (deletes) the old event and create
   const s = makeStore(); plan(s);
   const api = fakeApi();
   dispatch(s, api);
-  s.insert('People', { ...fx.person('PERSON-s11-new'), calendar_id: DEV });
+  s.insert('People', { ...fx.person('PERSON-s11-new'), calendar_id: null });
   const r = p.changeInstaller({ command_id: 'REPLACE-1', job_id: 'J-s11-plan', work_package_id: 'WP-s11-roof', old_allocation_id: 'ALLOC-S11-PLAN-1', person_id: 'PERSON-s11-new', mode: 'Replace', expected_version: 2, actor: 'PERSON-tanya', reason: 'Installer unavailable', at: fx.NOW }, s);
   assert.equal(r.status, 'Replaced');
   const d = dispatch(s, api, { now: plus(T0, 10) });
@@ -257,7 +258,7 @@ test('CAL 10: cancel without an external event, and cancel of an already-removed
   const s = makeStore(); plan(s);
   const api = fakeApi();
   /* Replace before any live sync: old link has no external id. */
-  s.insert('People', { ...fx.person('PERSON-s11-new'), calendar_id: DEV });
+  s.insert('People', { ...fx.person('PERSON-s11-new'), calendar_id: null });
   p.changeInstaller({ command_id: 'REPLACE-1', job_id: 'J-s11-plan', work_package_id: 'WP-s11-roof', old_allocation_id: 'ALLOC-S11-PLAN-1', person_id: 'PERSON-s11-new', mode: 'Replace', expected_version: 2, actor: 'PERSON-tanya', reason: 'Installer unavailable', at: fx.NOW }, s);
   const d = dispatch(s, api);
   const cancel = d.processed.find(x => x.action === 'CalendarCancel');
@@ -274,7 +275,7 @@ test('CAL 10: cancel without an external event, and cancel of an already-removed
   const api2 = fakeApi();
   dispatch(s2, api2);
   api2.events.clear();
-  s2.insert('People', { ...fx.person('PERSON-s11-new'), calendar_id: DEV });
+  s2.insert('People', { ...fx.person('PERSON-s11-new'), calendar_id: null });
   p.changeInstaller({ command_id: 'REPLACE-2', job_id: 'J-s11-plan', work_package_id: 'WP-s11-roof', old_allocation_id: 'ALLOC-S11-PLAN-1', person_id: 'PERSON-s11-new', mode: 'Replace', expected_version: 2, actor: 'PERSON-tanya', reason: 'Installer unavailable', at: fx.NOW }, s2);
   const d2 = dispatch(s2, api2, { now: plus(T0, 10) });
   const c2 = d2.processed.find(x => x.action === 'CalendarCancel');
@@ -426,20 +427,24 @@ test('CAL 16: dry run plans without writing; status reports readiness, counts an
   assert.deepEqual(s.tables, disabled);
 });
 
-test('CAL 17: assigning the DEV calendar to installers is explicit, audited, idempotent and refuses non-installers', () => {
-  const s = makeStore();
-  s.update('People', 'PERSON-s11-installer', { calendar_id: 'NOT_CONFIGURED' });
-  s.insert('People', { ...fx.person('PERSON-s11-office'), role: 'Office' });
-  const r = cal._calAssignDevCalendar(s, { actor: 'PERSON-ben', command_id: 'ASSIGN-1', person_ids: ['PERSON-s11-installer', 'PERSON-s11-office', 'PERSON-missing'], now: T0 });
-  assert.deepEqual(r.changed, ['PERSON-s11-installer']);
-  assert.deepEqual(r.refused.map(x => x.person_id), ['PERSON-s11-office', 'PERSON-missing']);
-  assert.equal(s.get('People', 'PERSON-s11-installer').calendar_id, DEV);
-  assert.equal(s.get('People', 'PERSON-s11-installer').version, 2);
-  assert.equal(s.get('People', 'PERSON-s11-office').calendar_id, 'CAL-S11-CAPTURE');
-  const again = cal._calAssignDevCalendar(s, { actor: 'PERSON-ben', command_id: 'ASSIGN-2', person_ids: ['PERSON-s11-installer'], now: T0 });
-  assert.deepEqual(again.unchanged, ['PERSON-s11-installer']);
-  assert.equal(s.tables.AuditEvents.filter(a => a.action === 'AssignDevCalendar').length, 1);
-  assert.throws(() => cal._calAssignDevCalendar(s, { actor: 'PERSON-ben', command_id: 'ASSIGN-3', person_ids: [] }), /person_ids required/);
+test('CAL 17: legacy placeholder links are retargeted to the shared DEV calendar through review, then dispatched', () => {
+  const s = makeStore(); plan(s);
+  assert.equal(s.get('CalendarLinks', 'CL-ALLOC-S11-PLAN-1').calendar_id, DEV, 'S11 queues against the shared DEV calendar regardless of People.calendar_id');
+  s.update('CalendarLinks', 'CL-ALLOC-S11-PLAN-1', { calendar_id: 'CAL-S11-CAPTURE' });
+  s.update('Outbox', 'OUT-S11-PLAN-1-UPSERT', { target: 'CAL-S11-CAPTURE' });
+  const api = fakeApi();
+  const r = dispatch(s, api);
+  assert.equal(r.processed[0].code, 'CALENDAR_TARGET_NOT_DEV');
+  assert.equal(api.calls.length, 0);
+  const fix = cal._calResolveReview(s, { actor: 'PERSON-tanya', command_id: 'RETARGET-1', outbox_id: 'OUT-S11-PLAN-1-UPSERT', resolution: 'RetargetDev', reason: 'Pre-decision placeholder id', now: plus(T0, 1) });
+  assert.equal(fix.outbox_status, 'Pending');
+  assert.equal(s.get('CalendarLinks', 'CL-ALLOC-S11-PLAN-1').calendar_id, DEV);
+  assert.equal(s.get('Outbox', 'OUT-S11-PLAN-1-UPSERT').target, DEV);
+  const d = dispatch(s, api, { now: plus(T0, 2) });
+  assert.equal(d.processed[0].outcome, 'Succeeded');
+  assert.equal(api.events.size, 1);
+  assert.ok(s.get('AuditEvents', 'AUD-CAL-RESOLVE-RETARGET-1'));
+  assert.equal(cal._calResolveReview(s, { actor: 'PERSON-tanya', command_id: 'RETARGET-1', outbox_id: 'OUT-S11-PLAN-1-UPSERT', resolution: 'RetargetDev', reason: 'again', now: plus(T0, 3) }).replay, true);
 });
 
 test('CAL 18: uncertain API results (no id returned) go to review, never retried blindly', () => {
@@ -476,7 +481,7 @@ test('CAL 20: bundle — namespaced, parses with all bundles, CalendarApp only i
   assert.doesNotMatch(outside.replace(/typeof CalendarApp !== 'undefined'/g, ''), /CalendarApp\./, 'CalendarApp used only inside the default adapter');
   assert.match(bundle, /CalendarApp\.getCalendarById\(calendarId\)/);
   assert.ok(!bundle.includes('getCalendarById(CAL_DEV_CALENDAR_ID)') || true);
-  for (const fn of ['runCalStatus', 'runCalDispatch', 'runCalDispatchDryRun', 'runCalResolveReview', 'runCalAssignDevCalendar', 'runCalEnableFn02ForSyntheticTest', 'restoreCalSafeState', 'runCalLiveDevSmoke'])
+  for (const fn of ['runCalStatus', 'runCalDispatch', 'runCalDispatchDryRun', 'runCalResolveReview', 'runCalEnableFn02ForSyntheticTest', 'restoreCalSafeState', 'runCalLiveDevSmoke'])
     assert.match(bundle, new RegExp('function ' + fn + '\\('));
 });
 

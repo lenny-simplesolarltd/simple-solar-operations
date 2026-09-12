@@ -113,13 +113,6 @@ function runCalResolveReview(outboxId, resolution, externalEventId, reason) {
     return s.withLock(function () { return Object.assign({ ok: true }, _calResolveReview(s, { actor: _calActor(), command_id: 'RESOLVE-' + outboxId + '-' + new Date().toISOString().replace(/[^0-9]/g, '').substring(0, 14), outbox_id: outboxId, resolution: resolution, external_event_id: externalEventId || null, reason: reason || 'Manual review resolution' })); });
   });
 }
-function runCalAssignDevCalendar(personIdsCsv) {
-  return _calResult('CAL assign DEV calendar', function () {
-    var ids = String(personIdsCsv || '').split(',').map(function (x) { return x.trim(); }).filter(Boolean);
-    var s = _calCloudStore();
-    return s.withLock(function () { return Object.assign({ ok: true }, _calAssignDevCalendar(s, { actor: _calActor(), command_id: 'ASSIGN-' + new Date().toISOString().replace(/[^0-9]/g, '').substring(0, 14), person_ids: ids, reason: 'DEV calendar assignment for installer allocations' })); });
-  });
-}
 /* Controlled DEV happy path: one synthetic link → create → update → cancel (delete). Touches only its own outbox rows. Leaves the DEV calendar clean.
  * Requires S01_CONFIG.calendarMode === 'LIVE' and the DEV calendar allowlisted. FN-02 toggled outside the lock. */
 function runCalLiveDevSmoke() {
