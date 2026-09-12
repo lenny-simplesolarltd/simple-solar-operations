@@ -42,7 +42,9 @@
     "build:calendar": "node scripts/build-calendar.cjs",
     "test:calendar": "npm run build:calendar && node --test tests/calendar.test.cjs",
     "build:scaffold": "node scripts/build-scaffold.cjs",
-    "test:scaffold": "npm run build:scaffold && node --test tests/scaffold.test.cjs"
+    "test:scaffold": "npm run build:scaffold && node --test tests/scaffold.test.cjs",
+    "build:materials": "node scripts/build-materials.cjs",
+    "test:materials": "npm run build:materials && node --test tests/materials.test.cjs"
   },
   "engines": {
     "node": ">=22"

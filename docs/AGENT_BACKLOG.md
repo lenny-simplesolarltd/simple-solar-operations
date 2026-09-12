@@ -28,10 +28,10 @@ CLAUDE:
 - [x] Scaffold booking workflow — CLAUDE 12 Sep 2026: request → confirm (acknowledged revision) → erected → strip authorised (customer happy + no strip-blocking issues) → strip planned (new revision) → strip confirmed → stripped; change dates = new revision needing re-acknowledgement; cancel refused once erected; complaints in Issues never auto-closed; chase tasks; Friday weekly lists; SCA01–SCA05 (SCA02–05 added to seed per spec); captured Draft communications, nothing sent. 18 tests. DEV cloud NOT RUN.
 - [x] Scaffold planner integration — CLAUDE 12 Sep 2026: `_scfPlannerRows` and `_s11BuildPlanner.scaffold` rows (Erect/Strip/StripForecast with acknowledged/confirmed/actual flags); S11 bundle headers extended.
 
-- [ ] Materials requirements workflow
-- [ ] Merchant order workflow
-- [ ] Received/store workflow
-- [ ] Ordering evidence
+- [x] Materials requirements workflow — CLAUDE 12 Sep 2026: `materials/workflow.js` `_matAddRequirement/_matRequirements` (product or Other lines, merchant default from product, need-by from work package via Thursday-before-work-week rule, lead-time risk, AlreadyOrdered → MAT02 verification, Stock → MAT03 store task). MAT02/03/04/06 seeded per spec. See docs/MATERIALS-implementation.md.
+- [x] Merchant order workflow — CLAUDE 12 Sep 2026: orders per merchant + work type (Roof/Electrical/Other), send = immutable captured snapshot + MAT06, confirm = supplier reference + acknowledgement + expected delivery + MAT04, revise = new revision needing re-acknowledgement (urgent inside lead time), cancel with merchant notice; Friday delivery lists per merchant (MAT05/MAT06). Nothing sent. 16 tests. DEV cloud NOT RUN.
+- [x] Received/store workflow — CLAUDE 12 Sep 2026: `_matReceiveDelivery` (ReceiptLines; Receipt movements supplier→store for good, Damage movements →quarantine, idempotent keys; short/damaged → Supply issues; PartReceived/Received; follow-up delivery for balance), `_matStoreQueue`. FN-05 gated.
+- [x] Ordering evidence — CLAUDE 12 Sep 2026: immutable order/list/cancellation snapshots in Communications, Acknowledgements per revision, delivery-note Evidence rows and receipt-line evidence ids, AuditEvents per mutation, order view exposing the full trail.
 
 - [ ] Installer mobile workflow
 - [ ] Completion evidence
