@@ -1,0 +1,902 @@
+{
+  "generated_from": "scripts/build-manifest.cjs",
+  "schema_tables": 64,
+  "bundles": [
+    {
+      "file": "apps-script/OutboundGuard.js",
+      "bytes": 2840,
+      "sha256": "ac357e149b4a0fc8a7646ced82e8a6817eb8954818eba3382850c5c23d1662a5",
+      "entry_points": [],
+      "services": [],
+      "config_keys": [
+        "environment",
+        "allowedRecipients",
+        "allowedCalendarIds",
+        "timezone",
+        "mode",
+        "probeEnabled"
+      ],
+      "hardcoded_dev_sheet_id": false,
+      "hardcoded_dev_calendar_id": false
+    },
+    {
+      "file": "apps-script/S01Probe.js",
+      "bytes": 1623,
+      "sha256": "438f7f364da3273c069be76d23f23f6822ee0c891590ad5f24dd057b16e62ae2",
+      "entry_points": [
+        "runS01Probe"
+      ],
+      "services": [
+        "CalendarApp",
+        "MailApp",
+        "PropertiesService",
+        "Utilities",
+        "ScriptApp"
+      ],
+      "config_keys": [],
+      "hardcoded_dev_sheet_id": false,
+      "hardcoded_dev_calendar_id": false
+    },
+    {
+      "file": "apps-script/S02Provisioner.js",
+      "bytes": 11134,
+      "sha256": "972483ef6635a075fd197897a587614b9cfc37ba83c49b887b3a1320be972692",
+      "entry_points": [
+        "runS02DryRun",
+        "runS02Apply",
+        "runS02Validate",
+        "runS02HeaderDiagnostic"
+      ],
+      "services": [
+        "SpreadsheetApp",
+        "PropertiesService"
+      ],
+      "config_keys": [
+        "environment",
+        "sheetId"
+      ],
+      "hardcoded_dev_sheet_id": false,
+      "hardcoded_dev_calendar_id": false
+    },
+    {
+      "file": "apps-script/S02ProvisionerCore.js",
+      "bytes": 19046,
+      "sha256": "2a351ebbfb059d9c7a920062248b7d487a394a3f2cd44325911baac51bb72567",
+      "entry_points": [],
+      "services": [],
+      "config_keys": [],
+      "hardcoded_dev_sheet_id": false,
+      "hardcoded_dev_calendar_id": false
+    },
+    {
+      "file": "apps-script/S02SchemaData.js",
+      "bytes": 84851,
+      "sha256": "b94a5708ab8c8ce25510ae219aef1db2b6eb5bd0afc0d9fef2fc2a8025dbadd4",
+      "entry_points": [],
+      "services": [],
+      "config_keys": [],
+      "hardcoded_dev_sheet_id": false,
+      "hardcoded_dev_calendar_id": false
+    },
+    {
+      "file": "apps-script/S02SeedData.js",
+      "bytes": 23984,
+      "sha256": "ffcfe19693f28c0549653ff6cf1576a9ec8ad094d9b914b44d0acd390f4072b9",
+      "entry_points": [],
+      "services": [],
+      "config_keys": [],
+      "hardcoded_dev_sheet_id": false,
+      "hardcoded_dev_calendar_id": false
+    },
+    {
+      "file": "apps-script/S04Fixture.js",
+      "bytes": 8579,
+      "sha256": "e8d7404427bf4cd987f43b203d97569daecc6e392d5bec1bd800f8a707a472ca",
+      "entry_points": [
+        "runS04FixtureDryRun",
+        "runS04FixtureApply",
+        "runS04FixtureValidate",
+        "runS04EnableFn01ForSyntheticTest",
+        "runS04DisableFn01AfterSyntheticTest"
+      ],
+      "services": [
+        "SpreadsheetApp",
+        "PropertiesService"
+      ],
+      "config_keys": [
+        "environment"
+      ],
+      "hardcoded_dev_sheet_id": false,
+      "hardcoded_dev_calendar_id": false
+    },
+    {
+      "file": "apps-script/S04FixtureCore.gs",
+      "bytes": 19270,
+      "sha256": "5d40cf99e802cbb0d1bcfdda682174012f384c441ae6b679d65bdf9ca21b40a8",
+      "entry_points": [],
+      "services": [
+        "SpreadsheetApp"
+      ],
+      "config_keys": [],
+      "hardcoded_dev_sheet_id": true,
+      "hardcoded_dev_calendar_id": false
+    },
+    {
+      "file": "apps-script/backup/BackupService.js",
+      "bytes": 42727,
+      "sha256": "71da34bc9a8ba4cf9bb1b4de53ae1eca3b5dd0172486ce6eecfa7c10e945748c",
+      "entry_points": [
+        "runBkStatus",
+        "runBkDailyBackup",
+        "runBkBackupNow",
+        "runBkVerify",
+        "runBkCompare",
+        "runBkRetentionReview",
+        "runBkRestoreRehearsal",
+        "runBkHappyPathTest"
+      ],
+      "services": [
+        "SpreadsheetApp",
+        "DriveApp",
+        "PropertiesService",
+        "LockService",
+        "Session",
+        "Utilities"
+      ],
+      "config_keys": [
+        "environment",
+        "backupFolderId",
+        "restoreMode"
+      ],
+      "hardcoded_dev_sheet_id": true,
+      "hardcoded_dev_calendar_id": false
+    },
+    {
+      "file": "apps-script/calendar/CalendarSync.js",
+      "bytes": 42404,
+      "sha256": "d6d21d552e219323680055e731359cd50be1a6871835e7b5f46c16cf9d46186a",
+      "entry_points": [
+        "runCalStatus",
+        "runCalEnableFn02ForSyntheticTest",
+        "restoreCalSafeState",
+        "runCalDispatchDryRun",
+        "runCalDispatch",
+        "runCalResolveReview",
+        "runCalLiveDevSmoke"
+      ],
+      "services": [
+        "SpreadsheetApp",
+        "CalendarApp",
+        "PropertiesService",
+        "LockService",
+        "Session",
+        "Utilities"
+      ],
+      "config_keys": [
+        "environment",
+        "allowedCalendarIds",
+        "calendarMode",
+        "mode"
+      ],
+      "hardcoded_dev_sheet_id": true,
+      "hardcoded_dev_calendar_id": true
+    },
+    {
+      "file": "apps-script/installer/InstallerWorkflow.js",
+      "bytes": 53141,
+      "sha256": "eaff3814192fa9ab98375e17935e8d588d5801443dca13eb2dd4fda173b3e205",
+      "entry_points": [
+        "runIwEnableFn06ForSyntheticTest",
+        "restoreIwSafeState",
+        "runIwMyWork",
+        "appSheetInstallerCommand",
+        "runIwHappyPathTest"
+      ],
+      "services": [
+        "SpreadsheetApp",
+        "PropertiesService",
+        "LockService",
+        "Session",
+        "Utilities"
+      ],
+      "config_keys": [
+        "environment"
+      ],
+      "hardcoded_dev_sheet_id": true,
+      "hardcoded_dev_calendar_id": false
+    },
+    {
+      "file": "apps-script/materials/MaterialsWorkflow.js",
+      "bytes": 77565,
+      "sha256": "3e19b7051339e1bdb8704a37d24353eefeb99aebb83d1bb7808eb3a0ccfbbcfe",
+      "entry_points": [
+        "runMatRequirements",
+        "runMatOrderView",
+        "runMatStoreQueue",
+        "runMatEnableFunctionsForSyntheticTest",
+        "restoreMatSafeState",
+        "runMatWeeklyList",
+        "runMatHappyPathTest"
+      ],
+      "services": [
+        "SpreadsheetApp",
+        "PropertiesService",
+        "LockService",
+        "Session",
+        "Utilities"
+      ],
+      "config_keys": [
+        "environment"
+      ],
+      "hardcoded_dev_sheet_id": true,
+      "hardcoded_dev_calendar_id": false
+    },
+    {
+      "file": "apps-script/r1-appsheet/R1AppSheetAdapter.js",
+      "bytes": 80256,
+      "sha256": "85399c620c33665b70472f4c03e6bb362fafca54e91d9d973b114a3f1d96b67b",
+      "entry_points": [
+        "appSheetR1CommandFromRequestRow",
+        "appSheetR1Read",
+        "appSheetR1Command",
+        "runR1APrepareDepositConfirmFixture",
+        "runR1APrepareOperationalCompleteFixture",
+        "runR1APrepareBookingGatesFixture"
+      ],
+      "services": [
+        "SpreadsheetApp",
+        "LockService",
+        "Session",
+        "Utilities"
+      ],
+      "config_keys": [
+        "environment",
+        "sheetId"
+      ],
+      "hardcoded_dev_sheet_id": true,
+      "hardcoded_dev_calendar_id": false
+    },
+    {
+      "file": "apps-script/resilience/ResilienceReview.js",
+      "bytes": 24897,
+      "sha256": "855f7c586112bafa1ba5600a16f49730ae2a40e3a8c3a8e6a8712eadf12427dd",
+      "entry_points": [
+        "runRsReviewQueue",
+        "runRsSweep",
+        "runRsResolveOutbox"
+      ],
+      "services": [
+        "SpreadsheetApp",
+        "PropertiesService",
+        "LockService",
+        "Session"
+      ],
+      "config_keys": [
+        "environment"
+      ],
+      "hardcoded_dev_sheet_id": true,
+      "hardcoded_dev_calendar_id": false
+    },
+    {
+      "file": "apps-script/resource/ResourcePlanning.js",
+      "bytes": 48224,
+      "sha256": "3f2f0ab04783e352e0853ce817a2d9b5ae36786e88464965f6d23ff3bed6a276",
+      "entry_points": [
+        "runRpProvisionCheck",
+        "runRpProvisionMissingTabs",
+        "runRpStatus",
+        "runRpTeams",
+        "runRpAssess",
+        "runRpChangeInstallerOptions",
+        "runRpMoveJobPreview",
+        "runRpTeamPlanner",
+        "runRpHappyPathTest"
+      ],
+      "services": [
+        "SpreadsheetApp",
+        "PropertiesService",
+        "LockService",
+        "Session",
+        "Utilities"
+      ],
+      "config_keys": [
+        "environment"
+      ],
+      "hardcoded_dev_sheet_id": true,
+      "hardcoded_dev_calendar_id": false
+    },
+    {
+      "file": "apps-script/s04-bridge/BridgeCore.gs",
+      "bytes": 7555,
+      "sha256": "7c4f8fdd841c3d41cfac4093cdf5c381b9155de2ec8f497b7463c0864fe28614",
+      "entry_points": [],
+      "services": [
+        "UrlFetchApp",
+        "PropertiesService",
+        "LockService",
+        "Session",
+        "ScriptApp"
+      ],
+      "config_keys": [
+        "environment",
+        "sheetId",
+        "backendProjectId",
+        "bridgeProjectId"
+      ],
+      "hardcoded_dev_sheet_id": true,
+      "hardcoded_dev_calendar_id": false
+    },
+    {
+      "file": "apps-script/s04-bridge/BridgeEntry.gs",
+      "bytes": 781,
+      "sha256": "66c15d84ee6fc141ff6a9956ffe24bd5786392963f1b10fed58ec1a4ea40c327",
+      "entry_points": [
+        "doGet"
+      ],
+      "services": [],
+      "config_keys": [],
+      "hardcoded_dev_sheet_id": false,
+      "hardcoded_dev_calendar_id": false
+    },
+    {
+      "file": "apps-script/s04/G04NegativeCore.gs",
+      "bytes": 15067,
+      "sha256": "59284761e5686a1acd7e193493c3d3af4a7ae71e6b8bf2af8992dcb485b6650d",
+      "entry_points": [
+        "restoreSafeState"
+      ],
+      "services": [
+        "SpreadsheetApp"
+      ],
+      "config_keys": [],
+      "hardcoded_dev_sheet_id": true,
+      "hardcoded_dev_calendar_id": false
+    },
+    {
+      "file": "apps-script/s04/G04NegativeTests.js",
+      "bytes": 9621,
+      "sha256": "08fc7e5e3ca05281d1f4e2bc501b95ed83aa4b01ac81ffde8b23f4f64b87a541",
+      "entry_points": [
+        "runG04DisabledModeTest",
+        "runG04StaleVersionTest",
+        "runG04DuplicateReplayTest",
+        "runG04CommandMismatchTest",
+        "runG04OutOfPilotTest",
+        "restoreG04SafeState"
+      ],
+      "services": [
+        "SpreadsheetApp",
+        "PropertiesService"
+      ],
+      "config_keys": [
+        "environment",
+        "sheetId",
+        "projectId"
+      ],
+      "hardcoded_dev_sheet_id": true,
+      "hardcoded_dev_calendar_id": false
+    },
+    {
+      "file": "apps-script/s04/S04Core.gs",
+      "bytes": 47617,
+      "sha256": "b3c1cdb4b923db4ce1da7cf7ce90f077de4308f957b4d6531e7dba0fea5785ee",
+      "entry_points": [],
+      "services": [
+        "SpreadsheetApp",
+        "PropertiesService",
+        "LockService",
+        "Session",
+        "ScriptApp"
+      ],
+      "config_keys": [
+        "environment",
+        "sheetId",
+        "projectId"
+      ],
+      "hardcoded_dev_sheet_id": true,
+      "hardcoded_dev_calendar_id": false
+    },
+    {
+      "file": "apps-script/s04/S04Entry.gs",
+      "bytes": 1243,
+      "sha256": "8a885951679ed833cde3f76ad6c6843418c0cb85fa78c3381b4824cd26be2d62",
+      "entry_points": [
+        "runS04CompleteTaskCommand",
+        "doPost"
+      ],
+      "services": [],
+      "config_keys": [],
+      "hardcoded_dev_sheet_id": false,
+      "hardcoded_dev_calendar_id": false
+    },
+    {
+      "file": "apps-script/s05/S05Core.gs",
+      "bytes": 55241,
+      "sha256": "e472e46e4e08d56f71eab4ced6e3d3a76a955e6c5f56c0053ff32fa5f241635b",
+      "entry_points": [],
+      "services": [],
+      "config_keys": [
+        "environment",
+        "sheetId"
+      ],
+      "hardcoded_dev_sheet_id": true,
+      "hardcoded_dev_calendar_id": false
+    },
+    {
+      "file": "apps-script/s05/S05Intake.js",
+      "bytes": 31545,
+      "sha256": "45d57e11ffa59039beb4a0facfd6a02ca46b1c741be068c888b4fa2a017db6d4",
+      "entry_points": [
+        "runS05FixtureDryRun",
+        "runS05FixtureApply",
+        "runS05FixtureValidate",
+        "runS05SoldHappyPathTest",
+        "runS05SoldReplayTest",
+        "runS05SoldConflictTest",
+        "runS05BookingHappyPathTest",
+        "runS05BookingReplayTest",
+        "runS05BookingConflictTest",
+        "runS05BookingNoMatchTest",
+        "restoreS05SafeState"
+      ],
+      "services": [
+        "SpreadsheetApp",
+        "PropertiesService"
+      ],
+      "config_keys": [
+        "environment"
+      ],
+      "hardcoded_dev_sheet_id": true,
+      "hardcoded_dev_calendar_id": false
+    },
+    {
+      "file": "apps-script/s06/S06Gates.js",
+      "bytes": 20679,
+      "sha256": "031354b77f37c7546475e4a01f96396162210622ce945cf40ea095ff095f80e1",
+      "entry_points": [
+        "runS06FixtureDryRun",
+        "runS06FixtureApply",
+        "runS06FixtureValidate",
+        "runS06HappyPathTest",
+        "restoreS06SafeState"
+      ],
+      "services": [
+        "SpreadsheetApp",
+        "PropertiesService"
+      ],
+      "config_keys": [
+        "environment"
+      ],
+      "hardcoded_dev_sheet_id": true,
+      "hardcoded_dev_calendar_id": false
+    },
+    {
+      "file": "apps-script/s07/S07Ordering.js",
+      "bytes": 21438,
+      "sha256": "9aa9034ae6372744980c54e0cd84d45853b0023557757bed46ac9245884ac493",
+      "entry_points": [
+        "runS07FixtureDryRun",
+        "runS07FixtureApply",
+        "runS07FixtureValidate",
+        "runS07HappyPathTest",
+        "runS07EnableFn03ForSyntheticTest",
+        "restoreS07SafeState"
+      ],
+      "services": [
+        "SpreadsheetApp",
+        "PropertiesService"
+      ],
+      "config_keys": [
+        "environment"
+      ],
+      "hardcoded_dev_sheet_id": true,
+      "hardcoded_dev_calendar_id": false
+    },
+    {
+      "file": "apps-script/s08/S08Picking.js",
+      "bytes": 19341,
+      "sha256": "962b27608326d94c8c663f33297aa59dc95b48a28ed23f2ec4c7c462f19f4727",
+      "entry_points": [
+        "runS08FixtureDryRun",
+        "runS08FixtureApply",
+        "runS08FixtureValidate",
+        "runS08EnableFn05ForSyntheticTest",
+        "runS08HappyPathTest",
+        "restoreS08SafeState"
+      ],
+      "services": [
+        "SpreadsheetApp",
+        "PropertiesService"
+      ],
+      "config_keys": [
+        "environment"
+      ],
+      "hardcoded_dev_sheet_id": true,
+      "hardcoded_dev_calendar_id": false
+    },
+    {
+      "file": "apps-script/s09/S09Scaffold.js",
+      "bytes": 21599,
+      "sha256": "a46cfedd444de406c982fd9f7892d8552f097fa8b49ef5e82653c151d1543b89",
+      "entry_points": [
+        "runS09FixtureDryRun",
+        "runS09FixtureApply",
+        "runS09FixtureValidate",
+        "runS09EnableFn04ForSyntheticTest",
+        "runS09HappyPathTest",
+        "restoreS09SafeState"
+      ],
+      "services": [
+        "SpreadsheetApp",
+        "PropertiesService"
+      ],
+      "config_keys": [
+        "environment"
+      ],
+      "hardcoded_dev_sheet_id": true,
+      "hardcoded_dev_calendar_id": false
+    },
+    {
+      "file": "apps-script/s10/S10Operations.js",
+      "bytes": 33593,
+      "sha256": "0f2fcfca2e74c8f4667e529d4e323ce05711032be43fb37d8d75dbb5c41f0705",
+      "entry_points": [
+        "runS10FixtureDryRun",
+        "runS10FixtureApply",
+        "runS10EnableFunctionsForSyntheticTest",
+        "runS10FixtureValidate",
+        "runS10HappyPathTest"
+      ],
+      "services": [
+        "SpreadsheetApp",
+        "PropertiesService",
+        "Utilities"
+      ],
+      "config_keys": [
+        "environment"
+      ],
+      "hardcoded_dev_sheet_id": true,
+      "hardcoded_dev_calendar_id": false
+    },
+    {
+      "file": "apps-script/s11/S11Planner.js",
+      "bytes": 46295,
+      "sha256": "6d3c48342e87decb61d8fa8ac2767d969df401419dbbd7339f000451e2a7b101",
+      "entry_points": [
+        "runS11FixtureDryRun",
+        "runS11FixtureApply",
+        "runS11EnableFunctionsForSyntheticTest",
+        "runS11FixtureValidate",
+        "runS11HappyPathTest"
+      ],
+      "services": [
+        "SpreadsheetApp",
+        "PropertiesService",
+        "Utilities"
+      ],
+      "config_keys": [
+        "environment"
+      ],
+      "hardcoded_dev_sheet_id": true,
+      "hardcoded_dev_calendar_id": true
+    },
+    {
+      "file": "apps-script/s12/S12Commissioning.js",
+      "bytes": 16809,
+      "sha256": "70e671bd2a311d7872eabfe4bba6ee5190f462a7a473c94b2425b3bda6420551",
+      "entry_points": [
+        "runS12FixtureDryRun",
+        "runS12FixtureApply",
+        "runS12FixtureValidate",
+        "runS12EnableFunctionsForSyntheticTest",
+        "runS12HappyPathTest"
+      ],
+      "services": [
+        "SpreadsheetApp",
+        "PropertiesService"
+      ],
+      "config_keys": [
+        "environment"
+      ],
+      "hardcoded_dev_sheet_id": true,
+      "hardcoded_dev_calendar_id": false
+    },
+    {
+      "file": "apps-script/s13/S13Payments.js",
+      "bytes": 15414,
+      "sha256": "245fea28576ddb92f6b9ff408b2580981f7f1d6a4ac0b7d81fd1ab143e8318d6",
+      "entry_points": [
+        "runS13FixtureDryRun",
+        "runS13FixtureApply",
+        "runS13FixtureValidate",
+        "runS13EnableFunctionsForSyntheticTest",
+        "runS13HappyPathTest"
+      ],
+      "services": [
+        "SpreadsheetApp",
+        "PropertiesService"
+      ],
+      "config_keys": [
+        "environment"
+      ],
+      "hardcoded_dev_sheet_id": true,
+      "hardcoded_dev_calendar_id": false
+    },
+    {
+      "file": "apps-script/s14/S14Reporting.js",
+      "bytes": 24571,
+      "sha256": "a871ea09c9dc4a48e5a7b41cf19c63824c7ee9af66fcbe48ec7d0fb95aea4b3a",
+      "entry_points": [
+        "runS14FixtureDryRun",
+        "runS14FixtureApply",
+        "runS14FixtureValidate",
+        "runS14EnableFunctionsForSyntheticTest",
+        "runS14HappyPathTest",
+        "runS14HappyPathDiagnostic20260908",
+        "runS14SnapshotReturnDiagnostic20260908"
+      ],
+      "services": [
+        "SpreadsheetApp",
+        "PropertiesService"
+      ],
+      "config_keys": [
+        "environment"
+      ],
+      "hardcoded_dev_sheet_id": true,
+      "hardcoded_dev_calendar_id": false
+    },
+    {
+      "file": "apps-script/s15/S15Cancellation.js",
+      "bytes": 42617,
+      "sha256": "82efc9ba1b5f7d2a306cdc42fc66d348a4e7954bfe065f796dafc9149cb0c44f",
+      "entry_points": [
+        "restoreS15SafeState",
+        "runS15FixtureDryRun",
+        "runS15FixtureApply",
+        "runS15FixtureValidate",
+        "runS15EnableFunctionsForSyntheticTest",
+        "runS15HappyPathTest"
+      ],
+      "services": [
+        "SpreadsheetApp",
+        "PropertiesService",
+        "LockService",
+        "Utilities"
+      ],
+      "config_keys": [
+        "environment"
+      ],
+      "hardcoded_dev_sheet_id": true,
+      "hardcoded_dev_calendar_id": false
+    },
+    {
+      "file": "apps-script/s16/S16Health.js",
+      "bytes": 97674,
+      "sha256": "8dfef7bbaf436ad77d4f9e0fb448f8469681a172ab1a3f4870e0135dd428bef9",
+      "entry_points": [
+        "restoreS16SafeState",
+        "runS16FixtureDryRun",
+        "runS16FixtureApply",
+        "runS16FixtureValidate",
+        "runS16EnableFunctionsForSyntheticTest",
+        "runS16ResetFixture",
+        "runS16DiagnoseModes",
+        "runS16HappyPathTest",
+        "runS16DevBackupDriveSmoke",
+        "runS16HeartbeatStatus",
+        "runS16RecordHeartbeat",
+        "runS16HeartbeatTick",
+        "runS16HeartbeatSmoke"
+      ],
+      "services": [
+        "SpreadsheetApp",
+        "DriveApp",
+        "PropertiesService",
+        "LockService",
+        "Utilities"
+      ],
+      "config_keys": [
+        "environment",
+        "backupFolderId"
+      ],
+      "hardcoded_dev_sheet_id": true,
+      "hardcoded_dev_calendar_id": false
+    },
+    {
+      "file": "apps-script/s17/S17Admin.js",
+      "bytes": 74921,
+      "sha256": "8476b13bd8ebd64f2e6f44c502262f21916e273377312fc105b427a05a860b7e",
+      "entry_points": [
+        "runS17FixtureDryRun",
+        "runS17FixtureApply",
+        "runS17FixtureValidate",
+        "runS17HappyPathTest",
+        "runS17AppSheetSmokeSetup"
+      ],
+      "services": [
+        "SpreadsheetApp",
+        "Utilities"
+      ],
+      "config_keys": [],
+      "hardcoded_dev_sheet_id": true,
+      "hardcoded_dev_calendar_id": false
+    },
+    {
+      "file": "apps-script/s18/S18Acceptance.js",
+      "bytes": 51259,
+      "sha256": "b6f3703f81a3fd4818bef578bce92c428abf3091fc295b88124a619714858a23",
+      "entry_points": [
+        "runS18AcceptanceDryRun",
+        "runS18AcceptanceTest"
+      ],
+      "services": [
+        "SpreadsheetApp",
+        "PropertiesService"
+      ],
+      "config_keys": [
+        "environment"
+      ],
+      "hardcoded_dev_sheet_id": true,
+      "hardcoded_dev_calendar_id": false
+    },
+    {
+      "file": "apps-script/s19/S19Migration.js",
+      "bytes": 41957,
+      "sha256": "67624a9255da2c97bb04956a8ef29d2e404a3db5d794800ed17365b82b7f0d8c",
+      "entry_points": [
+        "runS19MigrationDryRun",
+        "runS19MigrationRehearsal",
+        "runS19MigrationSummary"
+      ],
+      "services": [
+        "SpreadsheetApp",
+        "PropertiesService"
+      ],
+      "config_keys": [
+        "environment"
+      ],
+      "hardcoded_dev_sheet_id": true,
+      "hardcoded_dev_calendar_id": false
+    },
+    {
+      "file": "apps-script/s20/S20Release.js",
+      "bytes": 12698,
+      "sha256": "72dab1f3726006191abb693d35a139545f1f6114523f0eff2dab1f37bb5d6a39",
+      "entry_points": [
+        "runS20ReleaseDryRun",
+        "runS20ReleaseSimulation",
+        "runS20ReleaseSummary"
+      ],
+      "services": [
+        "SpreadsheetApp",
+        "PropertiesService"
+      ],
+      "config_keys": [
+        "environment"
+      ],
+      "hardcoded_dev_sheet_id": true,
+      "hardcoded_dev_calendar_id": false
+    },
+    {
+      "file": "apps-script/scaffold/ScaffoldWorkflow.js",
+      "bytes": 69577,
+      "sha256": "0df239f21ee4e003cf6c9e035f3054ff48910702eaf18ceb2a7f9092119e338f",
+      "entry_points": [
+        "runScfScaffolders",
+        "runScfPlannerRows",
+        "runScfBookingView",
+        "runScfEnableFn04ForSyntheticTest",
+        "restoreScfSafeState",
+        "runScfConfigureScaffolder",
+        "runScfChase",
+        "runScfWeeklyList",
+        "runScfHappyPathTest"
+      ],
+      "services": [
+        "SpreadsheetApp",
+        "PropertiesService",
+        "LockService",
+        "Session",
+        "Utilities"
+      ],
+      "config_keys": [
+        "environment"
+      ],
+      "hardcoded_dev_sheet_id": true,
+      "hardcoded_dev_calendar_id": false
+    },
+    {
+      "file": "apps-script/xero/XeroAdapter.js",
+      "bytes": 27322,
+      "sha256": "8d30c6110eb5acd256038ebeb5dd51061af58c0668bb69679d384e3e2dcb2bcb",
+      "entry_points": [
+        "runXoRequests",
+        "runXoDispatch",
+        "runXoInvoiceCallback",
+        "runXoPaymentCallback",
+        "runXoReviewCancelInvoice"
+      ],
+      "services": [
+        "SpreadsheetApp",
+        "PropertiesService",
+        "LockService",
+        "Session"
+      ],
+      "config_keys": [
+        "environment",
+        "xeroMode",
+        "mode"
+      ],
+      "hardcoded_dev_sheet_id": true,
+      "hardcoded_dev_calendar_id": false
+    }
+  ],
+  "standalone_bridge": {
+    "file": "standalone-bridge/AppSheetBridge.js",
+    "bytes": 278190,
+    "sha256": "f8aab8b1ec8b1b27f376e95cae5bbc92e9a6fad17d4368497142e23bee603da1",
+    "entry_points": [
+      "appSheetR1CommandFromRequestRow",
+      "appSheetR1Read",
+      "appSheetR1Command"
+    ],
+    "services": [
+      "SpreadsheetApp",
+      "LockService",
+      "Session",
+      "Utilities"
+    ]
+  },
+  "npm_scripts": [
+    "build:backup",
+    "build:calendar",
+    "build:installer",
+    "build:manifest",
+    "build:materials",
+    "build:r1-appsheet",
+    "build:resilience",
+    "build:resource",
+    "build:s04",
+    "build:s04-fixture",
+    "build:s04-g04",
+    "build:s05",
+    "build:s10",
+    "build:s11",
+    "build:s15",
+    "build:s16",
+    "build:s17",
+    "build:s18",
+    "build:s19",
+    "build:s20",
+    "build:scaffold",
+    "test",
+    "test:backup",
+    "test:calendar",
+    "test:installer",
+    "test:materials",
+    "test:r1-appsheet",
+    "test:resilience",
+    "test:resource",
+    "test:s04",
+    "test:s04-fixture",
+    "test:s04-g04",
+    "test:s05",
+    "test:s06",
+    "test:s07",
+    "test:s08",
+    "test:s09",
+    "test:s10",
+    "test:s11",
+    "test:s12",
+    "test:s13",
+    "test:s14",
+    "test:s15",
+    "test:s16",
+    "test:s16-heartbeat",
+    "test:s17",
+    "test:s18",
+    "test:s19",
+    "test:s20",
+    "test:scaffold"
+  ]
+}

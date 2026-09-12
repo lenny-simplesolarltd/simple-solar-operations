@@ -52,7 +52,8 @@
     "build:resilience": "node scripts/build-resilience.cjs",
     "test:resilience": "npm run build:resilience && node --test tests/resilience.test.cjs",
     "build:installer": "node scripts/build-installer.cjs",
-    "test:installer": "npm run build:installer && node --test tests/installer.test.cjs"
+    "test:installer": "npm run build:installer && node --test tests/installer.test.cjs",
+    "build:manifest": "node scripts/build-manifest.cjs"
   },
   "engines": {
     "node": ">=22"

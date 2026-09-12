@@ -73,3 +73,10 @@ Chronological record of autonomous implementation batches. Newest last. Each ent
 - Tests: `tests/installer.test.cjs` 9 pass; full suite 788/788.
 - Cloud/browser: BLOCKED. Steps in `docs/INSTALLER-implementation.md`.
 - Decisions: return visits keep the original trade (confirmed Roof/Electrical constraint) instead of a ReturnVisit trade string; office actors may act on installer packages only with a reason; Safety/Technical problems block completion by default; a same-id command with different content is rejected.
+
+## 2026-09-12 — Batch 9 (Claude): DEV integration walkthrough, TEST preparation, Apps Script manifest
+
+- Implemented: `scripts/build-manifest.cjs` → `docs/generated/apps-script-manifest.{json,md}` (40 bundles: SHA-256, entry points, Google services, S01_CONFIG keys, DEV-id guards); `tests/manifest.test.cjs` (manifest drift, external-service allowlist — Calendar only in calendar/ and the S01 probe, Drive only in s16/ and backup/, HTTP only in the pre-existing s04-bridge — DEV-guard presence, walkthrough coverage of every smoke/restore entry point).
+- Docs: `docs/DEV-integration-walkthrough.md` (ordered cloud script: config, seed rows, bundle pastes, per-service smokes with expected results and rollback, triggers, AppSheet wiring, evidence); `docs/TEST-deployment-preparation.md` (prerequisites, configuration contract, deployment manifest, triggers, and the finding that the 12 Sep services are DEV-locked by construction and need an approved environment-profile change before TEST).
+- Backlog: DEV integration walkthrough and TEST deployment preparation marked done as documentation; role-specific UX cleanup, PersonSkills/PersonAvailability UI and Move/Change UX remain (browser). Full suite 791/791.
+- Session summary: browser automation unavailable throughout; all cloud configuration steps are queued in the walkthrough and in each implementation doc. Stop condition reached for the remaining items: browser automation blocked.

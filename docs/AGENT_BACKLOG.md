@@ -54,6 +54,6 @@ CLAUDE:
 - [x] Restore procedure — CLAUDE 12 Sep 2026: documented path + non-destructive rehearsal (`_bkRestoreRehearsal` writes a Verified backup into a NEW spreadsheet under `restoreMode: REHEARSAL` with confirm token; DEV workbook untouched); in-place destructive restore refused by construction (needs approval + isolated environment).
 - [x] Archive/restore — already implemented in S16 (`_s16ArchiveEligibility/_s16ArchiveJob/_s16ReopenArchivedJob`, 6-month rule, history preserved); reconciled 12 Sep 2026.
 
-- [ ] Role-specific UX cleanup
-- [ ] DEV integration walkthrough
-- [ ] TEST deployment preparation
+- [ ] Role-specific UX cleanup — AppSheet work (browser). Backend read models already return human-readable labels (job display names, company names, task titles) and installer/store/office-scoped views; see step 10 of docs/DEV-integration-walkthrough.md for the views to build.
+- [x] DEV integration walkthrough — CLAUDE 12 Sep 2026: `docs/DEV-integration-walkthrough.md` (ordered, step-by-step cloud script for every pending bundle: config keys, seed template rows, smokes, expected results, rollback, triggers, AppSheet wiring, evidence) backed by the generated `docs/generated/apps-script-manifest.md` and `tests/manifest.test.cjs` (manifest drift + external-service allowlist). EXECUTION still pending (no browser/Apps Script access this session).
+- [x] TEST deployment preparation — CLAUDE 12 Sep 2026: `docs/TEST-deployment-preparation.md` (TEST prerequisites, configuration contract, deployment manifest with SHA-256s, trigger table, open items) including the finding that all 12 Sep services are DEV-locked by hardcoded ids and need an approved environment-profile change before any TEST paste. Deployment itself is a business/S20 decision.
