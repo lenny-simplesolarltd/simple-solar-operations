@@ -39,7 +39,7 @@
 - [ ] Xero adapter disabled by default
 
 - [ ] Health dashboard
-- [ ] Processing heartbeat
+- [x] Processing heartbeat — CLAUDE 12 Sep 2026: `s16/heartbeat.js` records last successful processing per component (HealthChecks `Processing:<component>`), staffed-window staleness, Fresh/Stale/Failing/Quiet/Never states, alerts merged into S16 health; cloud entry points `runS16HeartbeatStatus/RecordHeartbeat/Tick/Smoke`; 16 local tests. DEV cloud smoke and hourly trigger not yet run/installed. See docs/S16-implementation.md.
 - [ ] Failure alerts
 - [ ] Outbound uncertain state handling
 - [ ] Real Drive backups

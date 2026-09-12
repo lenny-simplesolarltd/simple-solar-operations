@@ -99,6 +99,12 @@ function _s16Scope(store) {
   return modes;
 }
 
+/* Heartbeat functions live in s16/heartbeat.js: shared global scope in Apps Script, module in Node. */
+function _s16HeartbeatModule() {
+  if (typeof _s16HeartbeatStatus === 'function') return { _s16HeartbeatStatus: _s16HeartbeatStatus };
+  return require('./heartbeat.js');
+}
+
 /* --- 1. HEALTH STATUS --- */
 
 function _s16HealthStatus(store) {
@@ -127,6 +133,13 @@ function _s16HealthStatus(store) {
     return o.status === 'Processing' && o.attempt_count > 0;
   });
   if (failed.length > 0) warnings.push({ severity: 'Warning', component: 'Outbox', detail: failed.length + ' processing with retries', ids: failed.map(function (r) { return r.id; }) });
+
+  // Processing heartbeats (last successful processing per component; staffed-window aware)
+  var heartbeats = _s16HeartbeatModule()._s16HeartbeatStatus(store, { now: now });
+  for (var hb = 0; hb < heartbeats.alerts.length; hb++) {
+    var alert = heartbeats.alerts[hb];
+    (alert.severity === 'Critical' ? issues : warnings).push({ severity: alert.severity, component: alert.component, detail: alert.detail, state: alert.state, last_success_at: alert.last_success_at });
+  }
 
   // Last health check (Sheet may return Date — never call localeCompare on Date)
   var lastCheck = null;
@@ -177,11 +190,14 @@ function _s16HealthStatus(store) {
     issues: issues,
     warnings: warnings,
     modes: modes,
+    heartbeats: { stale_minutes: heartbeats.stale_minutes, staffed: heartbeats.staffed_window.staffed, components: heartbeats.components, summary: heartbeats.summary },
     summary: {
       stalled_commits: stalled.length,
       recovery_required: recoveryNeeded.length,
       uncertain_outbox: uncertain.length,
       failed_outbox: failed.length,
+      heartbeat_components: heartbeats.components.length,
+      heartbeat_alerts: heartbeats.alert_count,
       total_audit_events: store.list('AuditEvents').length,
       total_commits: store.list('CommitJournal').length,
       total_outbox: store.list('Outbox').length

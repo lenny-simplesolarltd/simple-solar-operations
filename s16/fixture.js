@@ -360,6 +360,7 @@ function _s16ResetFixture(store) {
         if (t === 'AuditEvents' && r.id && /^AE-S16-ARCHIVE-S16-SMOKE|AE-S16-REOPEN-S16-SMOKE/.test(r.id)) shouldDelete = true;
         if (t === 'Tasks' && r.id && /^TASK-S16-S16-SMOKE-SYS-/.test(r.id)) shouldDelete = true;
         if (t === 'HealthChecks' && r.integration === 'S16-system') shouldDelete = true;
+        if (t === 'HealthChecks' && r.integration === 'Processing:S16Smoke') shouldDelete = true;
         if (shouldDelete) {
           try { store.delete(t, r.id); deleted.push(t + '/' + r.id); } catch (e) { /* skip */ }
         }

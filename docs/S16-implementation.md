@@ -219,3 +219,60 @@ May run against main DEV workbook (synthetic fixture only; restore remains dry-r
 Do **not**: run destructive restore, invent Drive folder IDs, touch PROD, or restore into the main DEV workbook as a real rollback.
 
 No real Drive/Calendar/Xero/GHL calls. No PROD references. No destructive restore.
+
+## Processing heartbeat — added 12 September 2026 (Claude backend batch)
+
+**LOCAL IMPLEMENTATION PASS (16 focused tests); DEV CLOUD NOT YET RUN.** Backlog item "Processing heartbeat" (Resilience). Records *last successful processing* per system component and surfaces stale or failing components through the existing S16 health status. FN-14 (R1 Automated) gating, exact DEV sheet guard, idempotent writes, no external calls, PROD untouched.
+
+### Model
+
+Heartbeats are ordinary `HealthChecks` rows, so no schema change and no S02 re-apply:
+
+| Column | Heartbeat value |
+|---|---|
+| `id` | `HB-<component>-<command_id>` — idempotency key |
+| `integration` | `Processing:<component>` (e.g. `Processing:AppSheetBridge`, `Processing:HealthMonitor`) |
+| `checked_at` | time of the processing attempt |
+| `outcome` | `OK`, `FAILED`, or a short failure code |
+| `last_success` | `checked_at` when OK; otherwise the component's previous last success carried forward |
+| `error_code` | null when OK; error text truncated to 200 chars otherwise |
+| `commit_id` | `S16-HB-<command_id>` |
+
+Component names: 1–48 chars of letters, digits, `_`, `-`. Replays of the same component + command_id return the existing row and write nothing. A same-id row that is not a heartbeat is refused as a collision.
+
+### States and alerts (`_s16HeartbeatStatus`, read-only)
+
+| State | Condition | Alert |
+|---|---|---|
+| Fresh | latest OK and last success within threshold | none |
+| Stale | last success older than threshold **and** office staffed | Warning |
+| Failing | latest attempt not OK | Warning; **Critical** when also stale |
+| Quiet | aged but office not staffed (weekend, holiday, out of hours) | none |
+| Never | component named in `expected` with no rows | Warning only when staffed |
+
+Threshold: Settings key `health.heartbeat_stale_minutes` (latest version wins; invalid values fall back) or explicit `stale_minutes`; default 120. Staffed window: `office.staffed_weekdays`, `office.hours` and `Holidays.office_closed`, evaluated in Europe/London. Default 09:00 inclusive to 17:00 exclusive, Monday–Friday. No seed change was made; the setting is optional.
+
+`_s16HealthStatus` now calls the heartbeat status, merges its alerts into `issues`/`warnings` with component `Heartbeat:<name>`, and reports `heartbeats` plus `summary.heartbeat_components` / `summary.heartbeat_alerts`. With no heartbeat rows the health result is unchanged, so prior S16/S17 behaviour is preserved.
+
+### Functions
+
+| Function | Purpose |
+|---|---|
+| `_s16RecordHeartbeat(store, {component, command_id, outcome?, error_code?, now?})` | Idempotent heartbeat write |
+| `_s16HeartbeatStatus(store, {now?, stale_minutes?, expected?})` | Per-component state, alerts, staffed window |
+| `_s16WithHeartbeat(store, {component, command_id}, fn)` | Fail-safe wrapper: records OK/FAILED around `fn`; a heartbeat refusal never masks `fn`'s result or error |
+| `_s16HeartbeatTick(store, {component?})` | One row per component per hour (`TICK-yyyy-MM-ddTHH`), for a time-driven trigger |
+| `runS16HeartbeatStatus()` | Cloud read-only status |
+| `runS16RecordHeartbeat(component, commandId, outcome, errorCode)` | Cloud write under ScriptLock |
+| `runS16HeartbeatTick()` | Cloud hourly tick for `HealthMonitor` (trigger **not** installed by code) |
+| `runS16HeartbeatSmoke()` | Zero-arg DEV smoke: OK → replay → Fresh; FAILED → Failing surfaced in health; recovery OK → Fresh. Toggles FN-13/14/16 outside the lock and restores Disabled/None |
+
+`runS16ResetFixture()` now also removes `Processing:S16Smoke` rows. Source: `s16/heartbeat.js`, bundled after `s16/health.js` by `npm run build:s16`. Tests: `npm run test:s16-heartbeat` (`tests/s16-heartbeat.test.cjs`, 16 tests including a zero-arg header-adapter cloud simulation).
+
+### Not done / follow-ups
+
+- No processing path calls `_s16WithHeartbeat` yet. Wiring the AppSheet request-row bridge is deferred because that adapter is in the other agent's active AppSheet lane.
+- No hourly trigger installed (cloud configuration). `runS16HeartbeatTick()` is safe to attach to an hourly time-driven trigger in DEV once the bundle is pasted.
+- Heartbeat alerts do not yet create follow-up Tasks; backlog item "Failure alerts" remains open.
+- `runS16DevBackupDriveSmoke()` (pre-existing) calls `_s16SetModes` inside `withLock`; `_s16SetModes` locks internally, so with a non-reentrant lock that smoke would report `S16_BUSY`. Not changed in this batch.
+- DEV cloud run of `runS16HeartbeatSmoke()` not yet executed.

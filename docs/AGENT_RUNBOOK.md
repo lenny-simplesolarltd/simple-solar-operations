@@ -429,3 +429,6 @@ Resource planning
 
 Current next action:
 Complete PersonSkills + flexible team model, then Calendar DEV integration.
+
+Claude backend batch (12 Sep 2026):
+Processing heartbeat implemented locally (s16/heartbeat.js, bundled into apps-script/s16/S16Health.js, 16 tests). Resilience item "Processing heartbeat" closed in AGENT_BACKLOG.md. DEV cloud run of runS16HeartbeatSmoke() and an hourly runS16HeartbeatTick() trigger remain to be applied after the bundle is pasted. Next Claude backend item per ownership list: DEV calendar write service (calendar-backend).

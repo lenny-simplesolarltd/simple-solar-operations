@@ -135,3 +135,48 @@ function runS16DevBackupDriveSmoke() {
     });
   });
 }
+
+/* --- Processing heartbeats (FN-14). Read-only status; idempotent writes under ScriptLock. --- */
+function runS16HeartbeatStatus() {
+  return _s16Result('S16 heartbeat status', function () { return Object.assign({ ok: true }, _s16HeartbeatStatus(_s16CloudStore(), {})); });
+}
+function runS16RecordHeartbeat(component, commandId, outcome, errorCode) {
+  return _s16Result('S16 record heartbeat', function () {
+    var s = _s16CloudStore();
+    return s.withLock(function () { return Object.assign({ ok: true }, _s16RecordHeartbeat(s, { component: component, command_id: commandId, outcome: outcome, error_code: errorCode })); });
+  });
+}
+/* Safe for an hourly time-driven trigger (not installed by code): one row per hour, replays are no-ops. */
+function runS16HeartbeatTick() {
+  return _s16Result('S16 heartbeat tick', function () {
+    var s = _s16CloudStore();
+    return s.withLock(function () { return Object.assign({ ok: true }, _s16HeartbeatTick(s, { component: 'HealthMonitor' })); });
+  });
+}
+/* Zero-arg DEV smoke: OK → replay → Fresh, FAILED → Failing surfaces in health, final OK leaves component Fresh.
+ * Modes are toggled outside the lock because _s16SetModes takes the ScriptLock itself (no nested locks). */
+function runS16HeartbeatSmoke() {
+  return _s16Result('S16 heartbeat smoke', function () {
+    var s = _s16CloudStore();
+    _s16SetModes(s, true);
+    try {
+      return s.withLock(function () {
+        var stamp = new Date().toISOString().replace(/[^0-9]/g, '').substring(0, 14);
+        function comp(status) { return status.components.filter(function (c) { return c.component === 'S16Smoke'; })[0] || null; }
+        var first = _s16RecordHeartbeat(s, { component: 'S16Smoke', command_id: 'SMOKE-' + stamp + '-OK' });
+        var replay = _s16RecordHeartbeat(s, { component: 'S16Smoke', command_id: 'SMOKE-' + stamp + '-OK' });
+        var fresh = comp(_s16HeartbeatStatus(s, {}));
+        var failed = _s16RecordHeartbeat(s, { component: 'S16Smoke', command_id: 'SMOKE-' + stamp + '-FAIL', outcome: 'FAILED', error_code: 'Synthetic smoke failure' });
+        var failing = comp(_s16HeartbeatStatus(s, {}));
+        var health = _s16HealthStatus(s);
+        var surfaced = health.warnings.concat(health.issues).some(function (w) { return w.component === 'Heartbeat:S16Smoke'; });
+        var recovered = _s16RecordHeartbeat(s, { component: 'S16Smoke', command_id: 'SMOKE-' + stamp + '-RECOVER' });
+        var after = comp(_s16HeartbeatStatus(s, {}));
+        var pass = !!(first.created && replay.replay && fresh && fresh.state === 'Fresh' && failed.created && failing && failing.state === 'Failing' && surfaced && recovered.created && after && after.state === 'Fresh' && after.last_success_at === recovered.last_success);
+        return { pass: pass, detail: { first: first.heartbeat_id, replay: replay.replay, fresh_state: fresh ? fresh.state : null, failing_state: failing ? failing.state : null, failing_error: failing ? failing.error_code : null, health_overall: health.overall, surfaced_in_health: surfaced, recovered_state: after ? after.state : null, external_calls: 0 } };
+      });
+    } finally {
+      _s16SetModes(s, false);
+    }
+  });
+}

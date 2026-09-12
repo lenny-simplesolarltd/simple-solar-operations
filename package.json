@@ -37,7 +37,8 @@
     "build:s20": "node scripts/build-s20.cjs",
     "test:s20": "npm run build:s20 && node --test tests/s20.test.cjs",
     "build:r1-appsheet": "node scripts/build-r1-appsheet.cjs",
-    "test:r1-appsheet": "npm run build:r1-appsheet && node --test tests/r1-appsheet.test.cjs"
+    "test:r1-appsheet": "npm run build:r1-appsheet && node --test tests/r1-appsheet.test.cjs",
+    "test:s16-heartbeat": "node --test tests/s16-heartbeat.test.cjs"
   },
   "engines": {
     "node": ">=22"
