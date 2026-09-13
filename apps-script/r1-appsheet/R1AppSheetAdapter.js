@@ -175,6 +175,18 @@ function _r1aCreate(options){
   return {read:read,command:command};
 }
 
+/* Single source of truth for the read delegates used by BOTH the bound cloud adapter and the generated standalone bridge.
+ * Delegates resolve S17/S11 globals at call time so either bundle can omit a stage without breaking unrelated reads;
+ * a missing delegate surfaces as R1A_READ_UNSUPPORTED at read time, never as a silently absent key. */
+function _r1aDefaultReads(){
+  function pick(name){return function(){var fn=(typeof globalThis!=='undefined'?globalThis:this)[name];if(typeof fn!=='function')_r1aRefuse('R1A_READ_UNSUPPORTED');return fn.apply(null,arguments);};}
+  return {
+    officeHome:pick('_s17OfficeToday'),jobSearch:pick('_s17JobSearch'),jobOverview:pick('_s17JobOverview'),operationalQueue:pick('_s17OperationalQueue'),
+    releaseModes:pick('_s17AdminReleaseModes'),systemStatus:pick('_s17AdminSystemStatus'),auditHistory:pick('_s17AuditHistory'),
+    actionAvailability:pick('_s17ActionAvailability'),taskActionAvailability:pick('_s17TaskActionAvailability'),
+    planner:function(s,asOf,weeks){var g=(typeof globalThis!=='undefined'?globalThis:this);if(typeof g._s11BuildPlanner!=='function')_r1aRefuse('R1A_READ_UNSUPPORTED');var start=asOf||(typeof Utilities!=='undefined'&&Utilities.formatDate?Utilities.formatDate(new Date(),'Europe/London','yyyy-MM-dd'):new Date().toISOString().slice(0,10));return g._s11BuildPlanner(s,start,weeks);}
+  };
+}
 
 /* Narrow ordinary-R1 services. Stage functions remain the business-rule authority. */
 'use strict';
@@ -748,7 +760,7 @@ if (typeof module !== 'undefined') module.exports = {
 function _r1aCloudOptions(){
   var store=_s17CloudStore();
   store.withLock=function(fn){var lock=LockService.getScriptLock();lock.waitLock(30000);try{return fn();}finally{lock.releaseLock();}};
-  return {store:store,config:{environment:'DEV',sheetId:R1A_BOUND_DEV_SHEET_ID},actorEmail:function(){return Session.getActiveUser().getEmail();},effectiveUserEmail:function(){return Session.getEffectiveUser().getEmail();},reads:{officeHome:_s17OfficeToday,jobSearch:_s17JobSearch,jobOverview:_s17JobOverview,operationalQueue:_s17OperationalQueue,releaseModes:_s17AdminReleaseModes,systemStatus:_s17AdminSystemStatus,auditHistory:_s17AuditHistory,actionAvailability:_s17ActionAvailability,taskActionAvailability:_s17TaskActionAvailability,planner:function(s,asOf,weeks){if(typeof _s11BuildPlanner!=='function')throw new Error('R1A_READ_UNSUPPORTED');var start=asOf||Utilities.formatDate(new Date(),'Europe/London','yyyy-MM-dd');return _s11BuildPlanner(s,start,weeks);}},services:_r1sServices()};
+  return {store:store,config:{environment:'DEV',sheetId:R1A_BOUND_DEV_SHEET_ID},actorEmail:function(){return Session.getActiveUser().getEmail();},effectiveUserEmail:function(){return Session.getEffectiveUser().getEmail();},reads:_r1aDefaultReads(),services:_r1sServices()};
 }
 function appSheetR1Read(requestJson){try{return JSON.stringify(_r1aCreate(_r1aCloudOptions()).read(JSON.parse(requestJson)));}catch(e){return JSON.stringify({ok:false,error:e.code||e.message||'R1A_REFUSED'});}}
 function appSheetR1Command(requestJson){try{return JSON.stringify(_r1aCreate(_r1aCloudOptions()).command(JSON.parse(requestJson)));}catch(e){return JSON.stringify({ok:false,error:e.code||e.message||'R1A_REFUSED'});}}

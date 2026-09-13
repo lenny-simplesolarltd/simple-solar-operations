@@ -105,7 +105,7 @@ const standaloneCloudOptions = `
 function _r1aCloudOptions(){
   var store=_s17CloudStore();
   store.withLock=function(fn){var lock=LockService.getScriptLock();lock.waitLock(30000);try{return fn();}finally{lock.releaseLock();}};
-  return {store:store,config:{environment:'DEV',sheetId:'1z7PNZtDdC4Z5eLbmTuQdqp0QpJSmuEvx3QvN3VyNTsc'},actorEmail:function(){return Session.getActiveUser().getEmail();},effectiveUserEmail:function(){return Session.getEffectiveUser().getEmail();},reads:{officeHome:_s17OfficeToday,jobSearch:_s17JobSearch,jobOverview:_s17JobOverview,operationalQueue:_s17OperationalQueue,releaseModes:_s17AdminReleaseModes,systemStatus:_s17AdminSystemStatus,auditHistory:_s17AuditHistory,actionAvailability:_s17ActionAvailability,taskActionAvailability:_s17TaskActionAvailability},services:_r1sServices()};
+  return {store:store,config:{environment:'DEV',sheetId:'1z7PNZtDdC4Z5eLbmTuQdqp0QpJSmuEvx3QvN3VyNTsc'},actorEmail:function(){return Session.getActiveUser().getEmail();},effectiveUserEmail:function(){return Session.getEffectiveUser().getEmail();},reads:_r1aDefaultReads(),services:_r1sServices()};
 }
 function appSheetR1Read(requestJson){try{return JSON.stringify(_r1aCreate(_r1aCloudOptions()).read(JSON.parse(requestJson)));}catch(e){return JSON.stringify({ok:false,error:e.code||e.message||'R1A_REFUSED'});}}
 function appSheetR1Command(requestJson){try{return JSON.stringify(_r1aCreate(_r1aCloudOptions()).command(JSON.parse(requestJson)));}catch(e){return JSON.stringify({ok:false,error:e.code||e.message||'R1A_REFUSED'});}}

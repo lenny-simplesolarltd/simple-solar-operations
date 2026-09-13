@@ -233,8 +233,8 @@
     },
     {
       "file": "apps-script/r1-appsheet/R1AppSheetAdapter.js",
-      "bytes": 80256,
-      "sha256": "85399c620c33665b70472f4c03e6bb362fafca54e91d9d973b114a3f1d96b67b",
+      "bytes": 81103,
+      "sha256": "7ea50823c5da7bc2b894cec2c2a3247918043c89217bc9ee08634d2ec0fffbcf",
       "entry_points": [
         "appSheetR1CommandFromRequestRow",
         "appSheetR1Read",
@@ -833,8 +833,8 @@
   ],
   "standalone_bridge": {
     "file": "standalone-bridge/AppSheetBridge.js",
-    "bytes": 278190,
-    "sha256": "f8aab8b1ec8b1b27f376e95cae5bbc92e9a6fad17d4368497142e23bee603da1",
+    "bytes": 279267,
+    "sha256": "3e0a73a5dc5e90f27385ffaa37bafb1c5c01a340e3e3ed0a5c7ea61757341385",
     "entry_points": [
       "appSheetR1CommandFromRequestRow",
       "appSheetR1Read",

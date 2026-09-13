@@ -174,4 +174,16 @@ function _r1aCreate(options){
   return {read:read,command:command};
 }
 
-if(typeof module!=='undefined')module.exports={R1A_BOUND_DEV_SHEET_ID,R1A_BOUND_READS,R1A_BOUND_COMMANDS,R1A_BOUND_QUEUES,_r1aActor,_r1aCreate};
+/* Single source of truth for the read delegates used by BOTH the bound cloud adapter and the generated standalone bridge.
+ * Delegates resolve S17/S11 globals at call time so either bundle can omit a stage without breaking unrelated reads;
+ * a missing delegate surfaces as R1A_READ_UNSUPPORTED at read time, never as a silently absent key. */
+function _r1aDefaultReads(){
+  function pick(name){return function(){var fn=(typeof globalThis!=='undefined'?globalThis:this)[name];if(typeof fn!=='function')_r1aRefuse('R1A_READ_UNSUPPORTED');return fn.apply(null,arguments);};}
+  return {
+    officeHome:pick('_s17OfficeToday'),jobSearch:pick('_s17JobSearch'),jobOverview:pick('_s17JobOverview'),operationalQueue:pick('_s17OperationalQueue'),
+    releaseModes:pick('_s17AdminReleaseModes'),systemStatus:pick('_s17AdminSystemStatus'),auditHistory:pick('_s17AuditHistory'),
+    actionAvailability:pick('_s17ActionAvailability'),taskActionAvailability:pick('_s17TaskActionAvailability'),
+    planner:function(s,asOf,weeks){var g=(typeof globalThis!=='undefined'?globalThis:this);if(typeof g._s11BuildPlanner!=='function')_r1aRefuse('R1A_READ_UNSUPPORTED');var start=asOf||(typeof Utilities!=='undefined'&&Utilities.formatDate?Utilities.formatDate(new Date(),'Europe/London','yyyy-MM-dd'):new Date().toISOString().slice(0,10));return g._s11BuildPlanner(s,start,weeks);}
+  };
+}
+if(typeof module!=='undefined')module.exports={R1A_BOUND_DEV_SHEET_ID,R1A_BOUND_READS,R1A_BOUND_COMMANDS,R1A_BOUND_QUEUES,_r1aActor,_r1aCreate,_r1aDefaultReads};
