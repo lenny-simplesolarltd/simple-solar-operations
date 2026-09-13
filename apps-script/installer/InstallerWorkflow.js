@@ -105,7 +105,12 @@ function _iwEvidenceRows(store, input, job, wp, items, category, submissionId, i
     var cat = it.category || category; if (IW_EVIDENCE_CATEGORIES.indexOf(cat) === -1) _iwRefuse('IW_REVIEW: evidence category must be one of ' + IW_EVIDENCE_CATEGORIES.join('/'));
     var id = 'EV-IW-' + wp.id + '-' + _iwHash(it.drive_file_id.trim());
     var existing = store.get('Evidence', id);
-    if (existing) { if (existing.job_id !== job.id) _iwRefuse('IW_REFUSED: evidence file already linked to another job'); out.push({ evidence_id: id, created: false }); return; }
+    if (existing) { if (existing.job_id !== job.id) _iwRefuse('IW_REFUSED: evidence file already linked to another job'); if (submissionId && existing.submission_id !== submissionId) {
+      // A returned/submitted version retains its original evidence links; create a new reference for the new version.
+      id += '-' + submissionId;
+      var linked = store.get('Evidence', id);
+      if (linked) { out.push({ evidence_id: id, created: false }); return; }
+    } else { out.push({ evidence_id: id, created: false }); return; } }
     store.insert('Evidence', { id: id, job_id: job.id, submission_id: submissionId || null, issue_id: issueId || null, category: cat, drive_file_id: it.drive_file_id.trim(), filename: _iwText(it.filename) ? it.filename.trim() : (cat.toLowerCase() + '-' + wp.id), mime_type: it.mime_type || null, upload_status: 'Uploaded', captured_at: it.captured_at || now, captured_by: input.actor, received_at: now, customer_shareable: it.customer_shareable === true, version: 1, checksum: it.checksum || null, created_at: now, commit_id: 'IW-' + input.command_id });
     out.push({ evidence_id: id, created: true });
   });
@@ -250,7 +255,8 @@ function _iwSaveCommissioningDraft(store, input) {
   var cmd = _iwCommandStart(store, input, 'WorkPackages', wp.id, { action: 'CommissioningDraft', answers: answers.map(function (a) { return [a.question_key, a.value_text === undefined ? null : a.value_text, a.value_number === undefined ? null : a.value_number, a.value_date === undefined ? null : a.value_date, a.value_boolean === undefined ? null : a.value_boolean, a.not_applicable_reason || null]; }) }); if (cmd.replay) return { replay: true };
   var now = _iwNow(input);
   var accepted = store.list('CommissioningSubmissions').filter(function (s) { return s.work_package_id === wp.id && s.status === 'Accepted'; })[0]; if (accepted) _iwRefuse('IW_REVIEW: commissioning already accepted for this package');
-  var sub = _iwOpenSubmission(store, wp), created = false;
+  var sub = input.submission_id ? store.get('CommissioningSubmissions', input.submission_id) : _iwOpenSubmission(store, wp), created = false;
+  if (sub && (sub.work_package_id !== wp.id || ['Draft','Returned'].indexOf(sub.status) < 0)) _iwRefuse('IW_REVIEW: draft submission mismatch');
   if (!sub) {
     var submitted = store.list('CommissioningSubmissions').filter(function (s) { return s.work_package_id === wp.id && ['Submitted', 'UnderReview'].indexOf(s.status) !== -1; })[0]; if (submitted) _iwRefuse('IW_REVIEW: a submission is awaiting review; wait for Returned or Accepted');
     var prior = store.list('CommissioningSubmissions').filter(function (s) { return s.work_package_id === wp.id; }).length;

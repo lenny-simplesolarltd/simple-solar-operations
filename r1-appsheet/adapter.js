@@ -2,8 +2,8 @@
 'use strict';
 
 const R1A_BOUND_DEV_SHEET_ID = '1z7PNZtDdC4Z5eLbmTuQdqp0QpJSmuEvx3QvN3VyNTsc';
-const R1A_BOUND_READS = ['IDENTITY_PROBE','OFFICE_HOME','JOB_SEARCH','JOB_OVERVIEW','OPERATIONAL_QUEUE','RELEASE_MODE_STATUS','SYSTEM_STATUS','AUDIT_HISTORY','ACTION_AVAILABILITY','TASK_ACTION_AVAILABILITY','MY_TASKS','TEAM_TASKS','PLANNER_3_WEEKS','PLANNER_6_WEEKS','INTAKE_REVIEW'];
-const R1A_BOUND_COMMANDS = ['TASK_COMPLETE','CALL_RECORD','ISSUE_UPDATE','ISSUE_CREATE','PLANNER_UPDATE','MOVE_JOB','CHANGE_INSTALLER','CANCEL_JOB','REINSTATE_JOB','DEPOSIT_CONFIRM','OPERATIONAL_COMPLETE','BOOKING_GATES','SOLD_INTAKE','BOOKING_INTAKE'];
+const R1A_BOUND_READS = ['IDENTITY_PROBE','OFFICE_HOME','JOB_SEARCH','JOB_OVERVIEW','OPERATIONAL_QUEUE','RELEASE_MODE_STATUS','SYSTEM_STATUS','AUDIT_HISTORY','ACTION_AVAILABILITY','TASK_ACTION_AVAILABILITY','MY_TASKS','TEAM_TASKS','PLANNER_3_WEEKS','PLANNER_6_WEEKS','INTAKE_REVIEW','INSTALLER_WORKFLOW','GOODS_IN_DETAIL','STOCK_BALANCE'];
+const R1A_BOUND_COMMANDS = ['TASK_COMPLETE','CALL_RECORD','ISSUE_UPDATE','ISSUE_CREATE','PLANNER_UPDATE','MOVE_JOB','CHANGE_INSTALLER','CANCEL_JOB','REINSTATE_JOB','DEPOSIT_CONFIRM','OPERATIONAL_COMPLETE','BOOKING_GATES','SOLD_INTAKE','BOOKING_INTAKE','IW_START','IW_PROGRESS','IW_REPORT_COMPLETION','IW_REPORT_PROBLEM','IW_REPORT_VARIATION','IW_COMMISSIONING_DRAFT','IW_COMMISSIONING_SUBMIT','COMMISSIONING_REVIEW','GOODS_IN_RECEIVE','STOCK_QUARANTINE'];
 const R1A_BOUND_QUEUES = ['booking','calls','issues','payments','ghl','cancellation','intake_review'];
 
 function _r1aCopy(v) { return JSON.parse(JSON.stringify(v)); }
@@ -50,7 +50,9 @@ function _r1aFilterTasks(store,a,items){return (items||[]).filter(function(t){re
 function _r1aCreate(options){
   var store=options.store, reads=options.reads||{}, services=options.services||{};
   function read(input){
-    _r1aGuardEnvironment(options);_r1aKeys(input,['read_type','job_id','task_id','queue','as_of','query']);
+    _r1aGuardEnvironment(options);
+    if(input&&['INSTALLER_WORKFLOW','GOODS_IN_DETAIL','STOCK_BALANCE'].indexOf(input.read_type)>=0){var contract=typeof _r1cRead==='function'?_r1cRead:require('./operations-contract.js')._r1cRead;return contract(store,_r1aActor(store,options.actorEmail()),input);}
+    _r1aKeys(input,['read_type','job_id','task_id','queue','as_of','query']);
     if(R1A_BOUND_READS.indexOf(input.read_type)<0)_r1aRefuse('R1A_UNKNOWN_READ');
     if(input.read_type==='IDENTITY_PROBE'){
       if(Object.keys(input).length!==1)_r1aRefuse('R1A_INVALID_FIELDS');
@@ -134,6 +136,7 @@ function _r1aCreate(options){
     var a=_r1aGuard(options);_r1aKeys(input,['command_id','command_type','job_id','task_id','issue_id','work_package_id','old_allocation_id','expected_version','payload']);
     if(!_r1aText(input.command_id))_r1aRefuse('R1A_COMMAND_ID_REQUIRED');
     if(R1A_BOUND_COMMANDS.indexOf(input.command_type)<0)_r1aRefuse('R1A_UNKNOWN_COMMAND');
+    if(input.command_type.indexOf('IW_')===0||['COMMISSIONING_REVIEW','GOODS_IN_RECEIVE','STOCK_QUARANTINE'].indexOf(input.command_type)>=0){var execute=typeof _r1cExecute==='function'?_r1cExecute:require('./operations-contract.js')._r1cExecute;return{ok:true,command_type:input.command_type,actor_id:a.id,result:execute(store,a,input)};}
     if(!_r1aOffice(a))_r1aRefuse('R1A_ROLE_DENIED');
     var service=services[input.command_type];
     if(typeof service!=='function')_r1aRefuse('R1A_COMMAND_UNSUPPORTED');

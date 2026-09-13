@@ -183,8 +183,8 @@
     },
     {
       "file": "apps-script/installer/InstallerWorkflow.js",
-      "bytes": 53141,
-      "sha256": "eaff3814192fa9ab98375e17935e8d588d5801443dca13eb2dd4fda173b3e205",
+      "bytes": 53721,
+      "sha256": "15bb9cb3812ffd3b0c881feb0a47c784817d1c281c9b9bfae34deadc85352657",
       "entry_points": [
         "runIwEnableFn06ForSyntheticTest",
         "restoreIwSafeState",
@@ -207,8 +207,8 @@
     },
     {
       "file": "apps-script/materials/MaterialsWorkflow.js",
-      "bytes": 77565,
-      "sha256": "3e19b7051339e1bdb8704a37d24353eefeb99aebb83d1bb7808eb3a0ccfbbcfe",
+      "bytes": 80269,
+      "sha256": "945a1abc0e85cfbbee9f8e32d00fb2e83fe18f8c9922e9d01923cb917bd3240e",
       "entry_points": [
         "runMatRequirements",
         "runMatOrderView",
@@ -233,9 +233,11 @@
     },
     {
       "file": "apps-script/r1-appsheet/R1AppSheetAdapter.js",
-      "bytes": 81103,
-      "sha256": "7ea50823c5da7bc2b894cec2c2a3247918043c89217bc9ee08634d2ec0fffbcf",
+      "bytes": 113061,
+      "sha256": "5bb554a5bc8bffbe7bd46f3f6c8ea1df65e9298e290e64b2f12c4bc48c26b901",
       "entry_points": [
+        "runR1CRequestProvisionCheck",
+        "runR1CProvisionRequestTables",
         "appSheetR1CommandFromRequestRow",
         "appSheetR1Read",
         "appSheetR1Command",
@@ -245,13 +247,16 @@
       ],
       "services": [
         "SpreadsheetApp",
+        "DriveApp",
+        "PropertiesService",
         "LockService",
         "Session",
         "Utilities"
       ],
       "config_keys": [
         "environment",
-        "sheetId"
+        "sheetId",
+        "evidenceFolderId"
       ],
       "hardcoded_dev_sheet_id": true,
       "hardcoded_dev_calendar_id": false
@@ -833,15 +838,19 @@
   ],
   "standalone_bridge": {
     "file": "standalone-bridge/AppSheetBridge.js",
-    "bytes": 279267,
-    "sha256": "3e0a73a5dc5e90f27385ffaa37bafb1c5c01a340e3e3ed0a5c7ea61757341385",
+    "bytes": 408952,
+    "sha256": "aa5a2c62a7802742ba954f5f47da99685165e69c4072db196c4d8d7b9c2e3b13",
     "entry_points": [
+      "runR1CRequestProvisionCheck",
+      "runR1CProvisionRequestTables",
       "appSheetR1CommandFromRequestRow",
       "appSheetR1Read",
       "appSheetR1Command"
     ],
     "services": [
       "SpreadsheetApp",
+      "DriveApp",
+      "PropertiesService",
       "LockService",
       "Session",
       "Utilities"
@@ -869,7 +878,9 @@
     "build:s19",
     "build:s20",
     "build:scaffold",
+    "build:standalone-bridge",
     "test",
+    "test:appsheet-operations",
     "test:backup",
     "test:calendar",
     "test:installer",

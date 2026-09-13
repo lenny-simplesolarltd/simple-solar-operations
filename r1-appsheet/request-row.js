@@ -7,7 +7,17 @@ var R1A_REQUEST_DEV_SHEET = '1z7PNZtDdC4Z5eLbmTuQdqp0QpJSmuEvx3QvN3VyNTsc';
 var R1A_REQUEST_TABLES = {
   SOLD_INTAKE: 'DEVNewJobSoldRequests',
   BOOKING_INTAKE: 'DEVBookingIntakeRequests',
-  ISSUE_CREATE: 'DEVCreateIssueRequests'
+  ISSUE_CREATE: 'DEVCreateIssueRequests',
+  IW_START: 'DEVInstallerCommandRequests',
+  IW_PROGRESS: 'DEVInstallerCommandRequests',
+  IW_REPORT_COMPLETION: 'DEVInstallerCommandRequests',
+  IW_REPORT_PROBLEM: 'DEVInstallerCommandRequests',
+  IW_REPORT_VARIATION: 'DEVInstallerCommandRequests',
+  IW_COMMISSIONING_DRAFT: 'DEVInstallerCommandRequests',
+  IW_COMMISSIONING_SUBMIT: 'DEVInstallerCommandRequests',
+  COMMISSIONING_REVIEW: 'DEVInstallerCommandRequests',
+  GOODS_IN_RECEIVE: 'DEVGoodsInRequests',
+  STOCK_QUARANTINE: 'DEVStockCommandRequests'
 };
 
 function _r1aReqRefuse(code) { var e = new Error(code); e.code = code; throw e; }
@@ -152,6 +162,8 @@ function _r1aDispatchBuiltRequest(request, actorEmail) {
 function _r1aCommandFromRequestRow(commandType, requestRowId, actorEmail, deps) {
   deps = deps || {};
   var type = typeof commandType === 'string' ? commandType.trim() : '';
+  var ops = typeof _r1cRequestTable === 'function' ? { _r1cRequestTable: _r1cRequestTable, _r1cCommandFromRow: _r1cCommandFromRow } : (typeof require === 'function' ? require('./operations-requests.js') : null);
+  if (ops && ops._r1cRequestTable(type)) return ops._r1cCommandFromRow(type, requestRowId, actorEmail, deps);
   if (!R1A_REQUEST_TABLES[type]) _r1aReqRefuse('R1A_UNKNOWN_COMMAND');
   if (!_r1aReqPresent(requestRowId) || !String(requestRowId).trim()) _r1aReqRefuse('R1A_REQUEST_NOT_FOUND');
   var actor = _r1aReqEmail(typeof actorEmail === 'string' ? actorEmail : '');

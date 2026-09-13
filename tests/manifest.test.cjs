@@ -13,14 +13,16 @@ test('MANIFEST 02: external Google services appear only where authorised', () =>
   const m = build();
   const allow = {
     CalendarApp: ['apps-script/S01Probe.js', 'apps-script/calendar/CalendarSync.js'],
-    DriveApp: ['apps-script/s16/S16Health.js', 'apps-script/backup/BackupService.js'],
+    DriveApp: ['apps-script/s16/S16Health.js', 'apps-script/backup/BackupService.js', 'apps-script/r1-appsheet/R1AppSheetAdapter.js'],
     UrlFetchApp: ['apps-script/s04-bridge/BridgeCore.gs'],
     MailApp: ['apps-script/S01Probe.js'],
     GmailApp: [],
     ScriptApp: ['apps-script/S01Probe.js', 'apps-script/s04-bridge/BridgeCore.gs', 'apps-script/s04/S04Core.gs']
   };
   for (const b of m.bundles) for (const s of Object.keys(allow)) if (b.services.includes(s)) assert.ok(allow[s].includes(b.file), b.file + ' uses ' + s + ' but is not on the allowlist');
-  assert.deepEqual(m.standalone_bridge.services.filter(s => Object.keys(allow).includes(s)), [], 'standalone bridge must not call external services');
+  assert.deepEqual(m.standalone_bridge.services.filter(s => Object.keys(allow).includes(s)), ['DriveApp'], 'standalone bridge only reads metadata for AppSheet uploads');
+  const bridge = fs.readFileSync(m.standalone_bridge.file, 'utf8');
+  assert.doesNotMatch(bridge, /DriveApp\.(?:create|remove)|\.(?:setSharing|addEditor|setTrashed|moveTo)\(/, 'no Drive mutations in bridge');
   /* Every bundle that writes is locked to the DEV sheet id. */
   for (const b of m.bundles) if (b.entry_points.some(e => /^run|^appSheet/.test(e)) && !/S01Probe|S02Provisioner|S04Fixture|s04-bridge|s04\//.test(b.file)) assert.ok(b.hardcoded_dev_sheet_id, b.file + ' should carry the DEV sheet id guard');
   const cal = m.bundles.find(b => b.file === 'apps-script/calendar/CalendarSync.js');

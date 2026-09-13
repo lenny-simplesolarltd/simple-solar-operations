@@ -583,8 +583,32 @@ function _matStoreQueue(store, input) {
   return { from: from, to: to, expected_deliveries: deliveries, open_store_tasks: picks };
 }
 
+/* Staff quarantine: one-way usable store -> quarantine, never release/dispose/adjust stock. */
+function _matStockBalance(store, productId, locationId) {
+  return store.list('StockMovements').filter(function(m){return m.product_id===productId;}).reduce(function(total,m){var q=Number(m.quantity);if(!Number.isFinite(q)||q<0)_matRefuse('MAT_REVIEW: invalid stock ledger');return total+(m.to_location_id===locationId?q:0)-(m.from_location_id===locationId?q:0);},0);
+}
+function _matQuarantineStock(store,input) {
+  _matGuardStore(store);_matRequirePilot(store,'FN-05');
+  var product=store.get('Products',input.product_id),from=store.get('StockLocations',MAT_LOC.store),to=store.get('StockLocations',MAT_LOC.quarantine);
+  if(!product||!_matIsTrue(product.active)||!_matIsTrue(product.stock_tracked)||!from||!_matIsTrue(from.usable)||!to||to.type!=='Quarantine'||_matIsTrue(to.usable))_matRefuse('MAT_REVIEW: stock configuration invalid');
+  if(typeof input.quantity!=='number'||!Number.isFinite(input.quantity)||input.quantity<=0||!_matText(input.reason))_matRefuse('MAT_REVIEW: positive quantity and reason required');
+  if(input.evidence_id&&!store.get('Evidence',input.evidence_id))_matRefuse('MAT_REVIEW: evidence not found');
+  var balance=_matStockBalance(store,product.id,MAT_LOC.store);
+  var changes={action:'Quarantine',product_id:product.id,quantity:input.quantity,expected_balance:input.expected_balance,reason:input.reason,evidence_id:input.evidence_id||null};
+  // Replay before version/balance comparison; caller serializes the whole operation.
+  var prior=store.get('CommitJournal','CJ-MAT-'+input.command_id);
+  if(!prior){_matExpect(product,input);if(typeof input.expected_balance!=='number'||input.expected_balance!==balance)_matRefuse('MAT_STALE: stock balance');if(input.quantity>balance)_matRefuse('MAT_REVIEW: insufficient stock');}
+  var cmd=_matCommandStart(store,input,'Products',product.id,changes);if(cmd.replay)return{replay:true};
+  var now=_matNow(input),id='SM-QUARANTINE-'+input.command_id;
+  store.insert('StockMovements',{id:id,product_id:product.id,quantity:input.quantity,from_location_id:MAT_LOC.store,to_location_id:MAT_LOC.quarantine,movement_type:'Damage',job_id:null,receipt_line_id:null,reason:input.reason,evidence_id:input.evidence_id||null,approval_id:null,movement_at:now,idempotency_key:id,created_at:now,commit_id:'MAT-'+input.command_id});
+  var after=_matPatch(store,'Products',product,{},input,now);
+  _matAudit(store,'StockMovements',id,'Quarantine',null,store.get('StockMovements',id),input,now);_matCommit(store,input,now);
+  return{replay:false,movement_id:id,store_balance:balance-input.quantity,expected_version:after.version,external_calls:0};
+}
+
 if (typeof module !== 'undefined') {
   module.exports = {
+    _matStockBalance, _matQuarantineStock,
     MAT_DEV_SHEET_ID, MAT_SOURCES, MAT_WORK_TYPES, MAT_ORDER_STATUSES, MAT_LOC, MAT_TEMPLATES,
     _matAddRequirement, _matRequirements, _matBuildOrders, _matSendOrder, _matConfirmOrder, _matReviseOrder, _matCancelOrder, _matReceiveDelivery, _matWeeklyList, _matOrderView, _matStoreQueue,
     _matDeliveryDate, _matListDateFor, _matLeadRisk, _matMonday, _matLondonInstant, _matDate, _matGuardStore, _matReceivedForLine
