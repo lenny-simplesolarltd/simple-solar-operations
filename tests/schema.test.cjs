@@ -163,11 +163,26 @@ test('config seed references valid tables and IDs', () => {
   // People count matches spec requirement
   assert.ok(configSeed.People.length >= 7, 'expected at least 7 People, found ' + configSeed.People.length);
 
-  // Tanya, Ben, Hannah seeded
+  // Tanya, Ben, Hannah, Lenny DEV seeded
   const names = configSeed.People.map(p => p.display_name);
   assert.ok(names.some(n => n.includes('Tanya')), 'Tanya not seeded');
   assert.ok(names.some(n => n.includes('Ben')), 'Ben not seeded');
   assert.ok(names.some(n => n.includes('Hannah')), 'Hannah not seeded');
+  const lenny = configSeed.People.find(p => p.id === 'PERSON-lenny-dev');
+  assert.ok(lenny, 'PERSON-lenny-dev not seeded');
+  assert.equal(lenny.email, 'lenny@simplesolarltd.co.uk');
+  assert.equal(lenny.role, 'Admin');
+  assert.equal(lenny.active, true);
+  assert.ok(configSeed.PersonRoles.some(r => r.id === 'PROLE-lenny-admin' && r.person_id === 'PERSON-lenny-dev' && r.role === 'Admin' && r.active === true), 'PROLE-lenny-admin not seeded');
+  assert.ok(configSeed.PersonRoles.some(r => r.id === 'PROLE-ben-admin' && r.person_id === 'PERSON-ben' && r.role === 'Admin'), 'Ben Admin role unchanged');
+  assert.ok(configSeed.PersonRoles.some(r => r.id === 'PROLE-dan-director' && r.person_id === 'PERSON-dan' && r.role === 'Director'), 'Dan Director role unchanged');
+  const pre04 = configSeed.TaskTemplates.find(t => t.template_code === 'PRE04');
+  assert.ok(pre04, 'PRE04 TaskTemplate not seeded');
+  assert.equal(pre04.id, 'TPL-PRE04');
+  assert.equal(pre04.active, true);
+  assert.equal(pre04.group, 'Prebooking');
+  assert.equal(pre04.default_owner_role, 'Office');
+  assert.match(pre04.title, /customer details and sold\/presale amount/i);
 
   // Greentech/Tom and CEF/Luke seeded
   assert.ok(configSeed.Companies.some(c => c.name === 'Greentech'), 'Greentech not seeded');

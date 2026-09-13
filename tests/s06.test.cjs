@@ -420,6 +420,29 @@ test('S06: completed tasks not recreated on re-evaluation', () => {
   assert.equal(bkg01Tasks[0].status, 'Complete');
 });
 
+test('S06: PRE04 template is ensured and BOOKING_GATES idempotently backfills a missing PRE04', () => {
+  const store = makeStore();
+  installBaseFixture(store);
+  const job = Object.assign({}, buildReadyJob(), {
+    id: 'J-s06-pre04-miss',
+    job_id: 'SS-S06P-MISS',
+    customer_id: 'CUST-s06-miss',
+    sold_submission_id: 'S06-sold-miss',
+    booking_submission_id: null,
+    workflow_stage: 'Prebooking'
+  });
+  store.insert('Jobs', job);
+  store.insert('Customers', buildCustomer(job.customer_id, 'Mia', 'Miss'));
+  store.update('TaskTemplates', 'TPL-PRE04', { active: false });
+  assert.equal(store.list('Tasks').filter(t => t.job_id === job.id && t.template_code === 'PRE04').length, 0);
+  const first = createTasksForJob(job, { ready: false }, store);
+  assert.ok(first.created.some(c => c.template === 'PRE04'));
+  assert.ok(store.list('TaskTemplates').some(t => t.template_code === 'PRE04' && t.active !== false));
+  const second = createTasksForJob(job, { ready: false }, store);
+  assert.ok(second.skipped.some(s => s.template === 'PRE04'));
+  assert.equal(store.list('Tasks').filter(t => t.job_id === job.id && t.template_code === 'PRE04').length, 1);
+});
+
 /* --- VM smoke test --- */
 test('S06: S06Gates.js entry points run via VM', () => {
   var modeHdrs = ['id','function_id','function_name','mode','mode_record_basis','authorised_job_scope','target_release','planned_target_mode','current_system','fallback','external_ids_protected_reference','activation_time','approved_version','ben_approval_reference','scope_boundary_notes','created_at','created_by','updated_at','updated_by','version','commit_id'];

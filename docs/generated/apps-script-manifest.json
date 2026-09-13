@@ -80,8 +80,8 @@
     },
     {
       "file": "apps-script/S02SeedData.js",
-      "bytes": 23984,
-      "sha256": "ffcfe19693f28c0549653ff6cf1576a9ec8ad094d9b914b44d0acd390f4072b9",
+      "bytes": 24478,
+      "sha256": "fe0f9f9807b52a4012fd76de0b8af414c30b988c91ed9894dfe9ffb493952b2e",
       "entry_points": [],
       "services": [],
       "config_keys": [],
@@ -233,12 +233,17 @@
     },
     {
       "file": "apps-script/r1-appsheet/R1AppSheetAdapter.js",
-      "bytes": 113061,
-      "sha256": "5bb554a5bc8bffbe7bd46f3f6c8ea1df65e9298e290e64b2f12c4bc48c26b901",
+      "bytes": 157659,
+      "sha256": "29afa31a9a23bfe18f0df09da07784e1548c3158583ec6dba2e4a1e3dd2e7466",
       "entry_points": [
         "runR1CRequestProvisionCheck",
         "runR1CProvisionRequestTables",
         "appSheetR1CommandFromRequestRow",
+        "runR1AReconcileTonyPaymentStages",
+        "runR1ABackfillTonyPre04",
+        "runR1AApplyTonyPre02ContractSideEffect",
+        "runR1URetryUploadRequests",
+        "runR1UUploadRetryStatus",
         "appSheetR1Read",
         "appSheetR1Command",
         "runR1APrepareDepositConfirmFixture",
@@ -709,8 +714,8 @@
     },
     {
       "file": "apps-script/s17/S17Admin.js",
-      "bytes": 74921,
-      "sha256": "8476b13bd8ebd64f2e6f44c502262f21916e273377312fc105b427a05a860b7e",
+      "bytes": 75552,
+      "sha256": "1310a449617ec6ec44756cfa8458689edde5ecd6e38741a29ddf939cb6471e72",
       "entry_points": [
         "runS17FixtureDryRun",
         "runS17FixtureApply",
@@ -838,12 +843,17 @@
   ],
   "standalone_bridge": {
     "file": "standalone-bridge/AppSheetBridge.js",
-    "bytes": 408952,
-    "sha256": "aa5a2c62a7802742ba954f5f47da99685165e69c4072db196c4d8d7b9c2e3b13",
+    "bytes": 454461,
+    "sha256": "163ea7bbedd60e3ff15d5eddb069bb18867aa49244a77a4335a85f708a077df0",
     "entry_points": [
       "runR1CRequestProvisionCheck",
       "runR1CProvisionRequestTables",
       "appSheetR1CommandFromRequestRow",
+      "runR1AReconcileTonyPaymentStages",
+      "runR1ABackfillTonyPre04",
+      "runR1AApplyTonyPre02ContractSideEffect",
+      "runR1URetryUploadRequests",
+      "runR1UUploadRetryStatus",
       "appSheetR1Read",
       "appSheetR1Command"
     ],

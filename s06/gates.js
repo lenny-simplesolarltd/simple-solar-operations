@@ -170,6 +170,49 @@ function fridayBefore(date, holidays) {
 
 /* --- Task creation --- */
 
+function ensurePre04Template(store, now) {
+  const active = store.list('TaskTemplates').find(t => t.template_code === 'PRE04' && t.active !== false);
+  if (active) return active;
+  const at = now || new Date().toISOString();
+  const existing = store.get('TaskTemplates', 'TPL-PRE04') ||
+    store.list('TaskTemplates').find(t => t.template_code === 'PRE04') || null;
+  if (existing) {
+    store.update('TaskTemplates', existing.id, {
+      active: true,
+      title: 'Check customer details and sold/presale amount',
+      group: 'Prebooking',
+      default_owner_role: 'Office',
+      trigger_event: 'New sale',
+      due_rule: 'Before booking approval',
+      evidence_required: 'Checked fields and source references',
+      updated_at: at,
+      updated_by: 'S06-gates',
+      version: Number(existing.version || 0) + 1
+    });
+    return store.get('TaskTemplates', existing.id);
+  }
+  const row = {
+    id: 'TPL-PRE04',
+    template_code: 'PRE04',
+    title: 'Check customer details and sold/presale amount',
+    group: 'Prebooking',
+    default_owner_role: 'Office',
+    trigger_event: 'New sale',
+    due_rule: 'Before booking approval',
+    evidence_required: 'Checked fields and source references',
+    active: true,
+    template_version: '1.0',
+    created_at: at,
+    created_by: 'S06-gates',
+    updated_at: at,
+    updated_by: 'S06-gates',
+    version: 1,
+    commit_id: 'S06-TPL-PRE04'
+  };
+  store.insert('TaskTemplates', row);
+  return row;
+}
+
 function createTasksForJob(job, gateResult, store, options = {}) {
   /* S15: stop normal work during cancellation and controlled reopen review. */
   var S15_job = job; if (S15_job && (S15_job.cancellation_at || ['CancellationInProgress','Cancelled'].includes(S15_job.workflow_stage) || store.list('Tasks').some(function(t){return t.job_id===S15_job.id&&t.template_code==='S15-REOPEN-REVIEW'&&!['Complete','NotRequired'].includes(t.status);}))) throw new Error('S15_REVIEW: normal work suppressed');
@@ -259,6 +302,13 @@ function createTasksForJob(job, gateResult, store, options = {}) {
     const tpl = getTemplate('PRE03');
     const danId = store.get('People', 'PERSON-dan') && store.get('People', 'PERSON-dan').active === true ? 'PERSON-dan' : null;
     if (tpl) createTask(tpl, adminId, nextStaffedDay(now, holidays), 2, danId);
+  }
+
+  // PRE04: Check customer details and sold/presale amount — Sold creates it; BOOKING_GATES backfills if missing
+  ensurePre04Template(store, now);
+  {
+    const tpl = getTemplate('PRE04');
+    if (tpl) createTask(tpl, tanyaId, null, 2);
   }
 
   // BKG01: Prepare booking — always create when booking linked
@@ -406,6 +456,8 @@ function createPrebookingTasksForSold(job, store, options = {}) {
     return task;
   }
 
+  ensurePre04Template(store, now);
+
   if (job.finance_route === 'Standard') {
     const tpl = getTemplate('PRE01');
     if (tpl) createTask(tpl, tanyaId, null, now, 1);
@@ -526,5 +578,6 @@ function processBookingGates(jobId, store, options = {}) {
 module.exports = {
   DEV_SHEET_ID,
   evaluateReadyToBook, evaluateBookingGates, taskSatisfaction, createTasksForJob, createPrebookingTasksForSold, processBookingGates,
+  ensurePre04Template,
   isStaffedDay, nextStaffedDay, fridayBefore, resolvePersonByRole
 };

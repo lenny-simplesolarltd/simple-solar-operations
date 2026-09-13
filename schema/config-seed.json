@@ -1,7 +1,7 @@
 {
   "config_version": "S02-CONFIG-1.0",
   "generated": "2026-09-12",
-  "notes": "Synthetic seed data only. Missing real addresses/emails/IDs marked NOT_CONFIGURED. No real customer, staff, or financial data.",
+  "notes": "Synthetic seed data only. Missing real addresses/emails/IDs marked NOT_CONFIGURED. Exception: PERSON-lenny-dev uses the approved DEV implementer email so rebuild/reseed preserves Admin authorization. No real customer or financial data.",
 
   "Companies": [
     {"id": "COMP-greentech", "name": "Greentech", "type": "Merchant", "active": true, "standard_lead_days": 14, "delivery_weekday": 4, "notes": "Roofing merchant. Contact: Tom — email NOT_CONFIGURED."},
@@ -21,14 +21,16 @@
     {"id": "PERSON-store", "email": "NOT_CONFIGURED", "display_name": "Store Owner", "role": "Store", "company_id": null, "active": true, "calendar_id": "NOT_CONFIGURED", "notification_email": "NOT_CONFIGURED", "capacity_per_day": null, "available_from": null, "available_to": null, "backup_person_id": null},
     {"id": "PERSON-installer-a", "email": "NOT_CONFIGURED", "display_name": "Installer A (test)", "role": "Installer", "company_id": null, "active": true, "calendar_id": "NOT_CONFIGURED", "notification_email": "NOT_CONFIGURED", "capacity_per_day": null, "available_from": null, "available_to": null, "backup_person_id": null},
     {"id": "PERSON-installer-b", "email": "NOT_CONFIGURED", "display_name": "Installer B (test)", "role": "Installer", "company_id": null, "active": true, "calendar_id": "NOT_CONFIGURED", "notification_email": "NOT_CONFIGURED", "capacity_per_day": null, "available_from": null, "available_to": null, "backup_person_id": null},
-    {"id": "PERSON-scaffolder", "email": "NOT_CONFIGURED", "display_name": "Scaffolder (test)", "role": "Scaffolder", "company_id": null, "active": true, "calendar_id": "NOT_CONFIGURED", "notification_email": "NOT_CONFIGURED", "capacity_per_day": null, "available_from": null, "available_to": null, "backup_person_id": null}
+    {"id": "PERSON-scaffolder", "email": "NOT_CONFIGURED", "display_name": "Scaffolder (test)", "role": "Scaffolder", "company_id": null, "active": true, "calendar_id": "NOT_CONFIGURED", "notification_email": "NOT_CONFIGURED", "capacity_per_day": null, "available_from": null, "available_to": null, "backup_person_id": null},
+    {"id": "PERSON-lenny-dev", "email": "lenny@simplesolarltd.co.uk", "display_name": "Lenny (DEV)", "role": "Admin", "company_id": null, "active": true, "calendar_id": "NOT_CONFIGURED", "notification_email": "NOT_CONFIGURED", "capacity_per_day": null, "available_from": null, "available_to": null, "backup_person_id": null}
   ],
 
   "PersonRoles": [
     {"id": "PROLE-tanya-office", "person_id": "PERSON-tanya", "role": "Office", "active": true},
     {"id": "PROLE-ben-admin", "person_id": "PERSON-ben", "role": "Admin", "active": true},
     {"id": "PROLE-dan-director", "person_id": "PERSON-dan", "role": "Director", "active": true},
-    {"id": "PROLE-hannah-office", "person_id": "PERSON-hannah", "role": "Office", "active": true}
+    {"id": "PROLE-hannah-office", "person_id": "PERSON-hannah", "role": "Office", "active": true},
+    {"id": "PROLE-lenny-admin", "person_id": "PERSON-lenny-dev", "role": "Admin", "active": true}
   ],
 
   "PermissionRules": [

@@ -37,6 +37,7 @@ const sourceFiles = [
   'r1-appsheet/adapter.js',
   'r1-appsheet/services.js',
   'r1-appsheet/request-row.js',
+  'r1-appsheet/upload-retry.js',
 ];
 
 // Standalone cloud store (uses openById — safe in non-bound standalone projects)

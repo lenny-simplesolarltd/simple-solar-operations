@@ -165,10 +165,80 @@ LINKTOFORM("Complete Task Form", "task_id", [id], "expected_version", [version])
 
 | Button | command_type | Key payload |
 |---|---|---|
-| Complete Task | TASK_COMPLETE | completion_note |
+| Complete Task | TASK_COMPLETE | completion_note; evidence_path (PRE02/PRE04) or evidence_id fallback |
 | Record Call | CALL_RECORD | type, outcome |
 | Update Issue | ISSUE_UPDATE | action REASSIGN/TRANSITION |
 | Create Issue | ISSUE_CREATE | helper row via `appSheetR1CommandFromRequestRow` |
+
+### TASK_COMPLETE with office evidence upload (DEV only)
+
+Create `DEVTaskCompleteRequests` in the DEV spreadsheet only, with these columns in order:
+
+`id`, `command_id`, `task_id`, `expected_version`, `completion_note`, `evidence_path`, `evidence_id`, `submitted_by`, `submitted_at`, `status`, `result_status`, `result_message`
+
+Set `id` and `command_id` Initial value to `UNIQUEID()`, `submitted_by` Initial value to `USEREMAIL()`, `submitted_at` Initial value to `NOW()`, and `status` Initial value to `"Ready"`. Make `id`, `command_id`, `task_id`, `expected_version`, `completion_note`, `evidence_path`, `evidence_id`, `submitted_by`, `submitted_at`, and `status` non-editable after form creation; make every `result_*` column read-only. Do not permit users to edit `submitted_by`.
+
+`evidence_path` is an AppSheet **File** column. AppSheet uploads into the configured DEV evidence folder (`S01_CONFIG.evidenceFolderId`). The bridge resolves the path with `_r1cResolveUpload`, creates/reuses an Evidence row idempotently for `job_id + drive_file_id`, and passes `Evidence.id` into TASK_COMPLETE. Categories: PRE02 → `Contract`, PRE04 → `CustomerDetails`. Do **not** give AppSheet Add/Edit on the Evidence table.
+
+`evidence_id` remains an optional temporary text fallback for opaque refs when no file is uploaded. Prefer `evidence_path` for PRE02/PRE04.
+
+From Task Detail (Open / Waiting / InProgress), use:
+
+```
+LINKTOFORM("DEV Complete Task Form", "task_id", [id], "expected_version", [version])
+```
+
+Bot: Adds only, filter `[status] = "Ready"`, call:
+
+```
+appSheetR1CommandFromRequestRow("TASK_COMPLETE", [id], USEREMAIL())
+```
+
+Arguments (exactly three): `commandType` = `"TASK_COMPLETE"`, `requestRowId` = `[id]`, `actorEmail` = `USEREMAIL()`.
+
+If you still use a JSON `appSheetR1Command` Complete Task path, allow payload keys `completion_note`, `evidence_path`, and optional `evidence_id` only — never invent Evidence ids in AppSheet.
+
+### TASK_EVIDENCE_ATTACH (legacy completed PRE02 repair, DEV only)
+
+Use this only when a PRE02 task is already `Complete` with blank `evidence_id` (completion predates contract evidence). Do **not** reopen the task. New PRE02 completions still use `TASK_COMPLETE` + `evidence_path`.
+
+Create `DEVTaskEvidenceAttachRequests` in the DEV spreadsheet only, columns in order:
+
+`id`, `command_id`, `task_id`, `expected_version`, `evidence_path`, `submitted_by`, `submitted_at`, `status`, `result_status`, `result_message`
+
+Initials: `id`/`command_id` = `UNIQUEID()`; `submitted_by` = `USEREMAIL()`; `submitted_at` = `NOW()`; `status` = `"Ready"`. Lock identity/input columns after create; `result_*` read-only. Do not allow editing `submitted_by`. `evidence_path` is File (same DEV evidence folder). No AppSheet Add/Edit on Evidence.
+
+Show_If for action **Add contract evidence** (not Complete Task):
+
+`AND([status] = "Complete", ISBLANK([evidence_id]), [template_code] = "PRE02")`
+
+Prefer also `TASK_ACTION_AVAILABILITY` → `appsheet_commands.task_evidence_attach.available`. Never show Complete Task when status is Complete.
+
+Form:
+
+```
+LINKTOFORM("DEV Attach Contract Evidence Form", "task_id", [id], "expected_version", [version])
+```
+
+Bot: Adds only, `[status] = "Ready"`. Call with the request row’s authenticated submitter — **pass `[submitted_by]`, not Apps Script `USEREMAIL()`**:
+
+```
+appSheetR1CommandFromRequestRow("TASK_EVIDENCE_ATTACH", [id], [submitted_by])
+```
+
+Exactly three arguments. The bridge requires row `submitted_by` to equal the bot actor argument, then authorizes via normal task owner/backup/Admin rules (plus People/PersonRoles). Tanya can attach on a Tanya-owned PRE02; unrelated Office users cannot. Effects: resolve upload → idempotent Evidence `Contract` → set `Tasks.evidence_id` only → PRE02 contract Job stamps. Preserves `status`, `completed_at`, `completed_by`, `completion_note`, and financial fields. Replay is safe; `external_calls = 0`.
+
+### Upload availability race (all File/Image request columns, DEV only)
+
+AppSheet writes the request row and fires the bot before the uploaded file is necessarily visible through Drive. The bridge treats that as **retryable**, never as a validation failure, and the user never resubmits:
+
+1. `_r1cResolveUpload` waits in-call (lookups at 0 s, 2 s, 6 s, 12 s — bounded, before any write). Most uploads resolve here and the bot sees `ok:true`.
+2. If still not visible the bot receives `{"ok":false,"error":"R1C_UPLOAD_PENDING","retryable":true,"retry":{"scheduled":true,"outbox_id":"OUT-R1U-<row id>","attempt":1,"max_attempts":5,"next_attempt":"…"}}`. One `Outbox` row (`action_type = R1RequestUploadRetry`, `idempotency_key = R1U:<table>:<row id>`) is created per request row; the request row itself is not modified except `result_status = UploadPending` / `result_message` when those columns exist.
+3. A time-driven trigger on the standalone bridge project runs `runR1URetryUploadRequests()` every 5 minutes. Each due item re-reads the authoritative request row, acts as `row.submitted_by` (locked at create), refuses if any identity/input column changed since scheduling (`R1U_REQUEST_CHANGED`), and re-runs the normal `appSheetR1CommandFromRequestRow` path with the same `command_id`, so journals (`CJ-R1A-` / `CJ-R1C-`) make duplicate Evidence rows or lifecycle side effects impossible.
+4. Backoff 1 / 2 / 4 / 8 / 16 minutes, five attempts in total (bot attempt included). A file that never appears ends as `Outbox.status = NeedsReview` with `R1C_UPLOAD_MISSING` and `result_status = Failed`; `runRsSweep()` raises the RS-REVIEW task. Any other error (stale version, access denied, recovery required) is final on first sight.
+5. The same trigger sweeps `DEVTaskCompleteRequests`, `DEVTaskEvidenceAttachRequests`, `DEVInstallerCommandRequests` and `DEVGoodsInRequests` for `Ready` rows that carry an upload but have neither a journal entry nor an Outbox row (rows submitted before this mechanism, or whose bot call never reached the backend) and schedules them the same way. Rows without an upload, non-Ready rows and rows already journaled are never touched.
+
+Bot configuration stays **Adds only, `[status] = "Ready"`**. Do not add a re-run on update, do not let the bot write `status`, and do not add an AppSheet Wait step: a Wait step turns the process asynchronous with minute-level granularity and still cannot distinguish a slow upload from a missing one — the backend already does both. `runR1UUploadRetryStatus()` lists scheduled/succeeded/exhausted items.
 
 ### ISSUE_CREATE (Raise Issue, DEV only)
 
@@ -187,7 +257,29 @@ LINKTOFORM("DEV Create Issue Form", "job_id", [id], "expected_version", [version
 Bot: `appSheetR1CommandFromRequestRow("ISSUE_CREATE", [id], USEREMAIL())`.
 | Planner date patch | PLANNER_UPDATE | planned_start/end |
 | Booking Gates | BOOKING_GATES | empty payload |
-| Deposit Confirm | DEPOSIT_CONFIRM | reference (Ben or assigned Director backup) |
+| Deposit Confirm | DEPOSIT_CONFIRM | request row via `appSheetR1CommandFromRequestRow` |
+
+### DEPOSIT_CONFIRM (secure request row, DEV only)
+
+Create `DEVDepositConfirmRequests` in the DEV spreadsheet only, with these columns in order:
+
+`id`, `command_id`, `job_id`, `expected_version`, `reference`, `submitted_by`, `submitted_at`, `status`, `result_status`, `result_stage_id`, `result_message`.
+
+Set `id` and `command_id` Initial value to `UNIQUEID()`, `submitted_by` Initial value to `USEREMAIL()`, `submitted_at` Initial value to `NOW()`, and `status` Initial value to `"Ready"`. Make `id`, `command_id`, `job_id`, `expected_version`, `reference`, `submitted_by`, `submitted_at`, and `status` non-editable after form creation; make every `result_*` column read-only. Do not permit users to edit `submitted_by`.
+
+From Job Detail, use a form action with:
+
+```
+LINKTOFORM("DEV Deposit Confirm Form", "job_id", [id], "expected_version", [version])
+```
+
+The bot event is Adds only, filtered by `[status] = "Ready"`, and calls:
+
+```
+appSheetR1CommandFromRequestRow("DEPOSIT_CONFIRM", [id], USEREMAIL())
+```
+
+The bridge loads the row itself, requires its `submitted_by` to equal the supplied AppSheet identity, then uses the normal DEPOSIT_CONFIRM authorization path. That retains FN-15 Manual enforcement, active People/roles, Admin/Manager access, and Director assignment checks. Keep old `R1A_Cmd_DEPOSIT_CONFIRM` rows as history only; disable their bot/action and do not migrate them.
 | Operational Complete | OPERATIONAL_COMPLETE | empty |
 | Cancel / Reinstate | CANCEL_JOB / REINSTATE_JOB | per S15 fields |
 
@@ -248,7 +340,9 @@ Same for `TASK_ACTION_AVAILABILITY` on task rows.
 
 **Ready/booking gate workflow:** Run `BOOKING_GATES` after evidence-backed PRE completion. Refresh the Job after each committed stage change and pass the new `[version]`: `Prebooking → ReadyToBook`, then (when Booking intake is linked) `ReadyToBook → BookingInProgress`. The final call advances to `Booked` only after all applicable PRE tasks and BKG01–BKG03 are satisfied. Never expose a force/override field. BKG04/BKG05 then appear as post-Booked manual tasks.
 
-For PRE02/PRE04/PRE05 completion forms, capture the required `evidence_id`; for PRE03 use the separate `DEPOSIT_CONFIRM` command to record bank actor/time/reference and then complete the single Ben/Dan task. A missing evidence value must remain visibly blocked.
+For PRE02/PRE04 completion forms, capture required evidence via `evidence_path` (File upload → Evidence row). Keep `evidence_id` text only as a temporary opaque fallback. For PRE03 use the separate `DEPOSIT_CONFIRM` command to record bank actor/time/reference and then complete the single Ben/Dan task. A missing evidence value must remain visibly blocked.
+
+Legacy completed PRE02 with blank `evidence_id`: use `TASK_EVIDENCE_ATTACH` / **Add contract evidence** (see above). Do not use Apps Script editor helpers for Tony recovery.
 
 ---
 

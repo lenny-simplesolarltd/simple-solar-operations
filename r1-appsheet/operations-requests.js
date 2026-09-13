@@ -20,15 +20,32 @@ function _r1cRows(ss,name){
   return sh.getRange(2,1,sh.getLastRow()-1,h.length).getValues().map(function(row){var r={};h.forEach(function(k,i){r[k]=row[i];});return r;}).filter(function(r){return r.id;});
 }
 /* Resolve an AppSheet File/Image relative path only within the configured DEV upload root.
- * Reads file metadata; never creates/moves/shares files. AppSheet owns upload, backend owns Evidence. */
-function _r1cResolveUpload(path){
+ * Reads file metadata; never creates/moves/shares files. AppSheet owns upload, backend owns Evidence.
+ * AppSheet writes the request row (and fires the bot) before the uploaded file is necessarily visible
+ * through Drive, so a missing folder/file is R1C_UPLOAD_PENDING (retryable, e.retryable=true), never a
+ * validation failure. _r1cResolveUpload waits briefly in-call (bounded, before any write); the persistent
+ * bounded retry lives in upload-retry.js. Path validation errors are permanent and are never retried. */
+var R1C_UPLOAD_WAIT_MS=[2000,4000,6000];
+function _r1cUploadPending(attempts){var e=new Error('R1C_UPLOAD_PENDING');e.code='R1C_UPLOAD_PENDING';e.retryable=true;e.attempts=attempts;throw e;}
+function _r1cResolveUploadOnce(path){
   var c=_r1cConfigGuard();if(!c.evidenceFolderId)_r1cRequestError('R1C_UPLOAD_ROOT_NOT_CONFIGURED');
   if(typeof path!=='string'||!path.trim()||/^[\/]|\\|:|%/.test(path))_r1cRequestError('R1C_UPLOAD_PATH_INVALID');
   var parts=path.split('/');if(parts.some(function(p){return !p||p==='.'||p==='..';}))_r1cRequestError('R1C_UPLOAD_PATH_INVALID');
   var folder=DriveApp.getFolderById(c.evidenceFolderId),filename=parts.pop();
-  parts.forEach(function(p){var it=folder.getFoldersByName(p);if(!it.hasNext())_r1cRequestError('R1C_UPLOAD_PENDING');folder=it.next();if(it.hasNext())_r1cRequestError('R1C_UPLOAD_AMBIGUOUS');});
-  var files=folder.getFilesByName(filename);if(!files.hasNext())_r1cRequestError('R1C_UPLOAD_PENDING');var f=files.next();if(files.hasNext()||f.isTrashed())_r1cRequestError('R1C_UPLOAD_AMBIGUOUS');
+  parts.forEach(function(p){var it=folder.getFoldersByName(p);if(!it.hasNext())_r1cUploadPending(1);folder=it.next();if(it.hasNext())_r1cRequestError('R1C_UPLOAD_AMBIGUOUS');});
+  var files=folder.getFilesByName(filename);if(!files.hasNext())_r1cUploadPending(1);var f=files.next();if(files.hasNext()||f.isTrashed())_r1cRequestError('R1C_UPLOAD_AMBIGUOUS');
   return {drive_file_id:f.getId(),filename:f.getName(),mime_type:f.getMimeType()};
+}
+function _r1cResolveUpload(path,opts){
+  opts=opts||{};var waits=opts.wait===false?[]:(Array.isArray(opts.waitMs)?opts.waitMs:R1C_UPLOAD_WAIT_MS);
+  var sleep=typeof opts.sleep==='function'?opts.sleep:(typeof Utilities!=='undefined'&&Utilities&&typeof Utilities.sleep==='function'?function(ms){Utilities.sleep(ms);}:null);
+  for(var attempt=1;;attempt++){
+    try{return _r1cResolveUploadOnce(path);}
+    catch(e){
+      if(!e||e.code!=='R1C_UPLOAD_PENDING'||attempt>waits.length){if(e&&e.code==='R1C_UPLOAD_PENDING')e.attempts=attempt;throw e;}
+      if(sleep)sleep(waits[attempt-1]);
+    }
+  }
 }
 function _r1cBuildRequest(type,row,lines,actor,resolveUpload){
   if(!row||!row.id)_r1cRequestError('R1C_REQUEST_NOT_FOUND');
@@ -91,4 +108,4 @@ function _r1cProvision(ss,apply){
 function _r1cProvisionCloud(apply){_r1cConfigGuard();var options=_r1aCloudOptions(),a=_r1aActor(options.store,options.actorEmail());if(a.roles.indexOf('Admin')<0&&a.roles.indexOf('Manager')<0)_r1cRequestError('R1C_ROLE_DENIED');return options.store.withLock(function(){return _r1cProvision(_r1aOpenDevRequestSpreadsheet(),apply);});}
 function runR1CRequestProvisionCheck(){return _r1cProvisionCloud(false);}
 function runR1CProvisionRequestTables(){return _r1cProvisionCloud(true);}
-if(typeof module!=='undefined')module.exports={R1C_REQUEST_HEADERS:R1C_REQUEST_HEADERS,_r1cRequestTable:_r1cRequestTable,_r1cBuildRequest:_r1cBuildRequest,_r1cCommandFromRow:_r1cCommandFromRow,_r1cProvision:_r1cProvision};
+if(typeof module!=='undefined')module.exports={R1C_REQUEST_HEADERS:R1C_REQUEST_HEADERS,R1C_UPLOAD_WAIT_MS:R1C_UPLOAD_WAIT_MS,_r1cResolveUpload:_r1cResolveUpload,_r1cResolveUploadOnce:_r1cResolveUploadOnce,_r1cRequestTable:_r1cRequestTable,_r1cBuildRequest:_r1cBuildRequest,_r1cCommandFromRow:_r1cCommandFromRow,_r1cProvision:_r1cProvision};

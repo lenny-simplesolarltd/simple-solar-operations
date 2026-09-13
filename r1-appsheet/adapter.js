@@ -3,7 +3,7 @@
 
 const R1A_BOUND_DEV_SHEET_ID = '1z7PNZtDdC4Z5eLbmTuQdqp0QpJSmuEvx3QvN3VyNTsc';
 const R1A_BOUND_READS = ['IDENTITY_PROBE','OFFICE_HOME','JOB_SEARCH','JOB_OVERVIEW','OPERATIONAL_QUEUE','RELEASE_MODE_STATUS','SYSTEM_STATUS','AUDIT_HISTORY','ACTION_AVAILABILITY','TASK_ACTION_AVAILABILITY','MY_TASKS','TEAM_TASKS','PLANNER_3_WEEKS','PLANNER_6_WEEKS','INTAKE_REVIEW','INSTALLER_WORKFLOW','GOODS_IN_DETAIL','STOCK_BALANCE'];
-const R1A_BOUND_COMMANDS = ['TASK_COMPLETE','CALL_RECORD','ISSUE_UPDATE','ISSUE_CREATE','PLANNER_UPDATE','MOVE_JOB','CHANGE_INSTALLER','CANCEL_JOB','REINSTATE_JOB','DEPOSIT_CONFIRM','OPERATIONAL_COMPLETE','BOOKING_GATES','SOLD_INTAKE','BOOKING_INTAKE','IW_START','IW_PROGRESS','IW_REPORT_COMPLETION','IW_REPORT_PROBLEM','IW_REPORT_VARIATION','IW_COMMISSIONING_DRAFT','IW_COMMISSIONING_SUBMIT','COMMISSIONING_REVIEW','GOODS_IN_RECEIVE','STOCK_QUARANTINE'];
+const R1A_BOUND_COMMANDS = ['TASK_COMPLETE','TASK_EVIDENCE_ATTACH','CALL_RECORD','ISSUE_UPDATE','ISSUE_CREATE','PLANNER_UPDATE','MOVE_JOB','CHANGE_INSTALLER','CANCEL_JOB','REINSTATE_JOB','DEPOSIT_CONFIRM','OPERATIONAL_COMPLETE','BOOKING_GATES','SOLD_INTAKE','BOOKING_INTAKE','IW_START','IW_PROGRESS','IW_REPORT_COMPLETION','IW_REPORT_PROBLEM','IW_REPORT_VARIATION','IW_COMMISSIONING_DRAFT','IW_COMMISSIONING_SUBMIT','COMMISSIONING_REVIEW','GOODS_IN_RECEIVE','STOCK_QUARANTINE'];
 const R1A_BOUND_QUEUES = ['booking','calls','issues','payments','ghl','cancellation','intake_review'];
 
 function _r1aCopy(v) { return JSON.parse(JSON.stringify(v)); }
@@ -128,7 +128,11 @@ function _r1aCreate(options){
       var t=store.get('Tasks',input.task_id);if(!t)_r1aRefuse('R1A_TASK_NOT_FOUND');if(t.job_id)_r1aAuthorizeJob(store,a,t.job_id);else if(t.owner_id!==a.id&&!_r1aAdmin(a))_r1aRefuse('R1A_TASK_ACCESS_DENIED');
       out=reads.taskActionAvailability(store,input.task_id);
       var completeAvail=!!(out.actions&&out.actions.complete&&out.actions.complete.available),ownerOk=t.owner_id===a.id||t.backup_id===a.id||_r1aAdmin(a);
-      out.appsheet_commands={task_complete:_r1aFlag(completeAvail&&ownerOk,'TASK_COMPLETE','Tasks',!completeAvail?'COMPLETE_NOT_AVAILABLE':'TASK_OWNER_OR_BACKUP_REQUIRED')};
+      var attachAvail=t.status==='Complete'&&!_r1aText(t.evidence_id)&&t.template_code==='PRE02';
+      out.appsheet_commands={
+        task_complete:_r1aFlag(completeAvail&&ownerOk,'TASK_COMPLETE','Tasks',!completeAvail?'COMPLETE_NOT_AVAILABLE':'TASK_OWNER_OR_BACKUP_REQUIRED'),
+        task_evidence_attach:_r1aFlag(attachAvail&&ownerOk,'TASK_EVIDENCE_ATTACH','Tasks',!attachAvail?'ATTACH_NOT_AVAILABLE':'TASK_OWNER_OR_BACKUP_REQUIRED')
+      };
     }
     return {ok:true,read_type:input.read_type,actor_id:a.id,data:_r1aCopy(out)};
   }
@@ -140,7 +144,7 @@ function _r1aCreate(options){
     if(!_r1aOffice(a))_r1aRefuse('R1A_ROLE_DENIED');
     var service=services[input.command_type];
     if(typeof service!=='function')_r1aRefuse('R1A_COMMAND_UNSUPPORTED');
-    if(input.command_type==='TASK_COMPLETE'){
+    if(input.command_type==='TASK_COMPLETE'||input.command_type==='TASK_EVIDENCE_ATTACH'){
       var task=store.get('Tasks',input.task_id);if(!task)_r1aRefuse('R1A_TASK_NOT_FOUND');
       if(task.job_id)_r1aAuthorizeJob(store,a,task.job_id);else if(task.owner_id!==a.id&&!_r1aAdmin(a))_r1aRefuse('R1A_TASK_ACCESS_DENIED');
       if(task.owner_id!==a.id&&task.backup_id!==a.id&&!_r1aAdmin(a))_r1aRefuse('R1A_TASK_ACCESS_DENIED');
@@ -171,7 +175,7 @@ function _r1aCreate(options){
       if(input.command_type==='CHANGE_INSTALLER'){var cwp=store.get('WorkPackages',input.work_package_id);if(!cwp||cwp.job_id!==input.job_id)_r1aRefuse('R1A_WORK_PACKAGE_JOB_MISMATCH');}
       if(input.command_type==='CANCEL_JOB'||input.command_type==='REINSTATE_JOB'){_r1aMode(store,'FN-17','Manual');_r1aMode(store,'FN-20','Manual');}
     }
-    var result=service({request:_r1aCopy(input),actor:a,store:store});
+    var result=service({request:_r1aCopy(input),actor:a,store:store,resolveUpload:options.resolveUpload});
     return {ok:true,command_type:input.command_type,actor_id:a.id,result:_r1aCopy(result)};
   }
   return {read:read,command:command};

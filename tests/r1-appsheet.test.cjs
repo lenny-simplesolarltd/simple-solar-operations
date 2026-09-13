@@ -1,5 +1,8 @@
 const test=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs'),vm=require('node:vm');
 const core=require('../r1-appsheet/adapter.js'),serviceCore=require('../r1-appsheet/services.js');
+const payments=require('../s13/payments.js');
+global.processJobPayments=payments.processJobPayments;
+global.confirmDeposit=payments.confirmDeposit;
 const copy=x=>structuredClone(x);
 function fixture(email='tanya@example.test'){
  const tables={People:[{id:'P-tanya',email:'tanya@example.test',active:true},{id:'P-hannah',email:'hannah@example.test',active:true},{id:'P-ben',email:'ben@example.test',active:true},{id:'P-installer',email:'installer@example.test',active:true},{id:'P-var',email:'var@example.test',active:true}],PersonRoles:[{person_id:'P-tanya',role:'Office',active:true},{person_id:'P-hannah',role:'Office',active:true},{person_id:'P-ben',role:'Admin',active:true},{person_id:'P-installer',role:'Installer',active:true},{person_id:'P-var',role:'VariationApprover',active:true}],Jobs:[{id:'J-1',pilot_job:true,release_scope:'R1',version:1,salesperson_id:null,workflow_stage:'Booked'},{id:'J-2',pilot_job:true,release_scope:'R1',version:1,salesperson_id:null},{id:'J-N',pilot_job:false,release_scope:'R1',version:1},{id:'J-OPC',pilot_job:true,release_scope:'R1',version:3,salesperson_id:null,workflow_stage:'Aftercare',operational_complete_at:null,archived_at:null},{id:'J-BKG',pilot_job:true,release_scope:'R1',version:2,salesperson_id:null,workflow_stage:'BookingInProgress',archived_at:null},{id:'J-DEP',pilot_job:true,release_scope:'R1',version:4,salesperson_id:null,workflow_stage:'Booked',deposit_bank_confirmed_at:null,archived_at:null}],Tasks:[{id:'T-1',job_id:'J-1',owner_id:'P-tanya',backup_id:null,version:2,status:'Open',revision_required:false,due_at:'2026-09-08'},{id:'T-H',job_id:'J-2',owner_id:'P-hannah',backup_id:null,version:1,status:'Open'},{id:'T-OPC',job_id:'J-OPC',owner_id:'P-tanya',backup_id:null,version:1,status:'Open'},{id:'T-BKG',job_id:'J-BKG',owner_id:'P-tanya',backup_id:null,version:1,status:'Open'},{id:'T-DEP',job_id:'J-DEP',owner_id:'P-tanya',backup_id:null,version:1,status:'Open'}],Issues:[{id:'I-1',job_id:'J-1',office_owner_id:'P-tanya',responsible_person_id:null,responsible_company_id:'CO-1',status:'Open',version:1}],WorkPackages:[{id:'WP-1',job_id:'J-1',planned_start:'2026-09-10',planned_end:'2026-09-11',revision:1,version:1}],InvoiceStages:[{id:'IS-J-DEP-deposit',job_id:'J-DEP',stage:'deposit',status:'Pending',version:1}],ReleaseModes:[{function_id:'FN-01',target_release:'R1',authorised_job_scope:'Pilot',mode:'Automated'},{function_id:'FN-11',target_release:'R1',authorised_job_scope:'Pilot',mode:'Manual'},{function_id:'FN-15',target_release:'R1',authorised_job_scope:'Pilot',mode:'Manual'},{function_id:'FN-17',target_release:'R1',authorised_job_scope:'Pilot',mode:'Manual'},{function_id:'FN-19',target_release:'R1',authorised_job_scope:'Pilot',mode:'Manual'},{function_id:'FN-20',target_release:'R1',authorised_job_scope:'Pilot',mode:'Manual'}],AuditEvents:[],TaskEvents:[],IssueEvents:[],CommitJournal:[],Calls:[],GHLTasks:[]};
@@ -31,10 +34,34 @@ test('read adapters require authentication and role',()=>{assert.throws(()=>fixt
 test('Hannah cannot see unrelated jobs',()=>{const f=fixture('hannah@example.test');assert.throws(()=>f.adapter().read({read_type:'JOB_OVERVIEW',job_id:'J-1'}),/JOB_ACCESS_DENIED/);assert.equal(f.adapter().read({read_type:'JOB_OVERVIEW',job_id:'J-2'}).ok,true)});
 test('Tanya receives assigned office access and filtered home',()=>{const f=fixture();const r=f.adapter().read({read_type:'OFFICE_HOME'});assert.ok(r.data.overdue.map(x=>x.id).includes('T-1'));assert.equal(r.data.overdue.every(t=>t.owner_id==='P-tanya'||t.backup_id==='P-tanya'),true);assert.equal(r.data.overdue_count,r.data.overdue.length)});
 test('Ben management reads work',()=>{const f=fixture('ben@example.test');assert.equal(f.adapter().read({read_type:'RELEASE_MODE_STATUS'}).ok,true);assert.equal(f.adapter().read({read_type:'JOB_OVERVIEW',job_id:'J-2'}).ok,true)});
+test('Lenny DEV seed Admin is authorized through PersonRoles without email special-casing',()=>{
+  const seed=require('../schema/config-seed.json');
+  const person=seed.People.find(p=>p.id==='PERSON-lenny-dev');
+  const role=seed.PersonRoles.find(r=>r.id==='PROLE-lenny-admin');
+  assert.equal(person.email,'lenny@simplesolarltd.co.uk');
+  assert.equal(person.role,'Admin');
+  assert.equal(person.active,true);
+  assert.equal(role.person_id,'PERSON-lenny-dev');
+  assert.equal(role.role,'Admin');
+  assert.equal(role.active,true);
+  const f=fixture(person.email);
+  f.tables.People.push({id:person.id,email:person.email,active:true,role:person.role});
+  f.tables.PersonRoles.push({id:role.id,person_id:role.person_id,role:role.role,active:true});
+  const probe=f.adapter().read({read_type:'IDENTITY_PROBE'});
+  assert.equal(probe.data.active_user_maps_to_active_people,true);
+  assert.deepEqual(probe.data.resolved_person_roles,['Admin']);
+  assert.equal(probe.data.authenticated,true);
+  assert.equal(f.adapter().read({read_type:'RELEASE_MODE_STATUS'}).ok,true);
+  assert.equal(f.adapter().read({read_type:'JOB_OVERVIEW',job_id:'J-2'}).ok,true);
+  const officeOnly=fixture(person.email);
+  officeOnly.tables.People.push({id:person.id,email:person.email,active:true,role:'Office'});
+  officeOnly.tables.PersonRoles.push({id:'PROLE-lenny-office-only',person_id:person.id,role:'Office',active:true});
+  assert.throws(()=>officeOnly.adapter().read({read_type:'RELEASE_MODE_STATUS'}),/ROLE_DENIED/);
+});
 test('sold intake refuses a forged service that is not the canonical handler and refuses extra envelope fields',()=>{const f=fixture();f.options.services=serviceCore._r1sServices();assert.throws(()=>f.adapter().command({command_id:'C-I',command_type:'SOLD_INTAKE',job_id:'J-1',payload:{customer_first_name:'A'}}),/INVALID_FIELDS/);assert.throws(()=>f.adapter().command({command_id:'C-I2',command_type:'SOLD_INTAKE',payload:{customer_first_name:'A',workflow_stage:'Booked'}}),/INVALID_FIELDS/);});
 test('unsupported fixture-scoped command fails closed',()=>assert.throws(()=>fixture().adapter().command(cmd()),/COMMAND_UNSUPPORTED/));
 test('unrelated job command refused',()=>{const f=fixture('hannah@example.test');f.options.services=serviceCore._r1sServices();assert.throws(()=>f.adapter().command(cmd()),/JOB_ACCESS_DENIED/)});
-test('action reads expose exact AppSheet command flags',()=>{const f=fixture();let a=f.adapter().read({read_type:'ACTION_AVAILABILITY',job_id:'J-1'}),t=f.adapter().read({read_type:'TASK_ACTION_AVAILABILITY',task_id:'T-1'});assert.deepEqual(Object.keys(a.data.appsheet_commands),['call_record','issue_update','issue_create','planner_update','move_job','change_installer','cancel_job','reinstate_job','deposit_confirm','operational_complete','booking_gates','sold_intake','booking_intake']);assert.equal(a.data.appsheet_commands.call_record.available,true);assert.equal(a.data.appsheet_commands.issue_create.available,true);assert.equal(a.data.appsheet_commands.cancel_job.available,true);assert.equal(a.data.appsheet_commands.move_job.available,true);assert.equal(a.data.appsheet_commands.deposit_confirm.available,false);assert.equal(a.data.appsheet_commands.deposit_confirm.reason,'DIRECTOR_REQUIRED');assert.equal(a.data.appsheet_commands.sold_intake.available,true);assert.equal(a.data.appsheet_commands.booking_intake.available,false);assert.equal(a.data.appsheet_commands.booking_intake.reason,'STAGE_NOT_ELIGIBLE');assert.equal(t.data.appsheet_commands.task_complete.available,true)});
+test('action reads expose exact AppSheet command flags',()=>{const f=fixture();let a=f.adapter().read({read_type:'ACTION_AVAILABILITY',job_id:'J-1'}),t=f.adapter().read({read_type:'TASK_ACTION_AVAILABILITY',task_id:'T-1'});assert.deepEqual(Object.keys(a.data.appsheet_commands),['call_record','issue_update','issue_create','planner_update','move_job','change_installer','cancel_job','reinstate_job','deposit_confirm','operational_complete','booking_gates','sold_intake','booking_intake']);assert.equal(a.data.appsheet_commands.call_record.available,true);assert.equal(a.data.appsheet_commands.issue_create.available,true);assert.equal(a.data.appsheet_commands.cancel_job.available,true);assert.equal(a.data.appsheet_commands.move_job.available,true);assert.equal(a.data.appsheet_commands.deposit_confirm.available,false);assert.equal(a.data.appsheet_commands.deposit_confirm.reason,'DIRECTOR_REQUIRED');assert.equal(a.data.appsheet_commands.sold_intake.available,true);assert.equal(a.data.appsheet_commands.booking_intake.available,false);assert.equal(a.data.appsheet_commands.booking_intake.reason,'STAGE_NOT_ELIGIBLE');assert.equal(t.data.appsheet_commands.task_complete.available,true);assert.equal(t.data.appsheet_commands.task_evidence_attach.available,false);assert.equal(t.data.appsheet_commands.task_evidence_attach.reason,'ATTACH_NOT_AVAILABLE')});
 test('job search filters to assigned R1 pilot jobs and refuses blank query',()=>{const f=fixture();assert.throws(()=>f.adapter().read({read_type:'JOB_SEARCH',query:''}),/QUERY_REQUIRED/);const r=f.adapter().read({read_type:'JOB_SEARCH',query:'J-1'});assert.equal(r.data.count,1);assert.equal(r.data.results[0].id,'J-1');const h=fixture('hannah@example.test').adapter().read({read_type:'JOB_SEARCH',query:'J-1'});assert.equal(h.data.count,0);const nonPilot=f.adapter().read({read_type:'JOB_SEARCH',query:'J-N'});assert.equal(nonPilot.data.count,0)});
 test('operational queue allowlists R1 queues only and filters task visibility',()=>{const f=fixture();assert.throws(()=>f.adapter().read({read_type:'OPERATIONAL_QUEUE',queue:'materials'}),/QUEUE_NOT_IN_R1/);assert.throws(()=>f.adapter().read({read_type:'OPERATIONAL_QUEUE',queue:'archive'}),/QUEUE_NOT_IN_R1/);const r=f.adapter().read({read_type:'OPERATIONAL_QUEUE',queue:'booking'});assert.equal(r.data.queue,'booking');assert.equal(r.data.tasks.every(t=>t.owner_id==='P-tanya'||t.backup_id==='P-tanya'),true);assert.deepEqual(core.R1A_BOUND_QUEUES,['booking','calls','issues','payments','ghl','cancellation','intake_review'])});
 test('call command delegates canonical S10 shape and suppresses external effects',()=>{const f=fixture();f.options.services=serviceCore._r1sServices();global._s10RecordCall=(x,s)=>{s.insert('Calls',{id:x.id,job_id:x.job_id,task_id:x.task_id,attempted_at:'2026-09-07T00:00:00Z',attempted_by:x.attempted_by,outcome:x.outcome});return{created:true,call:s.get('Calls',x.id)}};const r=f.adapter().command({command_id:'CALL-1',command_type:'CALL_RECORD',job_id:'J-1',task_id:'T-1',expected_version:2,payload:{type:'Customer',outcome:'NoAnswer',notes:'No reply'}});assert.equal(r.result.status,'Recorded');assert.equal(r.result.external_calls,0);assert.equal(f.tables.Calls[0].attempted_by,'P-tanya')});
@@ -139,7 +166,7 @@ test('booking-gates fixture resets mutated J-r1a-booking state to clean expected
 });
 
 function installIntake(f){
-  ['Intake','Customers','CustomerChanges','MappingRules','TaskTemplates','TechnicalDetails','WorkPackages','Allocations','Materials','JobEquipment','ScaffoldBookings','Companies','Tasks','CommitJournal','AuditEvents'].forEach(n=>{if(!f.tables[n])f.tables[n]=[];});
+  ['Intake','Customers','CustomerChanges','MappingRules','TaskTemplates','TechnicalDetails','WorkPackages','Allocations','Materials','JobEquipment','ScaffoldBookings','Companies','Tasks','CommitJournal','AuditEvents','InvoiceStages','Payments','GHLTasks','Outbox'].forEach(n=>{if(!f.tables[n])f.tables[n]=[];});
   f.tables.People.forEach(p=>{if(!p.display_name)p.display_name=p.id;});
   [
     ['PRE01','Send deposit invoice'],['PRE02','Check contract sent/signed'],['PRE03','Confirm bank deposit'],
@@ -172,15 +199,22 @@ test('SOLD_INTAKE creates one customer, one pilot job, one human id and PRE task
   assert.equal(job.salesperson_id,'P-tanya');
   assert.equal(job.original_gross_pence,500000);
   assert.equal(job.presale_file_id,'FILE-1');
+  const stages=f.tables.InvoiceStages.filter(s=>s.job_id===job.id);
+  assert.deepEqual(stages.map(s=>s.id).sort(),['IS-'+job.id+'-deposit','IS-'+job.id+'-interim']);
+  assert.deepEqual(stages.map(s=>s.gross_pence).sort((a,b)=>a-b),[125000,175000]);
+  assert.equal(stages.find(s=>s.stage==='deposit').amount_net_pence,104167);
+  assert.equal(stages.find(s=>s.stage==='deposit').vat_pence,20833);
   assert.equal(f.tables.TechnicalDetails[0].roof_notes,'South facing');
   const codes=f.tables.Tasks.filter(t=>t.job_id===job.id).map(t=>t.template_code);
   assert.ok(codes.includes('PRE-COPY-JOBID'));
   assert.ok(codes.includes('PRE01'));
+  assert.deepEqual(codes.filter(c=>/^PRE0[1-4]$/.test(c)).sort(),['PRE01','PRE02','PRE03','PRE04']);
   const replay=f.adapter().command({command_id:'SOLD1',command_type:'SOLD_INTAKE',payload:soldPayload()});
   assert.equal(replay.result.status,'Replayed');
   assert.equal(replay.result.job_id,r.result.job_id);
   assert.equal(f.tables.Jobs.filter(j=>j.source_system==='R1-AppSheet').length,1);
   assert.equal(f.tables.Customers.length,1);
+  assert.equal(f.tables.InvoiceStages.filter(s=>s.job_id===job.id).length,2);
 });
 test('SOLD_INTAKE never matches an existing customer by name or address',()=>{
   const f=fixture();installIntake(f);
@@ -230,6 +264,7 @@ test('BOOKING_INTAKE updates the exact job and does not create a second job',()=
   assert.ok(f.tables.Materials.some(m=>String(m.description).includes('515 Panels')));
   assert.ok(f.tables.JobEquipment.some(e=>e.equipment_type==='Inverter'));
   assert.ok(f.tables.Allocations.filter(a=>a.active).length>=1);
+  assert.equal(f.tables.InvoiceStages.filter(s=>s.job_id===job.id).length,2);
   const replay=f.adapter().command({command_id:'BOOK-1',command_type:'BOOKING_INTAKE',job_id:job.id,expected_version:1,payload:payload});
   assert.equal(replay.result.status,'Replayed');
   assert.equal(f.tables.Jobs.length,before);
@@ -354,6 +389,477 @@ test('request-row BOOKING_INTAKE uses internal job_id and expected_version, igno
     readRow: () => ({ id: 'ROW-BK', command_id: 'BOOK-INST', submitted_by: 'installer@example.test', job_id: job.id, expected_version: job.version }),
     dispatch: (request) => fixture('installer@example.test').adapter().command(request)
   }), /ROLE_DENIED/);
+});
+test('request-row DEPOSIT_CONFIRM uses the submitted AppSheet actor and normal authorization', () => {
+  global.confirmDeposit = payments.confirmDeposit;
+  const f = fixture('ben@example.test');
+  f.options.services = serviceCore._r1sServices();
+  const row = {id:'ROW-DEP',command_id:'DEP-ROW',job_id:'J-DEP',expected_version:4,reference:'TONY-SMITH-DEV-DEPOSIT-001',submitted_by:'ben@example.test',submitted_at:'2026-09-13T12:00:00Z',status:'Ready',result_status:'',result_message:''};
+  const result = requestRow._r1aCommandFromRequestRow('DEPOSIT_CONFIRM','ROW-DEP','ben@example.test',{sessionEmail:'lenny@example.test',readRow:()=>row,dispatch:(request)=>f.adapter().command(request)});
+  assert.equal(result.result.status,'Confirmed');
+  assert.equal(f.tables.InvoiceStages.find(s=>s.id==='IS-J-DEP-deposit').reference,'TONY-SMITH-DEV-DEPOSIT-001');
+  assert.equal(requestRow._r1aCommandFromRequestRow('DEPOSIT_CONFIRM','ROW-DEP','ben@example.test',{sessionEmail:'lenny@example.test',readRow:()=>row,dispatch:(request)=>f.adapter().command(request)}).result.status,'AlreadyConfirmed');
+  assert.throws(()=>requestRow._r1aCommandFromRequestRow('DEPOSIT_CONFIRM','ROW-DEP','ben@example.test',{sessionEmail:'lenny@example.test',readRow:()=>Object.assign({},row,{submitted_by:'tanya@example.test'}),dispatch:()=>null}),/ACTOR_MISMATCH/);
+
+  const dan = fixture('dan@example.test');
+  dan.tables.People.push({id:'P-dan',email:'dan@example.test',active:true});
+  dan.tables.PersonRoles.push({person_id:'P-dan',role:'Director',active:true});
+  dan.tables.Tasks.find(t=>t.id==='T-DEP').backup_id='P-dan';
+  dan.options.services=serviceCore._r1sServices();
+  const danRow=Object.assign({},row,{id:'ROW-DAN',command_id:'DEP-DAN',submitted_by:'dan@example.test',reference:'DAN-REF'});
+  assert.equal(requestRow._r1aCommandFromRequestRow('DEPOSIT_CONFIRM','ROW-DAN','dan@example.test',{sessionEmail:'lenny@example.test',readRow:()=>danRow,dispatch:(request)=>dan.adapter().command(request)}).result.status,'Confirmed');
+  const unassigned=fixture('dan@example.test');
+  unassigned.tables.People.push({id:'P-dan',email:'dan@example.test',active:true});
+  unassigned.tables.PersonRoles.push({person_id:'P-dan',role:'Director',active:true});
+  unassigned.options.services=serviceCore._r1sServices();
+  assert.throws(()=>requestRow._r1aCommandFromRequestRow('DEPOSIT_CONFIRM','ROW-DAN','dan@example.test',{sessionEmail:'lenny@example.test',readRow:()=>danRow,dispatch:(request)=>unassigned.adapter().command(request)}),/JOB_ACCESS_DENIED/);
+  const manual=fixture('ben@example.test');manual.options.services=serviceCore._r1sServices();manual.tables.ReleaseModes.find(m=>m.function_id==='FN-15').mode='Disabled';
+  assert.throws(()=>requestRow._r1aCommandFromRequestRow('DEPOSIT_CONFIRM','ROW-MODE','ben@example.test',{sessionEmail:'lenny@example.test',readRow:()=>Object.assign({},row,{id:'ROW-MODE',command_id:'DEP-MODE'}),dispatch:(request)=>manual.adapter().command(request)}),/MODE_DENIED/);
+});
+test('PRE02/PRE04 TASK_COMPLETE stamp Job fields with evidence; unrelated tasks and missing evidence do not', () => {
+  const gates = require('../s06/gates.js');
+  global.processBookingGates = gates.processBookingGates;
+  const f = fixture();
+  installIntake(f);
+  f.tables.Evidence = [];
+  const sold = f.adapter().command({command_id:'SOLD-PRE',command_type:'SOLD_INTAKE',payload:soldPayload()});
+  const jobId = sold.result.job_id;
+  let job = f.tables.Jobs.find(j => j.id === jobId);
+  assert.equal(job.contract_status, 'NotSent');
+  assert.equal(job.customer_details_verified_at, null);
+  const pre02 = f.tables.Tasks.find(t => t.job_id === jobId && t.template_code === 'PRE02');
+  const pre04 = f.tables.Tasks.find(t => t.job_id === jobId && t.template_code === 'PRE04');
+  const pre01 = f.tables.Tasks.find(t => t.job_id === jobId && t.template_code === 'PRE01');
+  assert.ok(pre02 && pre04 && pre01);
+
+  assert.throws(() => f.adapter().command({
+    command_id: 'PRE02-NOEV', command_type: 'TASK_COMPLETE', task_id: pre02.id, expected_version: pre02.version,
+    payload: { completion_note: 'signed without evidence' }
+  }), /REQUIRED_EVIDENCE_ID/);
+  job = f.tables.Jobs.find(j => j.id === jobId);
+  assert.equal(job.contract_status, 'NotSent');
+
+  const signed = f.adapter().command({
+    command_id: 'PRE02-OK', command_type: 'TASK_COMPLETE', task_id: pre02.id, expected_version: pre02.version,
+    payload: { completion_note: 'Contract signed', evidence_id: 'EVID-CONTRACT-TONY' }
+  });
+  assert.equal(signed.result.status, 'Completed');
+  assert.equal(signed.result.external_calls, 0);
+  job = f.tables.Jobs.find(j => j.id === jobId);
+  assert.equal(job.contract_status, 'Signed');
+  assert.equal(job.contract_evidence_id, 'EVID-CONTRACT-TONY');
+  assert.ok(job.contract_signed_at);
+  const jobVersionAfterPre02 = job.version;
+
+  const replayPre02 = f.adapter().command({
+    command_id: 'PRE02-OK', command_type: 'TASK_COMPLETE', task_id: pre02.id, expected_version: pre02.version,
+    payload: { completion_note: 'Contract signed', evidence_id: 'EVID-CONTRACT-TONY' }
+  });
+  assert.equal(replayPre02.result.status, 'Replayed');
+  assert.equal(f.tables.Jobs.find(j => j.id === jobId).version, jobVersionAfterPre02);
+
+  f.tables.Evidence.push({ id: 'EV-OTHER', job_id: 'J-OTHER', drive_file_id: 'DRIVE-X', category: 'Contract', filename: 'x.pdf', upload_status: 'Received', customer_shareable: false, version: 1 });
+  const pre04Fresh = f.tables.Tasks.find(t => t.id === pre04.id);
+  assert.throws(() => f.adapter().command({
+    command_id: 'PRE04-XJOB', command_type: 'TASK_COMPLETE', task_id: pre04Fresh.id, expected_version: pre04Fresh.version,
+    payload: { completion_note: 'checked', evidence_id: 'EV-OTHER' }
+  }), /CROSS_JOB_EVIDENCE|REQUIRED_EVIDENCE/);
+
+  // Cross-job Evidence id used on PRE02 path already completed; for PRE04 use opaque ref
+  const verified = f.adapter().command({
+    command_id: 'PRE04-OK', command_type: 'TASK_COMPLETE', task_id: pre04Fresh.id, expected_version: pre04Fresh.version,
+    payload: { completion_note: 'Customer/value checked', evidence_id: 'EVID-PRE04-CHECK' }
+  });
+  assert.equal(verified.result.status, 'Completed');
+  job = f.tables.Jobs.find(j => j.id === jobId);
+  assert.ok(job.customer_details_verified_at);
+  assert.equal(job.customer_details_verified_by, 'P-tanya');
+  assert.equal(job.original_gross_pence, 500000);
+
+  const pre01Before = f.tables.Jobs.find(j => j.id === jobId);
+  const pre01Cmd = f.adapter().command({
+    command_id: 'PRE01-OK', command_type: 'TASK_COMPLETE', task_id: pre01.id, expected_version: pre01.version,
+    payload: { completion_note: 'invoice sent' }
+  });
+  assert.equal(pre01Cmd.result.status, 'Completed');
+  assert.equal(f.tables.Jobs.find(j => j.id === jobId).customer_details_verified_at, pre01Before.customer_details_verified_at);
+  assert.equal(f.tables.Jobs.find(j => j.id === jobId).contract_evidence_id, 'EVID-CONTRACT-TONY');
+
+  // Deposit + readiness after PRE02/PRE04 stamps
+  f.tables.Jobs.find(j => j.id === jobId).deposit_bank_confirmed_at = '2026-09-13T12:00:00.000Z';
+  f.tables.Jobs.find(j => j.id === jobId).deposit_bank_confirmed_by = 'P-ben';
+  f.tables.Jobs.find(j => j.id === jobId).deposit_bank_reference = 'TONY-DEP';
+  const pre03 = f.tables.Tasks.find(t => t.job_id === jobId && t.template_code === 'PRE03');
+  f.tables.Tasks.find(t => t.id === pre03.id).status = 'Complete';
+  f.tables.Tasks.find(t => t.id === pre03.id).completed_at = '2026-09-13T12:05:00.000Z';
+  f.tables.Tasks.find(t => t.id === pre03.id).completed_by = 'P-ben';
+  f.tables.Tasks.find(t => t.id === pre03.id).completion_note = 'deposit seen';
+  f.tables.Tasks.find(t => t.id === pre03.id).evidence_id = 'EVID-PRE03';
+  job = f.tables.Jobs.find(j => j.id === jobId);
+  assert.equal(gates.evaluateReadyToBook(job, f.store).ready, true);
+  const gatesResult = f.adapter().command({
+    command_id: 'GATES-1', command_type: 'BOOKING_GATES', job_id: jobId, expected_version: job.version, payload: {}
+  });
+  assert.equal(gatesResult.result.status, 'ReadyToBook');
+  assert.equal(gatesResult.result.external_calls, 0);
+  assert.equal(f.tables.Jobs.find(j => j.id === jobId).workflow_stage, 'ReadyToBook');
+});
+test('PRE02/PRE04 evidence_path creates Evidence, stamps Jobs, replays idempotently, and refuses bad uploads', () => {
+  const gates = require('../s06/gates.js');
+  global.processBookingGates = gates.processBookingGates;
+  const f = fixture();
+  installIntake(f);
+  f.tables.Evidence = [];
+  f.options.resolveUpload = (path) => {
+    if (path === 'missing/contract.pdf') {
+      const e = new Error('R1C_UPLOAD_PENDING');
+      e.code = 'R1C_UPLOAD_PENDING';
+      throw e;
+    }
+    if (path === 'uploads/contract-tony.pdf') {
+      return { drive_file_id: 'DRIVE-CONTRACT-1', filename: 'contract-tony.pdf', mime_type: 'application/pdf' };
+    }
+    if (path === 'uploads/customer-tony.pdf') {
+      return { drive_file_id: 'DRIVE-CUSTOMER-1', filename: 'customer-tony.pdf', mime_type: 'application/pdf' };
+    }
+    const e = new Error('R1C_UPLOAD_PATH_INVALID');
+    e.code = 'R1C_UPLOAD_PATH_INVALID';
+    throw e;
+  };
+  const sold = f.adapter().command({ command_id: 'SOLD-PATH', command_type: 'SOLD_INTAKE', payload: soldPayload() });
+  const jobId = sold.result.job_id;
+  const pre02 = f.tables.Tasks.find(t => t.job_id === jobId && t.template_code === 'PRE02');
+  const pre04 = f.tables.Tasks.find(t => t.job_id === jobId && t.template_code === 'PRE04');
+  const pre01 = f.tables.Tasks.find(t => t.job_id === jobId && t.template_code === 'PRE01');
+
+  assert.throws(() => f.adapter().command({
+    command_id: 'PRE02-MISS', command_type: 'TASK_COMPLETE', task_id: pre02.id, expected_version: pre02.version,
+    payload: { completion_note: 'missing file', evidence_path: 'missing/contract.pdf' }
+  }), /UPLOAD_PENDING/);
+  assert.equal(f.tables.Evidence.length, 0);
+  assert.equal(f.tables.Jobs.find(j => j.id === jobId).contract_status, 'NotSent');
+
+  const signed = f.adapter().command({
+    command_id: 'PRE02-PATH', command_type: 'TASK_COMPLETE', task_id: pre02.id, expected_version: pre02.version,
+    payload: { completion_note: 'Contract signed via upload', evidence_path: 'uploads/contract-tony.pdf' }
+  });
+  assert.equal(signed.result.status, 'Completed');
+  assert.equal(signed.result.external_calls, 0);
+  assert.equal(f.tables.Evidence.length, 1);
+  const contractEv = f.tables.Evidence[0];
+  assert.equal(contractEv.job_id, jobId);
+  assert.equal(contractEv.drive_file_id, 'DRIVE-CONTRACT-1');
+  assert.equal(contractEv.category, 'Contract');
+  assert.equal(contractEv.id, 'EV-R1A-' + jobId + '-' + serviceCore._r1sHashDrive('DRIVE-CONTRACT-1'));
+  let job = f.tables.Jobs.find(j => j.id === jobId);
+  assert.equal(job.contract_status, 'Signed');
+  assert.equal(job.contract_evidence_id, contractEv.id);
+  assert.ok(job.contract_signed_at);
+  assert.equal(f.tables.Tasks.find(t => t.id === pre02.id).evidence_id, contractEv.id);
+  const completedAt = f.tables.Tasks.find(t => t.id === pre02.id).completed_at;
+  const jobVersion = job.version;
+
+  const replay = f.adapter().command({
+    command_id: 'PRE02-PATH', command_type: 'TASK_COMPLETE', task_id: pre02.id, expected_version: pre02.version,
+    payload: { completion_note: 'Contract signed via upload', evidence_path: 'uploads/contract-tony.pdf' }
+  });
+  assert.equal(replay.result.status, 'Replayed');
+  assert.equal(replay.result.external_calls, 0);
+  assert.equal(f.tables.Evidence.length, 1);
+  assert.equal(f.tables.Jobs.find(j => j.id === jobId).version, jobVersion);
+  assert.equal(f.tables.Tasks.find(t => t.id === pre02.id).completed_at, completedAt);
+
+  f.tables.Evidence.push({
+    id: 'EV-OTHER-JOB', job_id: 'J-OTHER', drive_file_id: 'DRIVE-OTHER', category: 'Contract',
+    filename: 'x.pdf', upload_status: 'Uploaded', customer_shareable: false, version: 1
+  });
+  assert.throws(() => f.adapter().command({
+    command_id: 'PRE04-XJOB', command_type: 'TASK_COMPLETE', task_id: pre04.id, expected_version: pre04.version,
+    payload: { completion_note: 'bad', evidence_id: 'EV-OTHER-JOB' }
+  }), /CROSS_JOB_EVIDENCE/);
+
+  const verified = f.adapter().command({
+    command_id: 'PRE04-PATH', command_type: 'TASK_COMPLETE', task_id: pre04.id, expected_version: pre04.version,
+    payload: { completion_note: 'Details checked', evidence_path: 'uploads/customer-tony.pdf' }
+  });
+  assert.equal(verified.result.status, 'Completed');
+  assert.equal(verified.result.external_calls, 0);
+  const customerEv = f.tables.Evidence.find(e => e.drive_file_id === 'DRIVE-CUSTOMER-1');
+  assert.ok(customerEv);
+  assert.equal(customerEv.category, 'CustomerDetails');
+  assert.equal(customerEv.job_id, jobId);
+  job = f.tables.Jobs.find(j => j.id === jobId);
+  assert.ok(job.customer_details_verified_at);
+  assert.equal(job.customer_details_verified_by, 'P-tanya');
+  assert.equal(job.original_gross_pence, 500000);
+  assert.equal(f.tables.Tasks.find(t => t.id === pre04.id).evidence_id, customerEv.id);
+
+  const evidenceCount = f.tables.Evidence.length;
+  const pre01Cmd = f.adapter().command({
+    command_id: 'PRE01-PATH', command_type: 'TASK_COMPLETE', task_id: pre01.id, expected_version: pre01.version,
+    payload: { completion_note: 'invoice sent' }
+  });
+  assert.equal(pre01Cmd.result.status, 'Completed');
+  assert.equal(f.tables.Evidence.length, evidenceCount);
+  assert.equal(f.tables.Jobs.find(j => j.id === jobId).contract_evidence_id, contractEv.id);
+
+  const requestRow = require('../r1-appsheet/request-row.js');
+  const built = requestRow._r1aBuildTaskCompleteRequest({
+    id: 'REQ-TC-1', command_id: 'TC-REQ-1', task_id: pre01.id, expected_version: 1,
+    completion_note: 'note', evidence_path: 'uploads/x.pdf', evidence_id: '',
+    submitted_by: 'tanya@example.test', submitted_at: '2026-09-13T10:00:00.000Z', status: 'Ready'
+  }, 'tanya@example.test');
+  assert.equal(built.command_type, 'TASK_COMPLETE');
+  assert.equal(built.payload.evidence_path, 'uploads/x.pdf');
+  assert.equal(built.payload.completion_note, 'note');
+});
+test('Tony PRE02 recovery attaches evidence_path without changing completed_at', () => {
+  const requestRow = require('../r1-appsheet/request-row.js');
+  const completedAt = '2026-09-12T09:00:00.000Z';
+  const tables = {
+    People: [{ id: 'PERSON-lenny-dev', email: 'lenny@simplesolarltd.co.uk', active: true }],
+    PersonRoles: [{ id: 'PROLE-lenny-admin', person_id: 'PERSON-lenny-dev', role: 'Admin', active: true }],
+    Jobs: [{
+      id: 'J-mtzl04hw-bdpt6i', original_gross_pence: 1040643, pilot_job: true, release_scope: 'R1', version: 3,
+      contract_status: 'NotSent', contract_evidence_id: null, contract_signed_at: null
+    }],
+    Tasks: [{
+      id: 'TASK-mtzl08pa-vpsvdn', job_id: 'J-mtzl04hw-bdpt6i', template_code: 'PRE02', status: 'Complete',
+      evidence_id: null, completed_at: completedAt, completed_by: 'P-tanya', version: 2
+    }],
+    Evidence: []
+  };
+  const store = {
+    getSheetId: () => requestRow.R1A_REQUEST_DEV_SHEET,
+    getEnvironment: () => 'DEV',
+    list: (n) => copy(tables[n] || []),
+    get: (n, id) => copy((tables[n] || []).find((x) => x.id === id) || null),
+    insert: (n, r) => { (tables[n] || (tables[n] = [])).push(copy(r)); },
+    update: (n, id, p) => { const row = (tables[n] || []).find((x) => x.id === id); Object.assign(row, copy(p)); },
+    withLock: (fn) => fn()
+  };
+  const out = JSON.parse(requestRow.runR1AApplyTonyPre02ContractSideEffect('lenny@simplesolarltd.co.uk', 'uploads/contract.pdf', {
+    cloudOptions: () => ({ store, config: { environment: 'DEV', sheetId: requestRow.R1A_REQUEST_DEV_SHEET } }),
+    resolveUpload: () => ({ drive_file_id: 'DRIVE-TONY-C', filename: 'contract.pdf', mime_type: 'application/pdf' }),
+    ensureEvidence: serviceCore._r1sEnsureOfficeTaskEvidence,
+    applyPre02: serviceCore._r1sApplyPre02Contract
+  }));
+  assert.equal(out.ok, true);
+  assert.equal(out.external_calls, 0);
+  assert.equal(out.evidence_created, true);
+  assert.equal(out.after.task_completed_at, completedAt);
+  assert.equal(out.after.contract_status, 'Signed');
+  assert.equal(out.after.contract_evidence_id, out.evidence_id);
+  assert.equal(tables.Evidence.length, 1);
+  assert.equal(tables.Evidence[0].category, 'Contract');
+  assert.equal(tables.Tasks[0].evidence_id, out.evidence_id);
+  assert.equal(tables.Tasks[0].completed_at, completedAt);
+  const again = JSON.parse(requestRow.runR1AApplyTonyPre02ContractSideEffect('lenny@simplesolarltd.co.uk', 'uploads/contract.pdf', {
+    cloudOptions: () => ({ store, config: { environment: 'DEV', sheetId: requestRow.R1A_REQUEST_DEV_SHEET } }),
+    resolveUpload: () => ({ drive_file_id: 'DRIVE-TONY-C', filename: 'contract.pdf', mime_type: 'application/pdf' }),
+    ensureEvidence: serviceCore._r1sEnsureOfficeTaskEvidence,
+    applyPre02: serviceCore._r1sApplyPre02Contract
+  }));
+  assert.equal(again.ok, true);
+  assert.equal(again.evidence_created, false);
+  assert.equal(tables.Evidence.length, 1);
+  assert.equal(again.after.task_completed_at, completedAt);
+});
+test('TASK_EVIDENCE_ATTACH repairs completed PRE02 via normal AppSheet request-row flow', () => {
+  const gates = require('../s06/gates.js');
+  global.processBookingGates = gates.processBookingGates;
+  const f = fixture();
+  installIntake(f);
+  f.tables.Evidence = [];
+  f.options.resolveUpload = (path) => {
+    if (path === 'missing/contract.pdf') {
+      const e = new Error('R1C_UPLOAD_PENDING');
+      e.code = 'R1C_UPLOAD_PENDING';
+      throw e;
+    }
+    if (path === 'uploads/legacy-contract.pdf') {
+      return { drive_file_id: 'DRIVE-LEGACY-1', filename: 'legacy-contract.pdf', mime_type: 'application/pdf' };
+    }
+    const e = new Error('R1C_UPLOAD_PATH_INVALID');
+    e.code = 'R1C_UPLOAD_PATH_INVALID';
+    throw e;
+  };
+  const sold = f.adapter().command({ command_id: 'SOLD-ATTACH', command_type: 'SOLD_INTAKE', payload: soldPayload() });
+  const jobId = sold.result.job_id;
+  const pre02 = f.tables.Tasks.find(t => t.job_id === jobId && t.template_code === 'PRE02');
+  const pre01 = f.tables.Tasks.find(t => t.job_id === jobId && t.template_code === 'PRE01');
+  const completedAt = '2026-09-12T09:00:00.000Z';
+  const completionNote = 'Completed before evidence path existed';
+  Object.assign(pre02, {
+    status: 'Complete',
+    completed_at: completedAt,
+    completed_by: 'PERSON-lenny-dev',
+    completion_note: completionNote,
+    evidence_id: null,
+    owner_id: 'P-tanya',
+    version: 4
+  });
+  f.tables.Jobs.find(j => j.id === jobId).contract_status = 'NotSent';
+  f.tables.Jobs.find(j => j.id === jobId).contract_evidence_id = null;
+  f.tables.Jobs.find(j => j.id === jobId).contract_signed_at = null;
+  const gross = f.tables.Jobs.find(j => j.id === jobId).original_gross_pence;
+  f.options.reads.taskActionAvailability = (s, id) => {
+    const t = f.tables.Tasks.find(x => x.id === id);
+    const complete = t && ['Open', 'Waiting', 'InProgress'].indexOf(t.status) >= 0 && t.revision_required !== true;
+    return { task_id: id, actions: { complete: { available: !!complete } } };
+  };
+
+  assert.throws(() => f.adapter().command({
+    command_id: 'TC-LEGACY', command_type: 'TASK_COMPLETE', task_id: pre02.id, expected_version: 4,
+    payload: { completion_note: 'retry', evidence_path: 'uploads/legacy-contract.pdf' }
+  }), /TASK_NOT_COMPLETABLE/);
+
+  const avail = f.adapter().read({ read_type: 'TASK_ACTION_AVAILABILITY', task_id: pre02.id });
+  assert.equal(avail.data.appsheet_commands.task_complete.available, false);
+  assert.equal(avail.data.appsheet_commands.task_evidence_attach.available, true);
+
+  assert.throws(() => f.adapter().command({
+    command_id: 'ATTACH-MISS', command_type: 'TASK_EVIDENCE_ATTACH', task_id: pre02.id, expected_version: 4,
+    payload: { evidence_path: 'missing/contract.pdf' }
+  }), /UPLOAD_PENDING/);
+
+  const openPre02 = Object.assign({}, pre02, { id: 'T-OPEN-PRE02', status: 'Open', evidence_id: null, version: 1 });
+  f.tables.Tasks.push(openPre02);
+  assert.throws(() => f.adapter().command({
+    command_id: 'ATTACH-OPEN', command_type: 'TASK_EVIDENCE_ATTACH', task_id: openPre02.id, expected_version: 1,
+    payload: { evidence_path: 'uploads/legacy-contract.pdf' }
+  }), /TASK_NOT_ATTACHABLE/);
+
+  Object.assign(pre01, { status: 'Complete', completed_at: completedAt, completed_by: 'P-tanya', evidence_id: null, version: 2 });
+  assert.throws(() => f.adapter().command({
+    command_id: 'ATTACH-PRE01', command_type: 'TASK_EVIDENCE_ATTACH', task_id: pre01.id, expected_version: 2,
+    payload: { evidence_path: 'uploads/legacy-contract.pdf' }
+  }), /TASK_NOT_ATTACHABLE/);
+
+  const priorEmail = f.options.actorEmail;
+  f.options.actorEmail = () => 'hannah@example.test';
+  assert.throws(() => f.adapter().command({
+    command_id: 'ATTACH-HAN', command_type: 'TASK_EVIDENCE_ATTACH', task_id: pre02.id, expected_version: 4,
+    payload: { evidence_path: 'uploads/legacy-contract.pdf' }
+  }), /JOB_ACCESS_DENIED|TASK_ACCESS_DENIED/);
+  f.options.actorEmail = priorEmail;
+  const row = {
+    id: 'REQ-ATTACH-1', command_id: 'ATTACH-OK', task_id: pre02.id, expected_version: 4,
+    evidence_path: 'uploads/legacy-contract.pdf', submitted_by: 'tanya@example.test',
+    submitted_at: '2026-09-13T12:00:00.000Z', status: 'Ready', result_status: '', result_message: ''
+  };
+  assert.throws(() => requestRow._r1aCommandFromRequestRow('TASK_EVIDENCE_ATTACH', 'REQ-ATTACH-1', 'ben@example.test', {
+    readRow: () => row, dispatch: () => null
+  }), /ACTOR_MISMATCH/);
+
+  const attached = requestRow._r1aCommandFromRequestRow('TASK_EVIDENCE_ATTACH', 'REQ-ATTACH-1', 'tanya@example.test', {
+    readRow: () => row,
+    dispatch: (request) => f.adapter().command(request)
+  });
+  assert.equal(attached.result.status, 'Attached');
+  assert.equal(attached.result.external_calls, 0);
+  const evidence = f.tables.Evidence.find(e => e.drive_file_id === 'DRIVE-LEGACY-1');
+  assert.ok(evidence);
+  assert.equal(evidence.category, 'Contract');
+  assert.equal(evidence.job_id, jobId);
+  const taskAfter = f.tables.Tasks.find(t => t.id === pre02.id);
+  assert.equal(taskAfter.evidence_id, evidence.id);
+  assert.equal(taskAfter.status, 'Complete');
+  assert.equal(taskAfter.completed_at, completedAt);
+  assert.equal(taskAfter.completed_by, 'PERSON-lenny-dev');
+  assert.equal(taskAfter.completion_note, completionNote);
+  const job = f.tables.Jobs.find(j => j.id === jobId);
+  assert.equal(job.contract_status, 'Signed');
+  assert.equal(job.contract_evidence_id, evidence.id);
+  assert.ok(job.contract_signed_at);
+  assert.equal(job.original_gross_pence, gross);
+
+  const replay = requestRow._r1aCommandFromRequestRow('TASK_EVIDENCE_ATTACH', 'REQ-ATTACH-1', 'tanya@example.test', {
+    readRow: () => row,
+    dispatch: (request) => f.adapter().command(request)
+  });
+  assert.equal(replay.result.status, 'Replayed');
+  assert.equal(replay.result.external_calls, 0);
+  assert.equal(f.tables.Evidence.filter(e => e.drive_file_id === 'DRIVE-LEGACY-1').length, 1);
+  assert.equal(f.tables.Tasks.find(t => t.id === pre02.id).completed_at, completedAt);
+
+  assert.throws(() => f.adapter().command({
+    command_id: 'ATTACH-AGAIN', command_type: 'TASK_EVIDENCE_ATTACH', task_id: pre02.id, expected_version: taskAfter.version,
+    payload: { evidence_path: 'uploads/legacy-contract.pdf' }
+  }), /EVIDENCE_ALREADY_ATTACHED/);
+
+  f.tables.Evidence.push({
+    id: 'EV-OTHER-ATTACH', job_id: 'J-OTHER', drive_file_id: 'DRIVE-X', category: 'Contract',
+    filename: 'x.pdf', upload_status: 'Uploaded', customer_shareable: false, version: 1
+  });
+  // Cross-job: completing PRE04 with foreign Evidence id still refused on TASK_COMPLETE path
+  const pre04 = f.tables.Tasks.find(t => t.job_id === jobId && t.template_code === 'PRE04');
+  assert.throws(() => f.adapter().command({
+    command_id: 'PRE04-X', command_type: 'TASK_COMPLETE', task_id: pre04.id, expected_version: pre04.version,
+    payload: { completion_note: 'x', evidence_id: 'EV-OTHER-ATTACH' }
+  }), /CROSS_JOB_EVIDENCE/);
+});
+test('Tony reconcile allows Admin email when Session is blank and denies Office/unknown/inactive', () => {
+  function tonyStore(people, roles) {
+    const tables = {
+      People: people,
+      PersonRoles: roles,
+      Jobs: [{ id: 'J-mtzl04hw-bdpt6i', original_gross_pence: 1040643, pilot_job: true, release_scope: 'R1', version: 1 }],
+      InvoiceStages: []
+    };
+    return {
+      getSheetId: () => requestRow.R1A_REQUEST_DEV_SHEET,
+      getEnvironment: () => 'DEV',
+      list: (n) => copy(tables[n] || []),
+      get: (n, id) => copy((tables[n] || []).find((x) => x.id === id) || null),
+      withLock: (fn) => fn(),
+      tables
+    };
+  }
+  const adminPeople = [{ id: 'PERSON-lenny-dev', email: 'lenny@simplesolarltd.co.uk', active: true }];
+  const adminRoles = [{ id: 'PROLE-lenny-admin', person_id: 'PERSON-lenny-dev', role: 'Admin', active: true }];
+  const processStub = (jobId, store) => {
+    assert.equal(jobId, 'J-mtzl04hw-bdpt6i');
+    return { stages_created: 2 };
+  };
+  const ok = JSON.parse(requestRow.runR1AReconcileTonyPaymentStages('lenny@simplesolarltd.co.uk', {
+    cloudOptions: () => ({ store: tonyStore(adminPeople, adminRoles), config: { environment: 'DEV', sheetId: requestRow.R1A_REQUEST_DEV_SHEET } }),
+    processJobPayments: processStub
+  }));
+  assert.equal(ok.ok, true);
+  assert.equal(ok.job_id, 'J-mtzl04hw-bdpt6i');
+  assert.equal(ok.deposit_stage_id, 'IS-J-mtzl04hw-bdpt6i-deposit');
+  assert.equal(ok.stages_created, 2);
+
+  const office = JSON.parse(requestRow.runR1AReconcileTonyPaymentStages('tanya@example.test', {
+    cloudOptions: () => ({
+      store: tonyStore([{ id: 'P-tanya', email: 'tanya@example.test', active: true }], [{ person_id: 'P-tanya', role: 'Office', active: true }]),
+      config: { environment: 'DEV', sheetId: requestRow.R1A_REQUEST_DEV_SHEET }
+    }),
+    processJobPayments: processStub
+  }));
+  assert.deepEqual(office, { ok: false, error: 'R1A_ROLE_DENIED' });
+
+  const unknown = JSON.parse(requestRow.runR1AReconcileTonyPaymentStages('nobody@example.test', {
+    cloudOptions: () => ({ store: tonyStore(adminPeople, adminRoles), config: { environment: 'DEV', sheetId: requestRow.R1A_REQUEST_DEV_SHEET } }),
+    processJobPayments: processStub
+  }));
+  assert.deepEqual(unknown, { ok: false, error: 'R1A_UNKNOWN_OR_DUPLICATE_ACTOR' });
+
+  const inactive = JSON.parse(requestRow.runR1AReconcileTonyPaymentStages('lenny@simplesolarltd.co.uk', {
+    cloudOptions: () => ({
+      store: tonyStore([{ id: 'PERSON-lenny-dev', email: 'lenny@simplesolarltd.co.uk', active: false }], adminRoles),
+      config: { environment: 'DEV', sheetId: requestRow.R1A_REQUEST_DEV_SHEET }
+    }),
+    processJobPayments: processStub
+  }));
+  assert.deepEqual(inactive, { ok: false, error: 'R1A_INACTIVE_ACTOR' });
+
+  const missing = JSON.parse(requestRow.runR1AReconcileTonyPaymentStages('', {
+    cloudOptions: () => ({ store: tonyStore(adminPeople, adminRoles), config: { environment: 'DEV', sheetId: requestRow.R1A_REQUEST_DEV_SHEET } }),
+    processJobPayments: processStub
+  }));
+  assert.deepEqual(missing, { ok: false, error: 'R1A_AUTHENTICATED_EMAIL_REQUIRED' });
 });
 test('request-row reader is exact-id, DEV-only, and never writes the helper sheet', () => {
   const headers = ['id', 'command_id', 'submitted_by', 'customer_first_name'];

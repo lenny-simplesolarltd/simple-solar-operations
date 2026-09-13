@@ -19,7 +19,7 @@ function _r1cS12ReviewSubmission(store, submissionId, reviewerId, status, notes)
 
 const R1A_BOUND_DEV_SHEET_ID = '1z7PNZtDdC4Z5eLbmTuQdqp0QpJSmuEvx3QvN3VyNTsc';
 const R1A_BOUND_READS = ['IDENTITY_PROBE','OFFICE_HOME','JOB_SEARCH','JOB_OVERVIEW','OPERATIONAL_QUEUE','RELEASE_MODE_STATUS','SYSTEM_STATUS','AUDIT_HISTORY','ACTION_AVAILABILITY','TASK_ACTION_AVAILABILITY','MY_TASKS','TEAM_TASKS','PLANNER_3_WEEKS','PLANNER_6_WEEKS','INTAKE_REVIEW','INSTALLER_WORKFLOW','GOODS_IN_DETAIL','STOCK_BALANCE'];
-const R1A_BOUND_COMMANDS = ['TASK_COMPLETE','CALL_RECORD','ISSUE_UPDATE','ISSUE_CREATE','PLANNER_UPDATE','MOVE_JOB','CHANGE_INSTALLER','CANCEL_JOB','REINSTATE_JOB','DEPOSIT_CONFIRM','OPERATIONAL_COMPLETE','BOOKING_GATES','SOLD_INTAKE','BOOKING_INTAKE','IW_START','IW_PROGRESS','IW_REPORT_COMPLETION','IW_REPORT_PROBLEM','IW_REPORT_VARIATION','IW_COMMISSIONING_DRAFT','IW_COMMISSIONING_SUBMIT','COMMISSIONING_REVIEW','GOODS_IN_RECEIVE','STOCK_QUARANTINE'];
+const R1A_BOUND_COMMANDS = ['TASK_COMPLETE','TASK_EVIDENCE_ATTACH','CALL_RECORD','ISSUE_UPDATE','ISSUE_CREATE','PLANNER_UPDATE','MOVE_JOB','CHANGE_INSTALLER','CANCEL_JOB','REINSTATE_JOB','DEPOSIT_CONFIRM','OPERATIONAL_COMPLETE','BOOKING_GATES','SOLD_INTAKE','BOOKING_INTAKE','IW_START','IW_PROGRESS','IW_REPORT_COMPLETION','IW_REPORT_PROBLEM','IW_REPORT_VARIATION','IW_COMMISSIONING_DRAFT','IW_COMMISSIONING_SUBMIT','COMMISSIONING_REVIEW','GOODS_IN_RECEIVE','STOCK_QUARANTINE'];
 const R1A_BOUND_QUEUES = ['booking','calls','issues','payments','ghl','cancellation','intake_review'];
 
 function _r1aCopy(v) { return JSON.parse(JSON.stringify(v)); }
@@ -144,7 +144,11 @@ function _r1aCreate(options){
       var t=store.get('Tasks',input.task_id);if(!t)_r1aRefuse('R1A_TASK_NOT_FOUND');if(t.job_id)_r1aAuthorizeJob(store,a,t.job_id);else if(t.owner_id!==a.id&&!_r1aAdmin(a))_r1aRefuse('R1A_TASK_ACCESS_DENIED');
       out=reads.taskActionAvailability(store,input.task_id);
       var completeAvail=!!(out.actions&&out.actions.complete&&out.actions.complete.available),ownerOk=t.owner_id===a.id||t.backup_id===a.id||_r1aAdmin(a);
-      out.appsheet_commands={task_complete:_r1aFlag(completeAvail&&ownerOk,'TASK_COMPLETE','Tasks',!completeAvail?'COMPLETE_NOT_AVAILABLE':'TASK_OWNER_OR_BACKUP_REQUIRED')};
+      var attachAvail=t.status==='Complete'&&!_r1aText(t.evidence_id)&&t.template_code==='PRE02';
+      out.appsheet_commands={
+        task_complete:_r1aFlag(completeAvail&&ownerOk,'TASK_COMPLETE','Tasks',!completeAvail?'COMPLETE_NOT_AVAILABLE':'TASK_OWNER_OR_BACKUP_REQUIRED'),
+        task_evidence_attach:_r1aFlag(attachAvail&&ownerOk,'TASK_EVIDENCE_ATTACH','Tasks',!attachAvail?'ATTACH_NOT_AVAILABLE':'TASK_OWNER_OR_BACKUP_REQUIRED')
+      };
     }
     return {ok:true,read_type:input.read_type,actor_id:a.id,data:_r1aCopy(out)};
   }
@@ -156,7 +160,7 @@ function _r1aCreate(options){
     if(!_r1aOffice(a))_r1aRefuse('R1A_ROLE_DENIED');
     var service=services[input.command_type];
     if(typeof service!=='function')_r1aRefuse('R1A_COMMAND_UNSUPPORTED');
-    if(input.command_type==='TASK_COMPLETE'){
+    if(input.command_type==='TASK_COMPLETE'||input.command_type==='TASK_EVIDENCE_ATTACH'){
       var task=store.get('Tasks',input.task_id);if(!task)_r1aRefuse('R1A_TASK_NOT_FOUND');
       if(task.job_id)_r1aAuthorizeJob(store,a,task.job_id);else if(task.owner_id!==a.id&&!_r1aAdmin(a))_r1aRefuse('R1A_TASK_ACCESS_DENIED');
       if(task.owner_id!==a.id&&task.backup_id!==a.id&&!_r1aAdmin(a))_r1aRefuse('R1A_TASK_ACCESS_DENIED');
@@ -187,7 +191,7 @@ function _r1aCreate(options){
       if(input.command_type==='CHANGE_INSTALLER'){var cwp=store.get('WorkPackages',input.work_package_id);if(!cwp||cwp.job_id!==input.job_id)_r1aRefuse('R1A_WORK_PACKAGE_JOB_MISMATCH');}
       if(input.command_type==='CANCEL_JOB'||input.command_type==='REINSTATE_JOB'){_r1aMode(store,'FN-17','Manual');_r1aMode(store,'FN-20','Manual');}
     }
-    var result=service({request:_r1aCopy(input),actor:a,store:store});
+    var result=service({request:_r1aCopy(input),actor:a,store:store,resolveUpload:options.resolveUpload});
     return {ok:true,command_type:input.command_type,actor_id:a.id,result:_r1aCopy(result)};
   }
   return {read:read,command:command};
@@ -214,14 +218,193 @@ function _r1sText(v){return typeof v==='string'&&v.trim().length>0;}
 function _r1sPayload(request,allowed,required){var p=request.payload||{};if(!p||typeof p!=='object'||Array.isArray(p)||Object.keys(p).some(function(k){return allowed.indexOf(k)<0;}))_r1sErr('R1A_INVALID_FIELDS');(required||[]).forEach(function(k){if(p[k]===undefined||p[k]===null||p[k]==='')_r1sErr('R1A_REQUIRED_'+k.toUpperCase());});return p;}
 function _r1sInsertAudit(store,id,type,entity,action,before,after,actor,command,reason,service,now){if(store.get('AuditEvents',id))return;store.insert('AuditEvents',{id:id,entity_type:type,entity_id:entity,action:action,before_json:before?JSON.stringify(before):null,after_json:JSON.stringify(after),initiating_actor:actor,executing_service:service,timestamp:now,correlation_id:command,reason:reason||null,commit_id:'R1A-'+command,created_at:now});}
 
-function _r1sTaskComplete(ctx){var r=ctx.request,s=ctx.store,a=ctx.actor,p=_r1sPayload(r,['completion_note','evidence_id'],['completion_note']),t=s.get('Tasks',r.task_id),jid='CJ-R1A-'+r.command_id;
-  return s.withLock(function(){var prior=s.get('CommitJournal',jid);if(prior){if(prior.entity_type!=='Tasks'||prior.entity_id!==r.task_id||prior.changes_json!==JSON.stringify(p))_r1sErr('R1A_COMMAND_CONFLICT');if(prior.state!=='Committed')_r1sErr('R1A_RECOVERY_REQUIRED');return{status:'Replayed',task:s.get('Tasks',r.task_id),external_calls:0};}
+function _r1sResolveContractEvidenceId(store,jobId,evidenceId){
+  if(!_r1sText(evidenceId))_r1sErr('R1A_REQUIRED_EVIDENCE_ID');
+  var id=String(evidenceId).trim();
+  var byId=store.get('Evidence',id);
+  if(byId){
+    if(byId.job_id!==jobId)_r1sErr('R1A_CROSS_JOB_EVIDENCE');
+    return byId.id;
+  }
+  var byDrive=(store.list('Evidence')||[]).filter(function(e){return e.drive_file_id===id&&e.job_id===jobId;});
+  if(byDrive.length>1)_r1sErr('R1A_EVIDENCE_AMBIGUOUS');
+  if(byDrive.length===1)return byDrive[0].id;
+  return id;
+}
+
+function _r1sHashDrive(text){
+  var h=0,s=String(text||''),i,hex;
+  for(i=0;i<s.length;i++)h=((h<<5)-h+s.charCodeAt(i))|0;
+  hex=(h>>>0).toString(16);
+  while(hex.length<8)hex='0'+hex;
+  return hex;
+}
+
+/* Resolve AppSheet File path via existing upload resolver. Never invents Evidence ids. */
+function _r1sResolveEvidencePath(path,ctx){
+  if(!_r1sText(path))return null;
+  var resolve=null;
+  if(ctx&&typeof ctx.resolveUpload==='function')resolve=ctx.resolveUpload;
+  else if(typeof _r1cResolveUpload==='function')resolve=_r1cResolveUpload;
+  if(!resolve)_r1sErr('R1A_UPLOAD_RESOLVER_MISSING');
+  return resolve(String(path).trim());
+}
+
+/* Idempotent Evidence row keyed by job_id + drive_file_id (deterministic id EV-R1A-{job}-{hash}). */
+function _r1sEnsureOfficeTaskEvidence(store,jobId,actorId,category,upload,now,commandId){
+  if(!upload||!_r1sText(upload.drive_file_id))_r1sErr('R1A_UPLOAD_INVALID');
+  var driveId=String(upload.drive_file_id).trim();
+  var matches=(store.list('Evidence')||[]).filter(function(e){return e&&e.job_id===jobId&&String(e.drive_file_id||'').trim()===driveId;});
+  if(matches.length>1)_r1sErr('R1A_EVIDENCE_AMBIGUOUS');
+  if(matches.length===1)return{evidence_id:matches[0].id,created:false};
+  var id='EV-R1A-'+jobId+'-'+_r1sHashDrive(driveId);
+  var byId=store.get('Evidence',id);
+  if(byId){
+    if(byId.job_id!==jobId)_r1sErr('R1A_CROSS_JOB_EVIDENCE');
+    if(String(byId.drive_file_id||'').trim()!==driveId)_r1sErr('R1A_EVIDENCE_AMBIGUOUS');
+    return{evidence_id:byId.id,created:false};
+  }
+  store.insert('Evidence',{
+    id:id,
+    job_id:jobId,
+    submission_id:null,
+    issue_id:null,
+    category:category,
+    drive_file_id:driveId,
+    filename:_r1sText(upload.filename)?String(upload.filename).trim():(String(category).toLowerCase()+'-'+jobId),
+    mime_type:upload.mime_type||null,
+    upload_status:'Uploaded',
+    captured_at:now,
+    captured_by:actorId,
+    received_at:now,
+    customer_shareable:false,
+    version:1,
+    checksum:null,
+    created_at:now,
+    commit_id:'R1A-'+commandId
+  });
+  return{evidence_id:id,created:true};
+}
+
+function _r1sApplyPre02Contract(store,job,actorId,evidenceId,now,commandId){
+  var resolved=_r1sResolveContractEvidenceId(store,job.id,evidenceId);
+  if(job.contract_status==='Signed'&&job.contract_evidence_id===resolved&&job.contract_signed_at){
+    return store.get('Jobs',job.id);
+  }
+  var patch={
+    contract_status:'Signed',
+    contract_evidence_id:resolved,
+    contract_signed_at:job.contract_signed_at||now,
+    updated_at:now,
+    updated_by:actorId,
+    version:Number(job.version||0)+1,
+    commit_id:'R1A-'+commandId
+  };
+  store.update('Jobs',job.id,patch);
+  return store.get('Jobs',job.id);
+}
+
+function _r1sApplyPre04Verification(store,job,actorId,now,commandId){
+  if(job.customer_details_verified_at&&job.customer_details_verified_by){
+    return store.get('Jobs',job.id);
+  }
+  if(!(typeof job.original_gross_pence==='number'&&job.original_gross_pence>0))_r1sErr('R1A_SOLD_VALUE_REQUIRED');
+  store.update('Jobs',job.id,{
+    customer_details_verified_at:now,
+    customer_details_verified_by:actorId,
+    updated_at:now,
+    updated_by:actorId,
+    version:Number(job.version||0)+1,
+    commit_id:'R1A-'+commandId
+  });
+  return store.get('Jobs',job.id);
+}
+
+function _r1sTaskComplete(ctx){var r=ctx.request,s=ctx.store,a=ctx.actor,p=_r1sPayload(r,['completion_note','evidence_id','evidence_path'],['completion_note']),t=s.get('Tasks',r.task_id),jid='CJ-R1A-'+r.command_id;
+  return s.withLock(function(){var prior=s.get('CommitJournal',jid);if(prior){if(prior.entity_type!=='Tasks'||prior.entity_id!==r.task_id||prior.changes_json!==JSON.stringify(p))_r1sErr('R1A_COMMAND_CONFLICT');if(prior.state!=='Committed')_r1sErr('R1A_RECOVERY_REQUIRED');return{status:'Replayed',task:s.get('Tasks',r.task_id),job:t&&t.job_id?s.get('Jobs',t.job_id):null,external_calls:0};}
     t=s.get('Tasks',r.task_id);if(Number(t.version)!==Number(r.expected_version))_r1sErr('R1A_STALE_VERSION');if(['Complete','NotRequired','Cancelled'].indexOf(t.status)>=0)_r1sErr('R1A_TASK_NOT_COMPLETABLE');if(['Open','Waiting','InProgress'].indexOf(t.status)<0||t.revision_required===true)_r1sErr('R1A_TASK_NOT_COMPLETABLE');
-    var now=new Date().toISOString(),after=Object.assign({},t,{status:'Complete',completed_at:now,completed_by:a.id,completion_note:p.completion_note,evidence_id:p.evidence_id||t.evidence_id||null,updated_at:now,updated_by:a.id,version:Number(t.version)+1,commit_id:'R1A-'+r.command_id});
+    var evidenceId=p.evidence_id||t.evidence_id||null,pendingUpload=null,pendingCategory=null;
+    if(t.template_code==='PRE02'||t.template_code==='PRE04'){
+      pendingCategory=t.template_code==='PRE02'?'Contract':'CustomerDetails';
+      if(_r1sText(p.evidence_path)){
+        pendingUpload=_r1sResolveEvidencePath(p.evidence_path,ctx);
+      } else {
+        if(!_r1sText(evidenceId))_r1sErr('R1A_REQUIRED_EVIDENCE_ID');
+        if(t.template_code==='PRE02')evidenceId=_r1sResolveContractEvidenceId(s,t.job_id,evidenceId);
+        else {
+          var ev=s.get('Evidence',String(evidenceId).trim());
+          if(ev&&ev.job_id!==t.job_id)_r1sErr('R1A_CROSS_JOB_EVIDENCE');
+          evidenceId=String(evidenceId).trim();
+        }
+      }
+    }
+    var now=new Date().toISOString();
     s.insert('CommitJournal',{id:jid,commit_id:'R1A-'+r.command_id,state:'Prepared',command_id:r.command_id,entity_type:'Tasks',entity_id:t.id,expected_version:r.expected_version,changes_json:JSON.stringify(p),prepared_at:now,committed_at:null,created_at:now});
-    try{s.update('Tasks',t.id,{status:after.status,completed_at:after.completed_at,completed_by:after.completed_by,completion_note:after.completion_note,evidence_id:after.evidence_id,updated_at:now,updated_by:a.id,version:after.version,commit_id:after.commit_id});
+    try{
+    if(pendingUpload){
+      var ensured=_r1sEnsureOfficeTaskEvidence(s,t.job_id,a.id,pendingCategory,pendingUpload,now,r.command_id);
+      if(_r1sText(p.evidence_id)&&String(p.evidence_id).trim()!==ensured.evidence_id)_r1sErr('R1A_EVIDENCE_CONFLICT');
+      evidenceId=ensured.evidence_id;
+    }
+    var after=Object.assign({},t,{status:'Complete',completed_at:now,completed_by:a.id,completion_note:p.completion_note,evidence_id:evidenceId||null,updated_at:now,updated_by:a.id,version:Number(t.version)+1,commit_id:'R1A-'+r.command_id});
+    s.update('Tasks',t.id,{status:after.status,completed_at:after.completed_at,completed_by:after.completed_by,completion_note:after.completion_note,evidence_id:after.evidence_id,updated_at:now,updated_by:a.id,version:after.version,commit_id:after.commit_id});
     s.insert('TaskEvents',{id:'TE-R1A-'+r.command_id,task_id:t.id,action:'Complete',old_status:t.status,new_status:'Complete',old_owner:t.owner_id,new_owner:t.owner_id,old_due:t.due_at,new_due:t.due_at,reason:p.completion_note,actor:a.id,timestamp:now,created_at:now,commit_id:'R1A-'+r.command_id});
-    _r1sInsertAudit(s,'AE-R1A-'+r.command_id,'Tasks',t.id,'Complete',t,after,a.id,r.command_id,p.completion_note,'R1 AppSheet/S04',now);s.update('CommitJournal',jid,{state:'Committed',committed_at:now});return{status:'Completed',task:s.get('Tasks',t.id),external_calls:0};}catch(e){s.update('CommitJournal',jid,{state:'RecoveryRequired'});throw e;}});}
+    var jobAfter=null;
+    if(t.job_id&&(t.template_code==='PRE02'||t.template_code==='PRE04')){
+      var job=s.get('Jobs',t.job_id);if(!job)_r1sErr('R1A_JOB_NOT_FOUND');
+      if(t.template_code==='PRE02')jobAfter=_r1sApplyPre02Contract(s,job,a.id,evidenceId,now,r.command_id);
+      if(t.template_code==='PRE04')jobAfter=_r1sApplyPre04Verification(s,job,a.id,now,r.command_id);
+    }
+    _r1sInsertAudit(s,'AE-R1A-'+r.command_id,'Tasks',t.id,'Complete',t,after,a.id,r.command_id,p.completion_note,'R1 AppSheet/S04',now);s.update('CommitJournal',jid,{state:'Committed',committed_at:now});return{status:'Completed',task:s.get('Tasks',t.id),job:jobAfter,external_calls:0};}catch(e){s.update('CommitJournal',jid,{state:'RecoveryRequired'});throw e;}});}
+
+/* Legacy repair: attach required evidence to an already-Complete PRE02 with blank evidence_id.
+ * Does not reopen the task or alter completed_at / completed_by / completion_note. */
+function _r1sTaskEvidenceAttach(ctx){
+  var r=ctx.request,s=ctx.store,a=ctx.actor,p=_r1sPayload(r,['evidence_path'],['evidence_path']),t=s.get('Tasks',r.task_id),jid='CJ-R1A-'+r.command_id;
+  return s.withLock(function(){
+    var prior=s.get('CommitJournal',jid);
+    if(prior){
+      if(prior.entity_type!=='Tasks'||prior.entity_id!==r.task_id||prior.changes_json!==JSON.stringify(p))_r1sErr('R1A_COMMAND_CONFLICT');
+      if(prior.state!=='Committed')_r1sErr('R1A_RECOVERY_REQUIRED');
+      return{status:'Replayed',task:s.get('Tasks',r.task_id),job:t&&t.job_id?s.get('Jobs',t.job_id):null,external_calls:0};
+    }
+    t=s.get('Tasks',r.task_id);
+    if(!t)_r1sErr('R1A_TASK_NOT_FOUND');
+    if(Number(t.version)!==Number(r.expected_version))_r1sErr('R1A_STALE_VERSION');
+    if(t.status!=='Complete')_r1sErr('R1A_TASK_NOT_ATTACHABLE');
+    if(t.template_code!=='PRE02')_r1sErr('R1A_TASK_NOT_ATTACHABLE');
+    if(_r1sText(t.evidence_id))_r1sErr('R1A_EVIDENCE_ALREADY_ATTACHED');
+    if(!t.job_id)_r1sErr('R1A_JOB_NOT_FOUND');
+    var upload=_r1sResolveEvidencePath(p.evidence_path,ctx);
+    var now=new Date().toISOString();
+    var before={
+      status:t.status,completed_at:t.completed_at,completed_by:t.completed_by,completion_note:t.completion_note,
+      evidence_id:t.evidence_id,version:t.version
+    };
+    s.insert('CommitJournal',{id:jid,commit_id:'R1A-'+r.command_id,state:'Prepared',command_id:r.command_id,entity_type:'Tasks',entity_id:t.id,expected_version:r.expected_version,changes_json:JSON.stringify(p),prepared_at:now,committed_at:null,created_at:now});
+    try{
+      var ensured=_r1sEnsureOfficeTaskEvidence(s,t.job_id,a.id,'Contract',upload,now,r.command_id);
+      var evidenceId=ensured.evidence_id;
+      s.update('Tasks',t.id,{
+        evidence_id:evidenceId,
+        updated_at:now,
+        updated_by:a.id,
+        version:Number(t.version)+1,
+        commit_id:'R1A-'+r.command_id
+      });
+      var after=s.get('Tasks',t.id);
+      if(after.status!=='Complete'||after.completed_at!==t.completed_at||after.completed_by!==t.completed_by||after.completion_note!==t.completion_note)_r1sErr('R1A_TASK_COMPLETION_MUTATION');
+      s.insert('TaskEvents',{id:'TE-R1A-'+r.command_id,task_id:t.id,action:'EvidenceAttach',old_status:t.status,new_status:t.status,old_owner:t.owner_id,new_owner:t.owner_id,old_due:t.due_at,new_due:t.due_at,reason:'TASK_EVIDENCE_ATTACH',actor:a.id,timestamp:now,created_at:now,commit_id:'R1A-'+r.command_id});
+      var job=s.get('Jobs',t.job_id);if(!job)_r1sErr('R1A_JOB_NOT_FOUND');
+      var grossBefore=job.original_gross_pence;
+      var jobAfter=_r1sApplyPre02Contract(s,job,a.id,evidenceId,now,r.command_id);
+      if(jobAfter.original_gross_pence!==grossBefore)_r1sErr('R1A_FINANCIAL_MUTATION');
+      _r1sInsertAudit(s,'AE-R1A-'+r.command_id,'Tasks',t.id,'EvidenceAttach',before,after,a.id,r.command_id,p.evidence_path,'R1 AppSheet/S04',now);
+      s.update('CommitJournal',jid,{state:'Committed',committed_at:now});
+      return{status:'Attached',task:s.get('Tasks',t.id),job:jobAfter,evidence_id:evidenceId,external_calls:0};
+    }catch(e){s.update('CommitJournal',jid,{state:'RecoveryRequired'});throw e;}
+  });
+}
 
 function _r1sCallRecord(ctx){var r=ctx.request,s=ctx.store,a=ctx.actor,p=_r1sPayload(r,['type','work_package_id','contact_id','person_id','attempted_at','outcome','notes','next_attempt_at','actual_completion_confirmed','customer_happy'],['type','outcome']),t=s.get('Tasks',r.task_id),id='CALL-R1A-'+r.command_id,existing=s.get('Calls',id);if(existing)return{status:'Replayed',call:existing,external_calls:0};if(!t||Number(t.version)!==Number(r.expected_version))_r1sErr('R1A_STALE_VERSION');var before=t,res=_s10RecordCall({id:id,job_id:r.job_id,work_package_id:p.work_package_id||null,task_id:r.task_id,type:p.type,contact_id:p.contact_id||null,person_id:p.person_id||null,attempted_at:p.attempted_at,attempted_by:a.id,outcome:p.outcome,notes:p.notes||null,next_attempt_at:p.next_attempt_at||null,actual_completion_confirmed:p.actual_completion_confirmed===true,customer_happy:p.customer_happy,commit_id:'R1A-'+r.command_id},s),now=(res.call||{}).attempted_at||new Date().toISOString(),after=s.get('Tasks',t.id);if(after&&Number(after.version)!==Number(before.version))s.insert('TaskEvents',{id:'TE-R1A-'+r.command_id,task_id:t.id,action:'CallOutcome',old_status:before.status,new_status:after.status,old_owner:before.owner_id,new_owner:after.owner_id,old_due:before.due_at,new_due:after.due_at,reason:p.outcome,actor:a.id,timestamp:now,created_at:now,commit_id:'R1A-'+r.command_id});_r1sInsertAudit(s,'AE-R1A-'+r.command_id,'Calls',id,'RecordCall',null,res.call,a.id,r.command_id,p.notes,'R1 AppSheet/S10',now);return{status:'Recorded',call:res.call,external_calls:0};}
 
@@ -297,7 +480,7 @@ function _r1sCancel(ctx){var r=ctx.request,p=_r1sPayload(r,['reason','effective_
 function _r1sReinstate(ctx){var r=ctx.request,p=_r1sPayload(r,['reason','new_date','risk_review','commitment_review','finance_review','evidence_reference'],['reason','new_date','commitment_review','finance_review','evidence_reference']);return _s15Execute('Reinstate',Object.assign({command_id:r.command_id,job_id:r.job_id,expected_version:r.expected_version,actor:ctx.actor.id},p),ctx.store);}
 
 function _r1sDepositConfirm(ctx){var r=ctx.request,s=ctx.store,a=ctx.actor,p=_r1sPayload(r,['reference'],['reference']);
-  return s.withLock(function(){var job=s.get('Jobs',r.job_id);if(!job||Number(job.version)!==Number(r.expected_version))_r1sErr('R1A_STALE_VERSION');if(typeof confirmDeposit!=='function')_r1sErr('R1A_COMMAND_UNSUPPORTED');var before=job,res=confirmDeposit(s,r.job_id,a.id,p.reference),now=new Date().toISOString(),after=s.get('Jobs',r.job_id);_r1sInsertAudit(s,'AE-R1A-'+r.command_id,'Jobs',r.job_id,'DepositConfirm',before,after,a.id,r.command_id,p.reference,'R1 AppSheet/S13',now);return{status:res&&res.confirmed?'Confirmed':(res&&res.ok?'AlreadyConfirmed':'Failed'),deposit:res,external_calls:0};});}
+  return s.withLock(function(){var job=s.get('Jobs',r.job_id);if(!job)_r1sErr('R1A_STALE_VERSION');if(job.deposit_bank_confirmed_at)return{status:'AlreadyConfirmed',deposit:{ok:true,confirmed:false,reason:'Already confirmed'},external_calls:0};if(Number(job.version)!==Number(r.expected_version))_r1sErr('R1A_STALE_VERSION');if(typeof confirmDeposit!=='function')_r1sErr('R1A_COMMAND_UNSUPPORTED');var before=job,res=confirmDeposit(s,r.job_id,a.id,p.reference),now=new Date().toISOString(),after=s.get('Jobs',r.job_id);_r1sInsertAudit(s,'AE-R1A-'+r.command_id,'Jobs',r.job_id,'DepositConfirm',before,after,a.id,r.command_id,p.reference,'R1 AppSheet/S13',now);return{status:res&&res.confirmed?'Confirmed':(res&&res.ok?'AlreadyConfirmed':'Failed'),deposit:res,external_calls:0};});}
 
 function _r1sOperationalComplete(ctx){var r=ctx.request,s=ctx.store,a=ctx.actor;_r1sPayload(r,[],[]);
   return s.withLock(function(){var job=s.get('Jobs',r.job_id);if(!job||Number(job.version)!==Number(r.expected_version))_r1sErr('R1A_STALE_VERSION');if(typeof _s10ApproveOperationalCompletion!=='function')_r1sErr('R1A_COMMAND_UNSUPPORTED');var before=job,res=_s10ApproveOperationalCompletion(r.job_id,a.id,s),now=new Date().toISOString(),after=s.get('Jobs',r.job_id);_r1sInsertAudit(s,'AE-R1A-'+r.command_id,'Jobs',r.job_id,'OperationalComplete',before,after,a.id,r.command_id,res&&res.status,'R1 AppSheet/S10',now);return{status:res.status,created:!!res.created,gate:res.gate,ghl_task:res.ghl_task||null,external_calls:0};});}
@@ -519,9 +702,15 @@ function _r1sSoldIntake(ctx){
         if(jobsAfter!==jobsBefore+1||customersAfter!==customersBefore+1)_r1sErr('R1A_INTAKE_CARDINALITY');
       }else if(jobsAfter!==jobsBefore||customersAfter!==customersBefore){_r1sErr('R1A_INTAKE_CARDINALITY');}
       var job=res.job_id?s.get('Jobs',res.job_id):null;
-      if(res.status==='Processed'&&job){
+      if(job){
         if(job.pilot_job!==true||job.release_scope!=='R1')_r1sErr('R1A_OUTSIDE_PILOT');
         if(!/^SS-[A-Z]{4}-\d{4}$/.test(job.job_id))_r1sErr('R1A_JOB_ID_INVALID');
+        /* S13 owns calculations and its idempotent reconciliation. It creates only
+         * internal records/intents; no Xero transport is invoked from R1 intake. */
+        if(Number(job.original_gross_pence)>0){
+          if(typeof processJobPayments!=='function')_r1sErr('R1A_COMMAND_UNSUPPORTED');
+          processJobPayments(job.id,s,{command_id:r.command_id});
+        }
       }
       var out={status:journal.replay?'Replayed':res.status,duplicate:!!res.duplicate,intake_id:res.intake_id||('R1A-SOLD-'+r.command_id),job_id:res.job_id||null,job_id_human:job?job.job_id:null,customer_id:res.customer_id||(job?job.customer_id:null),version:job?Number(job.version):null,workflow_stage:job?job.workflow_stage:null,prebooking_tasks:res.prebooking_tasks||null,error:res.error||null,message:res.message||null,external_calls:0};
       if(!journal.replay&&res.job_id)_r1sInsertAudit(s,'AE-R1A-'+r.command_id,'Jobs',res.job_id,'SoldIntake',null,job,a.id,r.command_id,res.message,'R1 AppSheet/S05',now);
@@ -587,7 +776,7 @@ var R1A_ISSUE_CREATE_FIELDS=[
 ];
 var R1A_ISSUE_CREATE_REQUEST_COLUMNS=['id','command_id','job_id','expected_version'].concat(R1A_ISSUE_CREATE_FIELDS.map(function(f){return f.key;})).concat(['result_status','result_issue_id','result_message']);
 
-function _r1sServices(){return{TASK_COMPLETE:_r1sTaskComplete,CALL_RECORD:_r1sCallRecord,ISSUE_UPDATE:_r1sIssueUpdate,ISSUE_CREATE:_r1sIssueCreate,PLANNER_UPDATE:_r1sPlannerUpdate,MOVE_JOB:_r1sMoveJob,CHANGE_INSTALLER:_r1sChangeInstaller,CANCEL_JOB:_r1sCancel,REINSTATE_JOB:_r1sReinstate,DEPOSIT_CONFIRM:_r1sDepositConfirm,OPERATIONAL_COMPLETE:_r1sOperationalComplete,BOOKING_GATES:_r1sBookingGates,SOLD_INTAKE:_r1sSoldIntake,BOOKING_INTAKE:_r1sBookingIntake};}
+function _r1sServices(){return{TASK_COMPLETE:_r1sTaskComplete,TASK_EVIDENCE_ATTACH:_r1sTaskEvidenceAttach,CALL_RECORD:_r1sCallRecord,ISSUE_UPDATE:_r1sIssueUpdate,ISSUE_CREATE:_r1sIssueCreate,PLANNER_UPDATE:_r1sPlannerUpdate,MOVE_JOB:_r1sMoveJob,CHANGE_INSTALLER:_r1sChangeInstaller,CANCEL_JOB:_r1sCancel,REINSTATE_JOB:_r1sReinstate,DEPOSIT_CONFIRM:_r1sDepositConfirm,OPERATIONAL_COMPLETE:_r1sOperationalComplete,BOOKING_GATES:_r1sBookingGates,SOLD_INTAKE:_r1sSoldIntake,BOOKING_INTAKE:_r1sBookingIntake};}
 
 
 /* DEV AppSheet operations boundary. Request rows are input only; authenticated actor is supplied separately.
@@ -796,15 +985,32 @@ function _r1cRows(ss,name){
   return sh.getRange(2,1,sh.getLastRow()-1,h.length).getValues().map(function(row){var r={};h.forEach(function(k,i){r[k]=row[i];});return r;}).filter(function(r){return r.id;});
 }
 /* Resolve an AppSheet File/Image relative path only within the configured DEV upload root.
- * Reads file metadata; never creates/moves/shares files. AppSheet owns upload, backend owns Evidence. */
-function _r1cResolveUpload(path){
+ * Reads file metadata; never creates/moves/shares files. AppSheet owns upload, backend owns Evidence.
+ * AppSheet writes the request row (and fires the bot) before the uploaded file is necessarily visible
+ * through Drive, so a missing folder/file is R1C_UPLOAD_PENDING (retryable, e.retryable=true), never a
+ * validation failure. _r1cResolveUpload waits briefly in-call (bounded, before any write); the persistent
+ * bounded retry lives in upload-retry.js. Path validation errors are permanent and are never retried. */
+var R1C_UPLOAD_WAIT_MS=[2000,4000,6000];
+function _r1cUploadPending(attempts){var e=new Error('R1C_UPLOAD_PENDING');e.code='R1C_UPLOAD_PENDING';e.retryable=true;e.attempts=attempts;throw e;}
+function _r1cResolveUploadOnce(path){
   var c=_r1cConfigGuard();if(!c.evidenceFolderId)_r1cRequestError('R1C_UPLOAD_ROOT_NOT_CONFIGURED');
   if(typeof path!=='string'||!path.trim()||/^[\/]|\\|:|%/.test(path))_r1cRequestError('R1C_UPLOAD_PATH_INVALID');
   var parts=path.split('/');if(parts.some(function(p){return !p||p==='.'||p==='..';}))_r1cRequestError('R1C_UPLOAD_PATH_INVALID');
   var folder=DriveApp.getFolderById(c.evidenceFolderId),filename=parts.pop();
-  parts.forEach(function(p){var it=folder.getFoldersByName(p);if(!it.hasNext())_r1cRequestError('R1C_UPLOAD_PENDING');folder=it.next();if(it.hasNext())_r1cRequestError('R1C_UPLOAD_AMBIGUOUS');});
-  var files=folder.getFilesByName(filename);if(!files.hasNext())_r1cRequestError('R1C_UPLOAD_PENDING');var f=files.next();if(files.hasNext()||f.isTrashed())_r1cRequestError('R1C_UPLOAD_AMBIGUOUS');
+  parts.forEach(function(p){var it=folder.getFoldersByName(p);if(!it.hasNext())_r1cUploadPending(1);folder=it.next();if(it.hasNext())_r1cRequestError('R1C_UPLOAD_AMBIGUOUS');});
+  var files=folder.getFilesByName(filename);if(!files.hasNext())_r1cUploadPending(1);var f=files.next();if(files.hasNext()||f.isTrashed())_r1cRequestError('R1C_UPLOAD_AMBIGUOUS');
   return {drive_file_id:f.getId(),filename:f.getName(),mime_type:f.getMimeType()};
+}
+function _r1cResolveUpload(path,opts){
+  opts=opts||{};var waits=opts.wait===false?[]:(Array.isArray(opts.waitMs)?opts.waitMs:R1C_UPLOAD_WAIT_MS);
+  var sleep=typeof opts.sleep==='function'?opts.sleep:(typeof Utilities!=='undefined'&&Utilities&&typeof Utilities.sleep==='function'?function(ms){Utilities.sleep(ms);}:null);
+  for(var attempt=1;;attempt++){
+    try{return _r1cResolveUploadOnce(path);}
+    catch(e){
+      if(!e||e.code!=='R1C_UPLOAD_PENDING'||attempt>waits.length){if(e&&e.code==='R1C_UPLOAD_PENDING')e.attempts=attempt;throw e;}
+      if(sleep)sleep(waits[attempt-1]);
+    }
+  }
 }
 function _r1cBuildRequest(type,row,lines,actor,resolveUpload){
   if(!row||!row.id)_r1cRequestError('R1C_REQUEST_NOT_FOUND');
@@ -877,6 +1083,9 @@ var R1A_REQUEST_DEV_SHEET = '1z7PNZtDdC4Z5eLbmTuQdqp0QpJSmuEvx3QvN3VyNTsc';
 var R1A_REQUEST_TABLES = {
   SOLD_INTAKE: 'DEVNewJobSoldRequests',
   BOOKING_INTAKE: 'DEVBookingIntakeRequests',
+  DEPOSIT_CONFIRM: 'DEVDepositConfirmRequests',
+  TASK_COMPLETE: 'DEVTaskCompleteRequests',
+  TASK_EVIDENCE_ATTACH: 'DEVTaskEvidenceAttachRequests',
   ISSUE_CREATE: 'DEVCreateIssueRequests',
   IW_START: 'DEVInstallerCommandRequests',
   IW_PROGRESS: 'DEVInstallerCommandRequests',
@@ -898,6 +1107,7 @@ function _r1aReqEmail(v) {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(s) ? s : '';
 }
 function _r1aReqFields(commandType) {
+  if (commandType === 'DEPOSIT_CONFIRM') return [{key: 'reference', type: 'text', required: true}];
   if (commandType === 'SOLD_INTAKE' && typeof R1A_SOLD_FIELDS !== 'undefined') return R1A_SOLD_FIELDS;
   if (commandType === 'BOOKING_INTAKE' && typeof R1A_BOOKING_FIELDS !== 'undefined') return R1A_BOOKING_FIELDS;
   if (commandType === 'ISSUE_CREATE' && typeof R1A_ISSUE_CREATE_FIELDS !== 'undefined') return R1A_ISSUE_CREATE_FIELDS;
@@ -937,7 +1147,10 @@ function _r1aReadRequestRowFromSpreadsheet(ss, tableName, requestRowId, expected
   if (lastCol < 1 || lastRow < 2) _r1aReqRefuse('R1A_REQUEST_NOT_FOUND');
   var headers = sh.getRange(1, 1, 1, lastCol).getValues()[0].map(function(h) { return String(h || '').trim(); });
   if (headers.indexOf('id') < 0 || headers.indexOf('command_id') < 0) _r1aReqRefuse('R1A_REQUEST_SCHEMA');
-  if ((tableName === 'DEVBookingIntakeRequests' || tableName === 'DEVCreateIssueRequests') && (headers.indexOf('job_id') < 0 || headers.indexOf('expected_version') < 0)) _r1aReqRefuse('R1A_REQUEST_SCHEMA');
+  if ((tableName === 'DEVBookingIntakeRequests' || tableName === 'DEVCreateIssueRequests' || tableName === 'DEVDepositConfirmRequests') && (headers.indexOf('job_id') < 0 || headers.indexOf('expected_version') < 0)) _r1aReqRefuse('R1A_REQUEST_SCHEMA');
+  if (tableName === 'DEVDepositConfirmRequests' && ['submitted_by','submitted_at','status','reference','result_status','result_message'].some(function(k) { return headers.indexOf(k) < 0; })) _r1aReqRefuse('R1A_REQUEST_SCHEMA');
+  if (tableName === 'DEVTaskCompleteRequests' && ['task_id','expected_version','completion_note','evidence_path','evidence_id','submitted_by','submitted_at','status','result_status','result_message'].some(function(k) { return headers.indexOf(k) < 0; })) _r1aReqRefuse('R1A_REQUEST_SCHEMA');
+  if (tableName === 'DEVTaskEvidenceAttachRequests' && ['task_id','expected_version','evidence_path','submitted_by','submitted_at','status','result_status','result_message'].some(function(k) { return headers.indexOf(k) < 0; })) _r1aReqRefuse('R1A_REQUEST_SCHEMA');
   var values = sh.getRange(2, 1, lastRow - 1, lastCol).getValues();
   var wanted = String(requestRowId).trim();
   var found = [];
@@ -984,14 +1197,68 @@ function _r1aAssertActorField(actorEmail, value, actorId) {
   /* Non-email values are checked again against the authenticated actor id by the service. */
 }
 
+/* Build TASK_COMPLETE from DEVTaskCompleteRequests. evidence_path is preferred for PRE02/PRE04. */
+function _r1aBuildTaskCompleteRequest(row, actorEmail) {
+  if (!row || typeof row !== 'object' || Array.isArray(row)) _r1aReqRefuse('R1A_REQUEST_NOT_FOUND');
+  var commandId = _r1aReqCell(row.command_id);
+  if (!_r1aReqText(commandId)) _r1aReqRefuse('R1A_COMMAND_ID_REQUIRED');
+  _r1aAssertSubmittedBy(actorEmail, row.submitted_by);
+  if (String(row.status || '').trim() !== 'Ready') _r1aReqRefuse('R1A_REQUEST_NOT_READY');
+  if (!_r1aReqPresent(row.submitted_at)) _r1aReqRefuse('R1A_REQUEST_TIMESTAMP_REQUIRED');
+  var taskId = _r1aReqCell(row.task_id);
+  if (!_r1aReqText(taskId)) _r1aReqRefuse('R1A_TASK_NOT_FOUND');
+  if (!_r1aReqPresent(row.expected_version)) _r1aReqRefuse('R1A_STALE_VERSION');
+  var note = _r1aReqCell(row.completion_note);
+  if (!_r1aReqText(note)) _r1aReqRefuse('R1A_REQUIRED_COMPLETION_NOTE');
+  var payload = { completion_note: String(note).trim() };
+  var path = _r1aReqCell(row.evidence_path);
+  if (path !== undefined) payload.evidence_path = String(path).trim();
+  var evid = _r1aReqCell(row.evidence_id);
+  if (evid !== undefined) payload.evidence_id = String(evid).trim();
+  return {
+    command_id: String(commandId).trim(),
+    command_type: 'TASK_COMPLETE',
+    task_id: String(taskId).trim(),
+    expected_version: typeof row.expected_version === 'number' ? row.expected_version : String(row.expected_version).trim(),
+    payload: payload
+  };
+}
+
+/* Build TASK_EVIDENCE_ATTACH from DEVTaskEvidenceAttachRequests (legacy completed PRE02 repair). */
+function _r1aBuildTaskEvidenceAttachRequest(row, actorEmail) {
+  if (!row || typeof row !== 'object' || Array.isArray(row)) _r1aReqRefuse('R1A_REQUEST_NOT_FOUND');
+  var commandId = _r1aReqCell(row.command_id);
+  if (!_r1aReqText(commandId)) _r1aReqRefuse('R1A_COMMAND_ID_REQUIRED');
+  if (!_r1aReqPresent(row.submitted_by)) _r1aReqRefuse('R1A_AUTHENTICATED_EMAIL_REQUIRED');
+  _r1aAssertSubmittedBy(actorEmail, row.submitted_by);
+  if (String(row.status || '').trim() !== 'Ready') _r1aReqRefuse('R1A_REQUEST_NOT_READY');
+  if (!_r1aReqPresent(row.submitted_at)) _r1aReqRefuse('R1A_REQUEST_TIMESTAMP_REQUIRED');
+  var taskId = _r1aReqCell(row.task_id);
+  if (!_r1aReqText(taskId)) _r1aReqRefuse('R1A_TASK_NOT_FOUND');
+  if (!_r1aReqPresent(row.expected_version)) _r1aReqRefuse('R1A_STALE_VERSION');
+  var path = _r1aReqCell(row.evidence_path);
+  if (!_r1aReqText(path)) _r1aReqRefuse('R1A_REQUIRED_EVIDENCE_PATH');
+  return {
+    command_id: String(commandId).trim(),
+    command_type: 'TASK_EVIDENCE_ATTACH',
+    task_id: String(taskId).trim(),
+    expected_version: typeof row.expected_version === 'number' ? row.expected_version : String(row.expected_version).trim(),
+    payload: { evidence_path: String(path).trim() }
+  };
+}
+
 /* Build the canonical command object. Sheet identity fields are never the authorization actor. */
 function _r1aBuildIntakeRequest(commandType, row, actorEmail, actorId) {
   if (!row || typeof row !== 'object' || Array.isArray(row)) _r1aReqRefuse('R1A_REQUEST_NOT_FOUND');
-  if (commandType !== 'SOLD_INTAKE' && commandType !== 'BOOKING_INTAKE' && commandType !== 'ISSUE_CREATE') _r1aReqRefuse('R1A_UNKNOWN_COMMAND');
+  if (commandType !== 'SOLD_INTAKE' && commandType !== 'BOOKING_INTAKE' && commandType !== 'ISSUE_CREATE' && commandType !== 'DEPOSIT_CONFIRM') _r1aReqRefuse('R1A_UNKNOWN_COMMAND');
   var commandId = _r1aReqCell(row.command_id);
   if (!_r1aReqText(commandId)) _r1aReqRefuse('R1A_COMMAND_ID_REQUIRED');
   _r1aAssertSubmittedBy(actorEmail, row.submitted_by);
   _r1aAssertActorField(actorEmail, row.requested_by, actorId);
+  if (commandType === 'DEPOSIT_CONFIRM') {
+    if (String(row.status || '').trim() !== 'Ready') _r1aReqRefuse('R1A_REQUEST_NOT_READY');
+    if (!_r1aReqPresent(row.submitted_at)) _r1aReqRefuse('R1A_REQUEST_TIMESTAMP_REQUIRED');
+  }
   var fields = _r1aReqFields(commandType);
   var payload = {};
   fields.forEach(function(f) {
@@ -1007,7 +1274,7 @@ function _r1aBuildIntakeRequest(commandType, row, actorEmail, actorId) {
       }
     }
   });
-  if (_r1aReqPresent(row.submitted_by)) payload.submitted_by = String(row.submitted_by).trim();
+  if (commandType !== 'DEPOSIT_CONFIRM' && _r1aReqPresent(row.submitted_by)) payload.submitted_by = String(row.submitted_by).trim();
   if (_r1aReqPresent(row.requested_by)) payload.requested_by = String(row.requested_by).trim();
   var request = { command_id: String(commandId).trim(), command_type: commandType, payload: payload };
   if (commandType === 'SOLD_INTAKE') {
@@ -1022,10 +1289,12 @@ function _r1aBuildIntakeRequest(commandType, row, actorEmail, actorId) {
   return request;
 }
 
-function _r1aDispatchBuiltRequest(request, actorEmail) {
+function _r1aDispatchBuiltRequest(request, actorEmail, resolveUpload) {
   var options = _r1aCloudOptions();
   if (!options || !options.config || options.config.environment !== 'DEV' || options.config.sheetId !== R1A_REQUEST_DEV_SHEET || !options.store || options.store.getSheetId() !== R1A_REQUEST_DEV_SHEET || options.store.getEnvironment() !== 'DEV') _r1aReqRefuse('R1A_DEV_ONLY');
   options.actorEmail = function() { return actorEmail; };
+  /* Optional upload resolver override (the scheduled retry passes a single-lookup resolver). */
+  if (typeof resolveUpload === 'function') options.resolveUpload = resolveUpload;
   return _r1aCreate(options).command(request);
 }
 
@@ -1038,21 +1307,193 @@ function _r1aCommandFromRequestRow(commandType, requestRowId, actorEmail, deps) 
   if (!_r1aReqPresent(requestRowId) || !String(requestRowId).trim()) _r1aReqRefuse('R1A_REQUEST_NOT_FOUND');
   var actor = _r1aReqEmail(typeof actorEmail === 'string' ? actorEmail : '');
   if (!actor) _r1aReqRefuse('R1A_AUTHENTICATED_EMAIL_REQUIRED');
-  var session = typeof deps.sessionEmail === 'string' ? _r1aReqEmail(deps.sessionEmail) : _r1aSessionEmail();
-  if (session && session !== actor) _r1aReqRefuse('R1A_ACTOR_MISMATCH');
   var sheetId = deps.sheetId || R1A_REQUEST_DEV_SHEET;
   if (sheetId !== R1A_REQUEST_DEV_SHEET) _r1aReqRefuse('R1A_DEV_ONLY');
   var row = typeof deps.readRow === 'function'
     ? deps.readRow(R1A_REQUEST_TABLES[type], String(requestRowId).trim(), sheetId)
     : _r1aReadRequestRowFromSpreadsheet(_r1aOpenDevRequestSpreadsheet(), R1A_REQUEST_TABLES[type], requestRowId, R1A_REQUEST_DEV_SHEET);
-  var request = _r1aBuildIntakeRequest(type, row, actor);
-  var dispatch = typeof deps.dispatch === 'function' ? deps.dispatch : _r1aDispatchBuiltRequest;
+  var request = type === 'TASK_COMPLETE' ? _r1aBuildTaskCompleteRequest(row, actor)
+    : (type === 'TASK_EVIDENCE_ATTACH' ? _r1aBuildTaskEvidenceAttachRequest(row, actor) : _r1aBuildIntakeRequest(type, row, actor));
+  var dispatch = typeof deps.dispatch === 'function' ? deps.dispatch : function(req, email) { return _r1aDispatchBuiltRequest(req, email, deps.resolveUpload); };
   return dispatch(request, actor);
 }
 
+/* AppSheet bot entry. R1C_UPLOAD_PENDING (upload not yet visible in Drive) is retryable: the request row is
+ * left untouched and a bounded backend retry is scheduled (upload-retry.js); every other error is final. */
 function appSheetR1CommandFromRequestRow(commandType, requestRowId, actorEmail) {
   try { return JSON.stringify(_r1aCommandFromRequestRow(commandType, requestRowId, actorEmail)); }
-  catch (e) { return JSON.stringify({ ok: false, error: e.code || e.message || 'R1A_REFUSED' }); }
+  catch (e) {
+    var out = { ok: false, error: e.code || e.message || 'R1A_REFUSED' };
+    if (e && e.code === 'R1C_UPLOAD_PENDING') {
+      out.retryable = true;
+      if (typeof _r1uScheduleRetry === 'function') {
+        try { out.retry = _r1uScheduleRetry(commandType, requestRowId, actorEmail, e); }
+        catch (scheduleError) { out.retry = { scheduled: false, error: scheduleError.code || scheduleError.message || 'R1U_SCHEDULE_FAILED' }; }
+      }
+    }
+    return JSON.stringify(out);
+  }
+}
+
+/* Shared Admin resolution for Tony DEV-only helpers (argument email; Session may be blank). */
+function _r1aTonyAdminActor(actorEmail, deps) {
+  deps = deps || {};
+  var options = typeof deps.cloudOptions === 'function' ? deps.cloudOptions() : _r1aCloudOptions();
+  var actor = _r1aReqEmail(typeof actorEmail === 'string' ? actorEmail : '');
+  if (!actor) _r1aReqRefuse('R1A_AUTHENTICATED_EMAIL_REQUIRED');
+  var resolveActor = typeof _r1aActor === 'function' ? _r1aActor : (typeof require === 'function' ? require('./adapter.js')._r1aActor : null);
+  if (typeof resolveActor !== 'function') _r1aReqRefuse('R1A_COMMAND_UNSUPPORTED');
+  var person = resolveActor(options.store, actor);
+  var adminOk = typeof _r1aAdmin === 'function'
+    ? _r1aAdmin(person)
+    : (person.roles.indexOf('Admin') >= 0 || person.roles.indexOf('Manager') >= 0);
+  if (!adminOk) _r1aReqRefuse('R1A_ROLE_DENIED');
+  return { options: options, actor: actor, person: person };
+}
+
+/* One controlled DEV reconciliation for the acceptance-test Tony job. It uses the
+ * same S13 initializer as SOLD_INTAKE and never creates an external invoice.
+ * Manual Apps Script runs often have a blank Session.getActiveUser() email, so this
+ * helper authorizes from the required Admin/Manager email argument only. */
+function runR1AReconcileTonyPaymentStages(actorEmail, deps) {
+  var output;
+  try {
+    deps = deps || {};
+    var auth = _r1aTonyAdminActor(actorEmail, deps);
+    var processPayments = typeof deps.processJobPayments === 'function' ? deps.processJobPayments : (typeof processJobPayments === 'function' ? processJobPayments : null);
+    if (typeof processPayments !== 'function') _r1aReqRefuse('R1A_COMMAND_UNSUPPORTED');
+    output = JSON.stringify(auth.options.store.withLock(function() {
+      var job = auth.options.store.get('Jobs', 'J-mtzl04hw-bdpt6i');
+      if (!job || Number(job.original_gross_pence) <= 0) _r1aReqRefuse('R1A_TONY_RECONCILE_REFUSED');
+      var result = processPayments(job.id, auth.options.store, {command_id: 'R1A-TONY-S13-RECONCILE'});
+      return {ok: true, job_id: job.id, deposit_stage_id: 'IS-' + job.id + '-deposit', stages_created: result.stages_created, external_calls: 0};
+    }));
+  } catch (e) { output = JSON.stringify({ok: false, error: e.code || e.message || 'R1A_REFUSED'}); }
+  if (typeof Logger !== 'undefined' && Logger.log) Logger.log(output);
+  return output;
+}
+
+/* DEV-only: ensure TPL-PRE04 exists and idempotently create Tony's Open PRE04 task. Does not complete it. */
+function runR1ABackfillTonyPre04(actorEmail, deps) {
+  var output;
+  try {
+    deps = deps || {};
+    var auth = _r1aTonyAdminActor(actorEmail, deps);
+    var createFn = typeof deps.createTasksForJob === 'function' ? deps.createTasksForJob
+      : (typeof createTasksForJob === 'function' ? createTasksForJob : null);
+    if (!createFn && typeof require === 'function') {
+      try { createFn = require('../s06/gates.js').createTasksForJob; } catch (e) { createFn = null; }
+    }
+    if (typeof createFn !== 'function') _r1aReqRefuse('R1A_COMMAND_UNSUPPORTED');
+    output = JSON.stringify(auth.options.store.withLock(function() {
+      var job = auth.options.store.get('Jobs', 'J-mtzl04hw-bdpt6i');
+      if (!job) _r1aReqRefuse('R1A_JOB_NOT_FOUND');
+      var before = auth.options.store.list('Tasks').filter(function(t) { return t.job_id === job.id && t.template_code === 'PRE04'; });
+      var result = createFn(job, { ready: false, gates: [] }, auth.options.store, { actor: auth.person.id, command_id: 'R1A-TONY-PRE04-BACKFILL' });
+      var after = auth.options.store.list('Tasks').filter(function(t) { return t.job_id === job.id && t.template_code === 'PRE04'; });
+      var created = (result.created || []).filter(function(c) { return c.template === 'PRE04'; });
+      return {
+        ok: true,
+        job_id: job.id,
+        pre04_before: before.length,
+        pre04_after: after.length,
+        pre04_created: created.map(function(c) { return c.task_id; }),
+        pre04_status: after.length === 1 ? after[0].status : null,
+        template_present: !!auth.options.store.list('TaskTemplates').find(function(t) { return t.template_code === 'PRE04' && t.active !== false; }),
+        external_calls: 0
+      };
+    }));
+  } catch (e) { output = JSON.stringify({ok: false, error: e.code || e.message || 'R1A_REFUSED'}); }
+  if (typeof Logger !== 'undefined' && Logger.log) Logger.log(output);
+  return output;
+}
+
+/* DEV-only: if Tony PRE02 is Complete, attach genuine Evidence (via evidence_path when missing)
+ * then apply Jobs contract side-effect. Does not invent evidence ids or reopen the task. */
+function runR1AApplyTonyPre02ContractSideEffect(actorEmail, evidencePath, deps) {
+  var output;
+  try {
+    if (evidencePath && typeof evidencePath === 'object' && !Array.isArray(evidencePath)) {
+      deps = evidencePath;
+      evidencePath = deps.evidence_path;
+    }
+    deps = deps || {};
+    var auth = _r1aTonyAdminActor(actorEmail, deps);
+    var applyFn = typeof deps.applyPre02 === 'function' ? deps.applyPre02 : null;
+    if (!applyFn && typeof _r1sApplyPre02Contract === 'function') applyFn = _r1sApplyPre02Contract;
+    if (!applyFn && typeof require === 'function') {
+      try {
+        var svc = require('./services.js');
+        applyFn = svc._r1sApplyPre02Contract;
+      } catch (e) { applyFn = null; }
+    }
+    if (typeof applyFn !== 'function') _r1aReqRefuse('R1A_COMMAND_UNSUPPORTED');
+    var ensureFn = typeof deps.ensureEvidence === 'function' ? deps.ensureEvidence : null;
+    if (!ensureFn && typeof _r1sEnsureOfficeTaskEvidence === 'function') ensureFn = _r1sEnsureOfficeTaskEvidence;
+    if (!ensureFn && typeof require === 'function') {
+      try { ensureFn = require('./services.js')._r1sEnsureOfficeTaskEvidence; } catch (e) { ensureFn = null; }
+    }
+    var path = _r1aReqText(evidencePath) ? String(evidencePath).trim() : (_r1aReqText(deps.evidence_path) ? String(deps.evidence_path).trim() : '');
+    output = JSON.stringify(auth.options.store.withLock(function() {
+      var job = auth.options.store.get('Jobs', 'J-mtzl04hw-bdpt6i');
+      if (!job) _r1aReqRefuse('R1A_JOB_NOT_FOUND');
+      var pre02 = auth.options.store.list('Tasks').filter(function(t) { return t.job_id === job.id && t.template_code === 'PRE02'; });
+      if (pre02.length !== 1) _r1aReqRefuse('R1A_PRE02_MISSING');
+      var task = pre02[0];
+      if (task.status !== 'Complete') _r1aReqRefuse('R1A_PRE02_NOT_COMPLETE');
+      var now = new Date().toISOString();
+      var evidenceId = task.evidence_id;
+      var evidenceCreated = false;
+      if (!_r1aReqText(evidenceId)) {
+        if (!path) _r1aReqRefuse('R1A_REQUIRED_EVIDENCE_ID');
+        if (typeof ensureFn !== 'function') _r1aReqRefuse('R1A_COMMAND_UNSUPPORTED');
+        var resolve = typeof deps.resolveUpload === 'function' ? deps.resolveUpload
+          : (typeof _r1cResolveUpload === 'function' ? _r1cResolveUpload : null);
+        if (typeof resolve !== 'function') _r1aReqRefuse('R1A_UPLOAD_RESOLVER_MISSING');
+        var upload = resolve(path);
+        var ensured = ensureFn(auth.options.store, job.id, auth.person.id, 'Contract', upload, now, 'R1A-TONY-PRE02-CONTRACT');
+        evidenceId = ensured.evidence_id;
+        evidenceCreated = !!ensured.created;
+        auth.options.store.update('Tasks', task.id, {
+          evidence_id: evidenceId,
+          updated_at: now,
+          updated_by: auth.person.id,
+          version: Number(task.version || 0) + 1,
+          commit_id: 'R1A-TONY-PRE02-CONTRACT'
+        });
+        task = auth.options.store.get('Tasks', task.id);
+      }
+      var before = {
+        contract_status: job.contract_status,
+        contract_evidence_id: job.contract_evidence_id,
+        contract_signed_at: job.contract_signed_at,
+        version: job.version,
+        task_evidence_id: evidenceId,
+        task_completed_at: task.completed_at
+      };
+      var afterJob = applyFn(auth.options.store, job, auth.person.id, evidenceId, now, 'R1A-TONY-PRE02-CONTRACT');
+      var afterTask = auth.options.store.get('Tasks', task.id);
+      return {
+        ok: true,
+        job_id: job.id,
+        task_id: task.id,
+        evidence_id: evidenceId,
+        evidence_created: evidenceCreated,
+        before: before,
+        after: {
+          contract_status: afterJob.contract_status,
+          contract_evidence_id: afterJob.contract_evidence_id,
+          contract_signed_at: afterJob.contract_signed_at,
+          version: afterJob.version,
+          task_evidence_id: afterTask.evidence_id,
+          task_completed_at: afterTask.completed_at
+        },
+        external_calls: 0
+      };
+    }));
+  } catch (e) { output = JSON.stringify({ok: false, error: e.code || e.message || 'R1A_REFUSED'}); }
+  if (typeof Logger !== 'undefined' && Logger.log) Logger.log(output);
+  return output;
 }
 
 if (typeof module !== 'undefined') module.exports = {
@@ -1060,9 +1501,279 @@ if (typeof module !== 'undefined') module.exports = {
   R1A_REQUEST_TABLES: R1A_REQUEST_TABLES,
   _r1aReadRequestRowFromSpreadsheet: _r1aReadRequestRowFromSpreadsheet,
   _r1aBuildIntakeRequest: _r1aBuildIntakeRequest,
+  _r1aBuildTaskCompleteRequest: _r1aBuildTaskCompleteRequest,
+  _r1aBuildTaskEvidenceAttachRequest: _r1aBuildTaskEvidenceAttachRequest,
   _r1aCommandFromRequestRow: _r1aCommandFromRequestRow,
-  appSheetR1CommandFromRequestRow: appSheetR1CommandFromRequestRow
+  appSheetR1CommandFromRequestRow: appSheetR1CommandFromRequestRow,
+  runR1AReconcileTonyPaymentStages: runR1AReconcileTonyPaymentStages,
+  runR1ABackfillTonyPre04: runR1ABackfillTonyPre04,
+  runR1AApplyTonyPre02ContractSideEffect: runR1AApplyTonyPre02ContractSideEffect
 };
+
+/* DEV-only bounded retry for the AppSheet upload-availability race.
+ *
+ * AppSheet saves a File/Image column, writes the DEV*Requests row and fires the bot before the uploaded
+ * file is necessarily visible through Drive. The shared resolver (_r1cResolveUpload) reports that as
+ * R1C_UPLOAD_PENDING before any write happens. This module makes that outcome retryable, bounded and
+ * explicit using the existing generic Outbox retry vocabulary (Pending/Processing/RetryDue/Succeeded/
+ * NeedsReview, attempt_count, next_attempt):
+ *   - the bot entry schedules ONE Outbox row per request row (idempotency_key R1U:<table>:<row id>);
+ *   - runR1URetryUploadRequests (time-driven trigger) sweeps upload-bearing Ready rows that have no
+ *     CommitJournal entry and no Outbox row (rows submitted before this module, or whose bot call never
+ *     reached the backend), then re-runs due items through the normal request-row path;
+ *   - every attempt re-reads the authoritative request row, acts as row.submitted_by (locked in AppSheet at
+ *     create) and refuses if the row identity/inputs changed since scheduling (payload_hash fingerprint);
+ *   - idempotency, expected_version, role/task authorization and audit come from the command path itself
+ *     (CJ-R1A-/CJ-R1C- journals), so a retry can never duplicate Evidence rows or lifecycle side effects;
+ *   - after R1U_MAX_ATTEMPTS the row becomes NeedsReview with R1C_UPLOAD_MISSING (explicit final failure);
+ *     any non-pending error is final immediately (NeedsReview with the error code).
+ * Writes: Outbox rows, and request-row result_status/result_message when those columns exist. Never
+ * touches operational tables directly and never invents Evidence ids. */
+'use strict';
+var R1U_DEV_SHEET_ID = '1z7PNZtDdC4Z5eLbmTuQdqp0QpJSmuEvx3QvN3VyNTsc';
+var R1U_ACTION = 'R1RequestUploadRetry';
+var R1U_MAX_ATTEMPTS = 5;
+var R1U_BACKOFF_MINUTES = [1, 2, 4, 8, 16];
+var R1U_STALLED_MS = 10 * 60 * 1000;
+var R1U_MAX_PER_TICK = 10;
+var R1U_UPLOAD_TABLES = {
+  DEVTaskCompleteRequests: { command_type: 'TASK_COMPLETE', column: 'evidence_path' },
+  DEVTaskEvidenceAttachRequests: { command_type: 'TASK_EVIDENCE_ATTACH', column: 'evidence_path' },
+  DEVInstallerCommandRequests: { command_type: null, column: 'evidence_path' },
+  DEVGoodsInRequests: { command_type: 'GOODS_IN_RECEIVE', column: 'delivery_note_path' }
+};
+
+function _r1uRefuse(code) { var e = new Error(code); e.code = code; throw e; }
+function _r1uEmail(v) { if (typeof v !== 'string') return ''; var s = v.trim().toLowerCase(); return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(s) ? s : ''; }
+function _r1uCell(v) {
+  if (v === undefined || v === null) return '';
+  if (Object.prototype.toString.call(v) === '[object Date]') return isNaN(v.getTime()) ? '' : v.toISOString();
+  return String(v).trim();
+}
+function _r1uHash(s) { var h = 0, i; for (i = 0; i < s.length; i++) h = ((h << 5) - h + s.charCodeAt(i)) | 0; var hex = (h >>> 0).toString(16); while (hex.length < 8) hex = '0' + hex; return 'h' + hex; }
+function _r1uRequestTables() {
+  if (typeof R1A_REQUEST_TABLES !== 'undefined') return R1A_REQUEST_TABLES;
+  if (typeof require === 'function') return require('./request-row.js').R1A_REQUEST_TABLES;
+  _r1uRefuse('R1U_UNSUPPORTED');
+}
+function _r1uTableFor(type) { var t = typeof type === 'string' ? type.trim() : '', table = _r1uRequestTables()[t]; return table && R1U_UPLOAD_TABLES[table] ? table : null; }
+function _r1uRowType(table, row) {
+  var spec = R1U_UPLOAD_TABLES[table]; if (!spec) return null;
+  if (spec.command_type) return spec.command_type;
+  var t = _r1uCell(row.command_type);
+  return t && _r1uRequestTables()[t] === table ? t : null;
+}
+function _r1uEligibility(table, row) {
+  var spec = R1U_UPLOAD_TABLES[table];
+  if (!spec) return 'R1U_TABLE_NOT_RETRYABLE';
+  if (!row || _r1uCell(row.id) === '') return 'R1U_REQUEST_NOT_FOUND';
+  if (_r1uCell(row.status) !== 'Ready') return 'R1U_REQUEST_NOT_READY';
+  if (_r1uCell(row.command_id) === '') return 'R1U_COMMAND_ID_REQUIRED';
+  if (!_r1uEmail(row.submitted_by)) return 'R1U_SUBMITTED_BY_REQUIRED';
+  if (_r1uCell(row[spec.column]) === '') return 'R1U_NO_UPLOAD';
+  if (!_r1uRowType(table, row)) return 'R1U_COMMAND_TYPE_INVALID';
+  return null;
+}
+/* Identity + inputs the retry must preserve. Any later edit to the row aborts the retry (NeedsReview). */
+function _r1uFingerprint(table, row) {
+  var spec = R1U_UPLOAD_TABLES[table];
+  return _r1uHash(JSON.stringify({
+    table: table, row_id: _r1uCell(row.id), command_id: _r1uCell(row.command_id), command_type: _r1uRowType(table, row),
+    submitted_by: _r1uEmail(row.submitted_by), expected_version: _r1uCell(row.expected_version), upload: _r1uCell(row[spec.column]),
+    task_id: _r1uCell(row.task_id), job_id: _r1uCell(row.job_id), work_package_id: _r1uCell(row.work_package_id), delivery_id: _r1uCell(row.delivery_id)
+  }));
+}
+function _r1uKey(table, rowId) { return 'R1U:' + table + ':' + rowId; }
+function _r1uBackoffMs(attempt) { var i = Math.max(0, Math.min(attempt - 1, R1U_BACKOFF_MINUTES.length - 1)); return R1U_BACKOFF_MINUTES[i] * 60 * 1000; }
+function _r1uParseTarget(target) { var s = _r1uCell(target), i = s.indexOf('/'); return i > 0 ? { table: s.slice(0, i), row_id: s.slice(i + 1) } : null; }
+
+/* ---- Cloud defaults (DEV spreadsheet only; injected in tests) ---- */
+function _r1uSheetRows(ss, table) {
+  if (!ss || typeof ss.getId !== 'function' || ss.getId() !== R1U_DEV_SHEET_ID) _r1uRefuse('R1U_DEV_ONLY');
+  var matches = ss.getSheets().filter(function (sh) { return sh.getName() === table; });
+  if (matches.length !== 1) return null;
+  var sh = matches[0], lastCol = sh.getLastColumn(), lastRow = sh.getLastRow();
+  if (lastCol < 1) return null;
+  var h = sh.getRange(1, 1, 1, lastCol).getValues()[0].map(function (x) { return String(x || '').trim(); });
+  if (h.indexOf('id') < 0 || h.indexOf('command_id') < 0) return null;
+  if (lastRow < 2) return [];
+  return sh.getRange(2, 1, lastRow - 1, lastCol).getValues().map(function (r) {
+    var o = {}; h.forEach(function (k, i) { if (k && !Object.prototype.hasOwnProperty.call(o, k)) o[k] = r[i]; }); return o;
+  }).filter(function (o) { return _r1uCell(o.id) !== ''; });
+}
+function _r1uSheetWriteResult(ss, table, rowId, status, message) {
+  try {
+    if (!ss || typeof ss.getId !== 'function' || ss.getId() !== R1U_DEV_SHEET_ID) return false;
+    var matches = ss.getSheets().filter(function (sh) { return sh.getName() === table; });
+    if (matches.length !== 1) return false;
+    var sh = matches[0], lastCol = sh.getLastColumn(), lastRow = sh.getLastRow();
+    if (lastCol < 1 || lastRow < 2) return false;
+    var h = sh.getRange(1, 1, 1, lastCol).getValues()[0].map(function (x) { return String(x || '').trim(); });
+    var idCol = h.indexOf('id'), sCol = h.indexOf('result_status'), mCol = h.indexOf('result_message');
+    if (idCol < 0 || sCol < 0 || mCol < 0) return false;
+    var ids = sh.getRange(2, idCol + 1, lastRow - 1, 1).getValues(), found = [];
+    ids.forEach(function (r, i) { if (_r1uCell(r[0]) === String(rowId)) found.push(i); });
+    if (found.length !== 1) return false;
+    var clean = function (v) { v = String(v === undefined || v === null ? '' : v).slice(0, 400); return /^[=+@'\-]/.test(v) ? "'" + v : v; };
+    sh.getRange(found[0] + 2, sCol + 1).setValue(clean(status));
+    sh.getRange(found[0] + 2, mCol + 1).setValue(clean(message));
+    if (typeof SpreadsheetApp !== 'undefined' && SpreadsheetApp.flush) SpreadsheetApp.flush();
+    return true;
+  } catch (e) { return false; }
+}
+function _r1uContext(deps) {
+  deps = deps || {};
+  var ctx = { now: typeof deps.now === 'function' ? deps.now : function () { return new Date(); } };
+  if (deps.store) ctx.store = deps.store;
+  else {
+    if (typeof _r1cConfigGuard === 'function') _r1cConfigGuard();
+    ctx.store = _r1aCloudOptions().store;
+  }
+  if (!ctx.store || ctx.store.getSheetId() !== R1U_DEV_SHEET_ID || ctx.store.getEnvironment() !== 'DEV') _r1uRefuse('R1U_DEV_ONLY');
+  var ss = null;
+  function sheet() { if (!ss) ss = _r1aOpenDevRequestSpreadsheet(); return ss; }
+  ctx.readRows = typeof deps.readRows === 'function' ? deps.readRows : function (table) { return _r1uSheetRows(sheet(), table); };
+  ctx.writeResult = typeof deps.writeResult === 'function' ? deps.writeResult : function (table, rowId, status, message) { return _r1uSheetWriteResult(sheet(), table, rowId, status, message); };
+  /* Retry attempts do a single Drive lookup (no in-call wait); the actor is the authoritative row's submitted_by. */
+  ctx.command = typeof deps.command === 'function' ? deps.command : function (type, rowId, actor) {
+    return _r1aCommandFromRequestRow(type, rowId, actor, { sessionEmail: '', resolveUpload: function (p) { return _r1cResolveUpload(p, { wait: false }); } });
+  };
+  return ctx;
+}
+function _r1uFind(store, key) { var rows = store.list('Outbox').filter(function (o) { return o.idempotency_key === key; }); if (rows.length > 1) _r1uRefuse('R1U_OUTBOX_AMBIGUOUS'); return rows[0] || null; }
+function _r1uSafeWrite(ctx, table, rowId, status, message) { try { return !!ctx.writeResult(table, rowId, status, message); } catch (e) { return false; } }
+function _r1uOutboxRow(table, row, type, now, attemptCount, status, nextAttempt, summary) {
+  var rowId = _r1uCell(row.id);
+  return {
+    id: 'OUT-R1U-' + rowId, idempotency_key: _r1uKey(table, rowId), action_type: R1U_ACTION, target: table + '/' + rowId,
+    payload_hash: _r1uFingerprint(table, row), job_revision: null, attempt_count: attemptCount, next_attempt: nextAttempt,
+    external_id: null, response_summary: summary, correlation_id: _r1uCell(row.command_id), status: status,
+    created_at: now.toISOString(), commit_id: 'R1U-' + rowId
+  };
+}
+
+/* Bot path: called once by appSheetR1CommandFromRequestRow after a verified call ended in R1C_UPLOAD_PENDING.
+ * The bot attempt counts as attempt 1. Repeat calls for the same row are idempotent. */
+function _r1uScheduleRetry(commandType, requestRowId, actorEmail, err, deps) {
+  var ctx = _r1uContext(deps), table = _r1uTableFor(commandType), rowId = _r1uCell(requestRowId), actor = _r1uEmail(actorEmail);
+  if (!table) _r1uRefuse('R1U_NOT_RETRYABLE');
+  if (!rowId) _r1uRefuse('R1U_REQUEST_NOT_FOUND');
+  if (!actor) _r1uRefuse('R1U_AUTHENTICATED_EMAIL_REQUIRED');
+  return ctx.store.withLock(function () {
+    var rows = ctx.readRows(table) || [], match = rows.filter(function (r) { return _r1uCell(r.id) === rowId; });
+    if (match.length !== 1) _r1uRefuse('R1U_REQUEST_NOT_FOUND');
+    var row = match[0], reason = _r1uEligibility(table, row);
+    if (reason) _r1uRefuse(reason);
+    if (_r1uEmail(row.submitted_by) !== actor) _r1uRefuse('R1U_ACTOR_MISMATCH');
+    var type = _r1uRowType(table, row);
+    if (type !== String(commandType).trim()) _r1uRefuse('R1U_COMMAND_TYPE_MISMATCH');
+    var now = ctx.now(), existing = _r1uFind(ctx.store, _r1uKey(table, rowId));
+    if (existing) {
+      var active = ['Pending', 'RetryDue', 'Processing'].indexOf(existing.status) >= 0;
+      return { scheduled: active, outbox_id: existing.id, status: existing.status, attempt: Number(existing.attempt_count) || 0, max_attempts: R1U_MAX_ATTEMPTS, next_attempt: existing.next_attempt || null };
+    }
+    var next = new Date(now.getTime() + _r1uBackoffMs(1)).toISOString();
+    var lookups = err && err.attempts ? Number(err.attempts) : 1;
+    var summary = 'R1C_UPLOAD_PENDING after bot attempt 1 of ' + R1U_MAX_ATTEMPTS + ' (' + lookups + ' Drive lookup(s)); next attempt ' + next;
+    ctx.store.insert('Outbox', _r1uOutboxRow(table, row, type, now, 1, 'RetryDue', next, summary));
+    var written = _r1uSafeWrite(ctx, table, rowId, 'UploadPending', 'Upload not yet visible in Drive; backend retry 2 of ' + R1U_MAX_ATTEMPTS + ' scheduled for ' + next + '. No resubmission needed.');
+    return { scheduled: true, outbox_id: 'OUT-R1U-' + rowId, status: 'RetryDue', attempt: 1, max_attempts: R1U_MAX_ATTEMPTS, next_attempt: next, result_written: written };
+  });
+}
+
+/* Sweep: Ready upload-bearing request rows with no journal entry and no Outbox row become Pending items. */
+function _r1uSweep(ctx, now) {
+  var swept = [], journaled = {}, keys = {};
+  ctx.store.list('CommitJournal').forEach(function (j) { if (j && j.command_id) journaled[_r1uCell(j.command_id)] = true; });
+  ctx.store.list('Outbox').forEach(function (o) { if (o && o.action_type === R1U_ACTION) keys[o.idempotency_key] = true; });
+  Object.keys(R1U_UPLOAD_TABLES).forEach(function (table) {
+    var rows = ctx.readRows(table);
+    if (!rows) return;
+    rows.forEach(function (row) {
+      if (_r1uEligibility(table, row)) return;
+      var rowId = _r1uCell(row.id), key = _r1uKey(table, rowId);
+      if (keys[key] || journaled[_r1uCell(row.command_id)]) return;
+      ctx.store.insert('Outbox', _r1uOutboxRow(table, row, _r1uRowType(table, row), now, 0, 'Pending', now.toISOString(), 'Swept: Ready upload request without journal entry'));
+      keys[key] = true;
+      swept.push({ outbox_id: 'OUT-R1U-' + rowId, table: table, row_id: rowId, command_type: _r1uRowType(table, row) });
+    });
+  });
+  return swept;
+}
+function _r1uDue(ctx, now) {
+  var t = now.getTime();
+  return ctx.store.list('Outbox').filter(function (o) {
+    if (!o || o.action_type !== R1U_ACTION) return false;
+    var due = !o.next_attempt || Date.parse(o.next_attempt) <= t;
+    if (o.status === 'Pending' || o.status === 'RetryDue') return due;
+    return o.status === 'Processing' && !!o.next_attempt && due; /* stalled claim */
+  }).sort(function (a, b) { return String(a.next_attempt || a.created_at).localeCompare(String(b.next_attempt || b.created_at)); }).slice(0, R1U_MAX_PER_TICK);
+}
+function _r1uFinish(ctx, item, table, rowId, status, summary, nextAttempt, resultStatus, resultMessage) {
+  ctx.store.update('Outbox', item.id, { status: status, next_attempt: nextAttempt || null, response_summary: String(summary).slice(0, 400) });
+  var written = _r1uSafeWrite(ctx, table, rowId, resultStatus, resultMessage);
+  return { outbox_id: item.id, table: table, row_id: rowId, outcome: status, attempt: item.attempt_count, next_attempt: nextAttempt || null, summary: summary, result_written: written };
+}
+function _r1uProcess(ctx, item) {
+  var t = _r1uParseTarget(item.target), now = ctx.now();
+  if (!t) return _r1uFinish(ctx, item, '', '', 'NeedsReview', 'R1U_TARGET_INVALID', null, 'Failed', 'R1U_TARGET_INVALID');
+  var rows = ctx.readRows(t.table) || [], match = rows.filter(function (r) { return _r1uCell(r.id) === t.row_id; });
+  if (match.length !== 1) return _r1uFinish(ctx, item, t.table, t.row_id, 'NeedsReview', 'R1U_REQUEST_NOT_FOUND', null, 'Failed', 'R1U_REQUEST_NOT_FOUND');
+  var row = match[0], reason = _r1uEligibility(t.table, row);
+  if (reason) return _r1uFinish(ctx, item, t.table, t.row_id, 'NeedsReview', reason, null, 'Failed', reason);
+  if (_r1uFingerprint(t.table, row) !== item.payload_hash) return _r1uFinish(ctx, item, t.table, t.row_id, 'NeedsReview', 'R1U_REQUEST_CHANGED', null, 'Failed', 'R1U_REQUEST_CHANGED: request identity or inputs changed after scheduling');
+  var type = _r1uRowType(t.table, row), actor = _r1uEmail(row.submitted_by), attempt = item.attempt_count, upload = _r1uCell(row[R1U_UPLOAD_TABLES[t.table].column]);
+  var result = null, error = null;
+  try { result = ctx.command(type, t.row_id, actor); } catch (e) { error = e; }
+  if (!error && result && result.ok === true) {
+    var inner = result.result || {}, replay = inner.replay === true || inner.status === 'Replayed';
+    var okSummary = 'Succeeded on attempt ' + attempt + (replay ? ' (replay of earlier commit)' : '') + (inner.status ? ': ' + inner.status : '');
+    return _r1uFinish(ctx, item, t.table, t.row_id, 'Succeeded', okSummary, null, 'Succeeded', okSummary);
+  }
+  var code = error ? (error.code || error.message || 'R1U_COMMAND_FAILED') : (result && result.error ? String(result.error) : 'R1U_UNEXPECTED_RESULT');
+  if (code === 'R1C_UPLOAD_PENDING') {
+    if (attempt >= R1U_MAX_ATTEMPTS) {
+      var missing = 'R1C_UPLOAD_MISSING: upload "' + upload + '" never became visible in Drive after ' + attempt + ' attempts';
+      return _r1uFinish(ctx, item, t.table, t.row_id, 'NeedsReview', missing, null, 'Failed', missing + '. Re-upload through a new request.');
+    }
+    var next = new Date(now.getTime() + _r1uBackoffMs(attempt)).toISOString();
+    return _r1uFinish(ctx, item, t.table, t.row_id, 'RetryDue', 'R1C_UPLOAD_PENDING after attempt ' + attempt + ' of ' + R1U_MAX_ATTEMPTS + '; next attempt ' + next, next, 'UploadPending', 'Upload not yet visible in Drive; backend retry ' + (attempt + 1) + ' of ' + R1U_MAX_ATTEMPTS + ' scheduled for ' + next + '. No resubmission needed.');
+  }
+  return _r1uFinish(ctx, item, t.table, t.row_id, 'NeedsReview', code + ' on attempt ' + attempt + ' (final)', null, 'Failed', code);
+}
+/* One trigger run: sweep, claim due items under the lock, then execute each outside the lock (the command path takes its own lock). */
+function _r1uTick(deps) {
+  var ctx = _r1uContext(deps), now = ctx.now();
+  var claimed = ctx.store.withLock(function () {
+    var swept = _r1uSweep(ctx, now), due = _r1uDue(ctx, now);
+    due.forEach(function (o) {
+      ctx.store.update('Outbox', o.id, { status: 'Processing', attempt_count: (Number(o.attempt_count) || 0) + 1, next_attempt: new Date(now.getTime() + R1U_STALLED_MS).toISOString() });
+    });
+    return { swept: swept, items: due.map(function (o) { return ctx.store.get('Outbox', o.id); }) };
+  });
+  var processed = claimed.items.map(function (item) { return _r1uProcess(ctx, item); });
+  var remaining = ctx.store.list('Outbox').filter(function (o) { return o.action_type === R1U_ACTION && (o.status === 'Pending' || o.status === 'RetryDue'); }).length;
+  return { ok: true, environment: 'DEV', run_at: now.toISOString(), swept: claimed.swept, processed: processed, remaining_scheduled: remaining, max_attempts: R1U_MAX_ATTEMPTS, external_calls: 0 };
+}
+function _r1uStatus(deps) {
+  var ctx = _r1uContext(deps), items = ctx.store.list('Outbox').filter(function (o) { return o.action_type === R1U_ACTION; });
+  var by = {}; items.forEach(function (o) { by[o.status] = (by[o.status] || 0) + 1; });
+  return { ok: true, environment: 'DEV', count: items.length, by_status: by, items: items.map(function (o) { return { outbox_id: o.id, target: o.target, command_id: o.correlation_id, status: o.status, attempt: o.attempt_count, next_attempt: o.next_attempt, summary: o.response_summary }; }) };
+}
+/* Zero-argument, trigger-safe. Install as a time-driven trigger (every 5 minutes) in the standalone bridge project. */
+function runR1URetryUploadRequests() {
+  var out;
+  try { out = _r1uTick(); } catch (e) { out = { ok: false, error: e.code || e.message || 'R1U_REFUSED' }; }
+  if (typeof Logger !== 'undefined' && Logger.log) Logger.log(JSON.stringify(out));
+  return out;
+}
+function runR1UUploadRetryStatus() {
+  var out;
+  try { out = _r1uStatus(); } catch (e) { out = { ok: false, error: e.code || e.message || 'R1U_REFUSED' }; }
+  if (typeof Logger !== 'undefined' && Logger.log) Logger.log(JSON.stringify(out));
+  return out;
+}
+if (typeof module !== 'undefined') module.exports = { R1U_ACTION: R1U_ACTION, R1U_MAX_ATTEMPTS: R1U_MAX_ATTEMPTS, R1U_BACKOFF_MINUTES: R1U_BACKOFF_MINUTES, R1U_STALLED_MS: R1U_STALLED_MS, R1U_UPLOAD_TABLES: R1U_UPLOAD_TABLES, _r1uFingerprint: _r1uFingerprint, _r1uEligibility: _r1uEligibility, _r1uScheduleRetry: _r1uScheduleRetry, _r1uSweep: _r1uSweep, _r1uTick: _r1uTick, _r1uStatus: _r1uStatus, _r1uSheetRows: _r1uSheetRows, _r1uSheetWriteResult: _r1uSheetWriteResult };
 
 /* DEV-only Apps Script entry points. No generic mutation and no PROD fallback. */
 function _r1aCloudOptions(){

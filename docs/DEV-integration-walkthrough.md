@@ -90,6 +90,16 @@ Architecture (unchanged): AppSheet form/request row → `DEV*Requests` helper ta
 
 **Smoke in DEV (after provisioning):** signed in as an installer allocated to a pilot package: create a `DEVInstallerCommandRequests` row (`IW_START`, `expected_version` from `INSTALLER_WORKFLOW`), submit; expect `ok:true`, `status:"InProgress"`, a `CJ-R1C-<command_id>` Committed journal row and an `AE-R1C-<command_id>` audit row; submit the same row again → `replay:true`, no new rows. Signed in as Store: one goods-in parent + N lines → `receipt_lines` = N, order `Received`/`PartReceived`, stock movements to `LOC-store`/`LOC-quarantine`. Any run with `S01_CONFIG.environment` ≠ `DEV` → `R1C_DEV_ONLY`.
 
+## 11a. Upload-availability retry (standalone bridge trigger)
+
+AppSheet fires request-row bots before the uploaded File/Image is necessarily visible in Drive. The bridge now waits in-call (bounded, ≤ 12 s, before any write) and otherwise schedules a bounded backend retry (`r1-appsheet/upload-retry.js`, Outbox `action_type = R1RequestUploadRetry`, 5 attempts, backoff 1/2/4/8/16 min, `NeedsReview` + `R1C_UPLOAD_MISSING` when the file never appears). Covers `evidence_path` on `DEVTaskCompleteRequests`, `DEVTaskEvidenceAttachRequests`, `DEVInstallerCommandRequests` and `delivery_note_path` on `DEVGoodsInRequests`.
+
+**Bundles to paste (rebuilt):** `standalone-bridge/AppSheetBridge.js` (standalone bridge project) and `apps-script/r1-appsheet/R1AppSheetAdapter.js` (bound project). Record the manifest SHA-256 of each.
+
+**Trigger (standalone bridge project, script owner = the bridge's deployment account):** Triggers → Add → function `runR1URetryUploadRequests`, event source Time-driven, Minutes timer, every 5 minutes. No arguments, DEV-locked (`R1U_DEV_ONLY` otherwise), takes the script lock only while sweeping/claiming and never while executing a command.
+
+**Smoke:** `runR1UUploadRetryStatus()` → expect `ok:true` and a `by_status` map. Any pre-existing `Ready` upload request without a journal entry (for example a `DEVTaskEvidenceAttachRequests` row whose bot call returned `R1C_UPLOAD_PENDING` before this step) is swept and executed on the first trigger run or by calling `runR1URetryUploadRequests()` once manually; expect `processed[0].outcome = "Succeeded"`, the request row `result_status = Succeeded`, one Evidence row, one `CJ-R1A-<command_id>` Committed journal row. Run it again → `processed: []`, `swept: []`. Exhausted items (`NeedsReview`) surface through `runRsSweep()` as RS-REVIEW tasks; resolve with `runRsResolveOutbox`.
+
 ## 12. Evidence to capture
 
 For each step: the JSON result printed by the function, the signed-in identity, the timestamp, and (for steps 6 and 9) a screenshot or link of the DEV calendar / Drive file. Store under `docs/evidence/` following `docs/evidence/README.md`. Update `docs/implementation-status.md` rows from "DEV CLOUD NOT YET RUN" only with real results.

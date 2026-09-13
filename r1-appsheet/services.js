@@ -6,14 +6,193 @@ function _r1sText(v){return typeof v==='string'&&v.trim().length>0;}
 function _r1sPayload(request,allowed,required){var p=request.payload||{};if(!p||typeof p!=='object'||Array.isArray(p)||Object.keys(p).some(function(k){return allowed.indexOf(k)<0;}))_r1sErr('R1A_INVALID_FIELDS');(required||[]).forEach(function(k){if(p[k]===undefined||p[k]===null||p[k]==='')_r1sErr('R1A_REQUIRED_'+k.toUpperCase());});return p;}
 function _r1sInsertAudit(store,id,type,entity,action,before,after,actor,command,reason,service,now){if(store.get('AuditEvents',id))return;store.insert('AuditEvents',{id:id,entity_type:type,entity_id:entity,action:action,before_json:before?JSON.stringify(before):null,after_json:JSON.stringify(after),initiating_actor:actor,executing_service:service,timestamp:now,correlation_id:command,reason:reason||null,commit_id:'R1A-'+command,created_at:now});}
 
-function _r1sTaskComplete(ctx){var r=ctx.request,s=ctx.store,a=ctx.actor,p=_r1sPayload(r,['completion_note','evidence_id'],['completion_note']),t=s.get('Tasks',r.task_id),jid='CJ-R1A-'+r.command_id;
-  return s.withLock(function(){var prior=s.get('CommitJournal',jid);if(prior){if(prior.entity_type!=='Tasks'||prior.entity_id!==r.task_id||prior.changes_json!==JSON.stringify(p))_r1sErr('R1A_COMMAND_CONFLICT');if(prior.state!=='Committed')_r1sErr('R1A_RECOVERY_REQUIRED');return{status:'Replayed',task:s.get('Tasks',r.task_id),external_calls:0};}
+function _r1sResolveContractEvidenceId(store,jobId,evidenceId){
+  if(!_r1sText(evidenceId))_r1sErr('R1A_REQUIRED_EVIDENCE_ID');
+  var id=String(evidenceId).trim();
+  var byId=store.get('Evidence',id);
+  if(byId){
+    if(byId.job_id!==jobId)_r1sErr('R1A_CROSS_JOB_EVIDENCE');
+    return byId.id;
+  }
+  var byDrive=(store.list('Evidence')||[]).filter(function(e){return e.drive_file_id===id&&e.job_id===jobId;});
+  if(byDrive.length>1)_r1sErr('R1A_EVIDENCE_AMBIGUOUS');
+  if(byDrive.length===1)return byDrive[0].id;
+  return id;
+}
+
+function _r1sHashDrive(text){
+  var h=0,s=String(text||''),i,hex;
+  for(i=0;i<s.length;i++)h=((h<<5)-h+s.charCodeAt(i))|0;
+  hex=(h>>>0).toString(16);
+  while(hex.length<8)hex='0'+hex;
+  return hex;
+}
+
+/* Resolve AppSheet File path via existing upload resolver. Never invents Evidence ids. */
+function _r1sResolveEvidencePath(path,ctx){
+  if(!_r1sText(path))return null;
+  var resolve=null;
+  if(ctx&&typeof ctx.resolveUpload==='function')resolve=ctx.resolveUpload;
+  else if(typeof _r1cResolveUpload==='function')resolve=_r1cResolveUpload;
+  if(!resolve)_r1sErr('R1A_UPLOAD_RESOLVER_MISSING');
+  return resolve(String(path).trim());
+}
+
+/* Idempotent Evidence row keyed by job_id + drive_file_id (deterministic id EV-R1A-{job}-{hash}). */
+function _r1sEnsureOfficeTaskEvidence(store,jobId,actorId,category,upload,now,commandId){
+  if(!upload||!_r1sText(upload.drive_file_id))_r1sErr('R1A_UPLOAD_INVALID');
+  var driveId=String(upload.drive_file_id).trim();
+  var matches=(store.list('Evidence')||[]).filter(function(e){return e&&e.job_id===jobId&&String(e.drive_file_id||'').trim()===driveId;});
+  if(matches.length>1)_r1sErr('R1A_EVIDENCE_AMBIGUOUS');
+  if(matches.length===1)return{evidence_id:matches[0].id,created:false};
+  var id='EV-R1A-'+jobId+'-'+_r1sHashDrive(driveId);
+  var byId=store.get('Evidence',id);
+  if(byId){
+    if(byId.job_id!==jobId)_r1sErr('R1A_CROSS_JOB_EVIDENCE');
+    if(String(byId.drive_file_id||'').trim()!==driveId)_r1sErr('R1A_EVIDENCE_AMBIGUOUS');
+    return{evidence_id:byId.id,created:false};
+  }
+  store.insert('Evidence',{
+    id:id,
+    job_id:jobId,
+    submission_id:null,
+    issue_id:null,
+    category:category,
+    drive_file_id:driveId,
+    filename:_r1sText(upload.filename)?String(upload.filename).trim():(String(category).toLowerCase()+'-'+jobId),
+    mime_type:upload.mime_type||null,
+    upload_status:'Uploaded',
+    captured_at:now,
+    captured_by:actorId,
+    received_at:now,
+    customer_shareable:false,
+    version:1,
+    checksum:null,
+    created_at:now,
+    commit_id:'R1A-'+commandId
+  });
+  return{evidence_id:id,created:true};
+}
+
+function _r1sApplyPre02Contract(store,job,actorId,evidenceId,now,commandId){
+  var resolved=_r1sResolveContractEvidenceId(store,job.id,evidenceId);
+  if(job.contract_status==='Signed'&&job.contract_evidence_id===resolved&&job.contract_signed_at){
+    return store.get('Jobs',job.id);
+  }
+  var patch={
+    contract_status:'Signed',
+    contract_evidence_id:resolved,
+    contract_signed_at:job.contract_signed_at||now,
+    updated_at:now,
+    updated_by:actorId,
+    version:Number(job.version||0)+1,
+    commit_id:'R1A-'+commandId
+  };
+  store.update('Jobs',job.id,patch);
+  return store.get('Jobs',job.id);
+}
+
+function _r1sApplyPre04Verification(store,job,actorId,now,commandId){
+  if(job.customer_details_verified_at&&job.customer_details_verified_by){
+    return store.get('Jobs',job.id);
+  }
+  if(!(typeof job.original_gross_pence==='number'&&job.original_gross_pence>0))_r1sErr('R1A_SOLD_VALUE_REQUIRED');
+  store.update('Jobs',job.id,{
+    customer_details_verified_at:now,
+    customer_details_verified_by:actorId,
+    updated_at:now,
+    updated_by:actorId,
+    version:Number(job.version||0)+1,
+    commit_id:'R1A-'+commandId
+  });
+  return store.get('Jobs',job.id);
+}
+
+function _r1sTaskComplete(ctx){var r=ctx.request,s=ctx.store,a=ctx.actor,p=_r1sPayload(r,['completion_note','evidence_id','evidence_path'],['completion_note']),t=s.get('Tasks',r.task_id),jid='CJ-R1A-'+r.command_id;
+  return s.withLock(function(){var prior=s.get('CommitJournal',jid);if(prior){if(prior.entity_type!=='Tasks'||prior.entity_id!==r.task_id||prior.changes_json!==JSON.stringify(p))_r1sErr('R1A_COMMAND_CONFLICT');if(prior.state!=='Committed')_r1sErr('R1A_RECOVERY_REQUIRED');return{status:'Replayed',task:s.get('Tasks',r.task_id),job:t&&t.job_id?s.get('Jobs',t.job_id):null,external_calls:0};}
     t=s.get('Tasks',r.task_id);if(Number(t.version)!==Number(r.expected_version))_r1sErr('R1A_STALE_VERSION');if(['Complete','NotRequired','Cancelled'].indexOf(t.status)>=0)_r1sErr('R1A_TASK_NOT_COMPLETABLE');if(['Open','Waiting','InProgress'].indexOf(t.status)<0||t.revision_required===true)_r1sErr('R1A_TASK_NOT_COMPLETABLE');
-    var now=new Date().toISOString(),after=Object.assign({},t,{status:'Complete',completed_at:now,completed_by:a.id,completion_note:p.completion_note,evidence_id:p.evidence_id||t.evidence_id||null,updated_at:now,updated_by:a.id,version:Number(t.version)+1,commit_id:'R1A-'+r.command_id});
+    var evidenceId=p.evidence_id||t.evidence_id||null,pendingUpload=null,pendingCategory=null;
+    if(t.template_code==='PRE02'||t.template_code==='PRE04'){
+      pendingCategory=t.template_code==='PRE02'?'Contract':'CustomerDetails';
+      if(_r1sText(p.evidence_path)){
+        pendingUpload=_r1sResolveEvidencePath(p.evidence_path,ctx);
+      } else {
+        if(!_r1sText(evidenceId))_r1sErr('R1A_REQUIRED_EVIDENCE_ID');
+        if(t.template_code==='PRE02')evidenceId=_r1sResolveContractEvidenceId(s,t.job_id,evidenceId);
+        else {
+          var ev=s.get('Evidence',String(evidenceId).trim());
+          if(ev&&ev.job_id!==t.job_id)_r1sErr('R1A_CROSS_JOB_EVIDENCE');
+          evidenceId=String(evidenceId).trim();
+        }
+      }
+    }
+    var now=new Date().toISOString();
     s.insert('CommitJournal',{id:jid,commit_id:'R1A-'+r.command_id,state:'Prepared',command_id:r.command_id,entity_type:'Tasks',entity_id:t.id,expected_version:r.expected_version,changes_json:JSON.stringify(p),prepared_at:now,committed_at:null,created_at:now});
-    try{s.update('Tasks',t.id,{status:after.status,completed_at:after.completed_at,completed_by:after.completed_by,completion_note:after.completion_note,evidence_id:after.evidence_id,updated_at:now,updated_by:a.id,version:after.version,commit_id:after.commit_id});
+    try{
+    if(pendingUpload){
+      var ensured=_r1sEnsureOfficeTaskEvidence(s,t.job_id,a.id,pendingCategory,pendingUpload,now,r.command_id);
+      if(_r1sText(p.evidence_id)&&String(p.evidence_id).trim()!==ensured.evidence_id)_r1sErr('R1A_EVIDENCE_CONFLICT');
+      evidenceId=ensured.evidence_id;
+    }
+    var after=Object.assign({},t,{status:'Complete',completed_at:now,completed_by:a.id,completion_note:p.completion_note,evidence_id:evidenceId||null,updated_at:now,updated_by:a.id,version:Number(t.version)+1,commit_id:'R1A-'+r.command_id});
+    s.update('Tasks',t.id,{status:after.status,completed_at:after.completed_at,completed_by:after.completed_by,completion_note:after.completion_note,evidence_id:after.evidence_id,updated_at:now,updated_by:a.id,version:after.version,commit_id:after.commit_id});
     s.insert('TaskEvents',{id:'TE-R1A-'+r.command_id,task_id:t.id,action:'Complete',old_status:t.status,new_status:'Complete',old_owner:t.owner_id,new_owner:t.owner_id,old_due:t.due_at,new_due:t.due_at,reason:p.completion_note,actor:a.id,timestamp:now,created_at:now,commit_id:'R1A-'+r.command_id});
-    _r1sInsertAudit(s,'AE-R1A-'+r.command_id,'Tasks',t.id,'Complete',t,after,a.id,r.command_id,p.completion_note,'R1 AppSheet/S04',now);s.update('CommitJournal',jid,{state:'Committed',committed_at:now});return{status:'Completed',task:s.get('Tasks',t.id),external_calls:0};}catch(e){s.update('CommitJournal',jid,{state:'RecoveryRequired'});throw e;}});}
+    var jobAfter=null;
+    if(t.job_id&&(t.template_code==='PRE02'||t.template_code==='PRE04')){
+      var job=s.get('Jobs',t.job_id);if(!job)_r1sErr('R1A_JOB_NOT_FOUND');
+      if(t.template_code==='PRE02')jobAfter=_r1sApplyPre02Contract(s,job,a.id,evidenceId,now,r.command_id);
+      if(t.template_code==='PRE04')jobAfter=_r1sApplyPre04Verification(s,job,a.id,now,r.command_id);
+    }
+    _r1sInsertAudit(s,'AE-R1A-'+r.command_id,'Tasks',t.id,'Complete',t,after,a.id,r.command_id,p.completion_note,'R1 AppSheet/S04',now);s.update('CommitJournal',jid,{state:'Committed',committed_at:now});return{status:'Completed',task:s.get('Tasks',t.id),job:jobAfter,external_calls:0};}catch(e){s.update('CommitJournal',jid,{state:'RecoveryRequired'});throw e;}});}
+
+/* Legacy repair: attach required evidence to an already-Complete PRE02 with blank evidence_id.
+ * Does not reopen the task or alter completed_at / completed_by / completion_note. */
+function _r1sTaskEvidenceAttach(ctx){
+  var r=ctx.request,s=ctx.store,a=ctx.actor,p=_r1sPayload(r,['evidence_path'],['evidence_path']),t=s.get('Tasks',r.task_id),jid='CJ-R1A-'+r.command_id;
+  return s.withLock(function(){
+    var prior=s.get('CommitJournal',jid);
+    if(prior){
+      if(prior.entity_type!=='Tasks'||prior.entity_id!==r.task_id||prior.changes_json!==JSON.stringify(p))_r1sErr('R1A_COMMAND_CONFLICT');
+      if(prior.state!=='Committed')_r1sErr('R1A_RECOVERY_REQUIRED');
+      return{status:'Replayed',task:s.get('Tasks',r.task_id),job:t&&t.job_id?s.get('Jobs',t.job_id):null,external_calls:0};
+    }
+    t=s.get('Tasks',r.task_id);
+    if(!t)_r1sErr('R1A_TASK_NOT_FOUND');
+    if(Number(t.version)!==Number(r.expected_version))_r1sErr('R1A_STALE_VERSION');
+    if(t.status!=='Complete')_r1sErr('R1A_TASK_NOT_ATTACHABLE');
+    if(t.template_code!=='PRE02')_r1sErr('R1A_TASK_NOT_ATTACHABLE');
+    if(_r1sText(t.evidence_id))_r1sErr('R1A_EVIDENCE_ALREADY_ATTACHED');
+    if(!t.job_id)_r1sErr('R1A_JOB_NOT_FOUND');
+    var upload=_r1sResolveEvidencePath(p.evidence_path,ctx);
+    var now=new Date().toISOString();
+    var before={
+      status:t.status,completed_at:t.completed_at,completed_by:t.completed_by,completion_note:t.completion_note,
+      evidence_id:t.evidence_id,version:t.version
+    };
+    s.insert('CommitJournal',{id:jid,commit_id:'R1A-'+r.command_id,state:'Prepared',command_id:r.command_id,entity_type:'Tasks',entity_id:t.id,expected_version:r.expected_version,changes_json:JSON.stringify(p),prepared_at:now,committed_at:null,created_at:now});
+    try{
+      var ensured=_r1sEnsureOfficeTaskEvidence(s,t.job_id,a.id,'Contract',upload,now,r.command_id);
+      var evidenceId=ensured.evidence_id;
+      s.update('Tasks',t.id,{
+        evidence_id:evidenceId,
+        updated_at:now,
+        updated_by:a.id,
+        version:Number(t.version)+1,
+        commit_id:'R1A-'+r.command_id
+      });
+      var after=s.get('Tasks',t.id);
+      if(after.status!=='Complete'||after.completed_at!==t.completed_at||after.completed_by!==t.completed_by||after.completion_note!==t.completion_note)_r1sErr('R1A_TASK_COMPLETION_MUTATION');
+      s.insert('TaskEvents',{id:'TE-R1A-'+r.command_id,task_id:t.id,action:'EvidenceAttach',old_status:t.status,new_status:t.status,old_owner:t.owner_id,new_owner:t.owner_id,old_due:t.due_at,new_due:t.due_at,reason:'TASK_EVIDENCE_ATTACH',actor:a.id,timestamp:now,created_at:now,commit_id:'R1A-'+r.command_id});
+      var job=s.get('Jobs',t.job_id);if(!job)_r1sErr('R1A_JOB_NOT_FOUND');
+      var grossBefore=job.original_gross_pence;
+      var jobAfter=_r1sApplyPre02Contract(s,job,a.id,evidenceId,now,r.command_id);
+      if(jobAfter.original_gross_pence!==grossBefore)_r1sErr('R1A_FINANCIAL_MUTATION');
+      _r1sInsertAudit(s,'AE-R1A-'+r.command_id,'Tasks',t.id,'EvidenceAttach',before,after,a.id,r.command_id,p.evidence_path,'R1 AppSheet/S04',now);
+      s.update('CommitJournal',jid,{state:'Committed',committed_at:now});
+      return{status:'Attached',task:s.get('Tasks',t.id),job:jobAfter,evidence_id:evidenceId,external_calls:0};
+    }catch(e){s.update('CommitJournal',jid,{state:'RecoveryRequired'});throw e;}
+  });
+}
 
 function _r1sCallRecord(ctx){var r=ctx.request,s=ctx.store,a=ctx.actor,p=_r1sPayload(r,['type','work_package_id','contact_id','person_id','attempted_at','outcome','notes','next_attempt_at','actual_completion_confirmed','customer_happy'],['type','outcome']),t=s.get('Tasks',r.task_id),id='CALL-R1A-'+r.command_id,existing=s.get('Calls',id);if(existing)return{status:'Replayed',call:existing,external_calls:0};if(!t||Number(t.version)!==Number(r.expected_version))_r1sErr('R1A_STALE_VERSION');var before=t,res=_s10RecordCall({id:id,job_id:r.job_id,work_package_id:p.work_package_id||null,task_id:r.task_id,type:p.type,contact_id:p.contact_id||null,person_id:p.person_id||null,attempted_at:p.attempted_at,attempted_by:a.id,outcome:p.outcome,notes:p.notes||null,next_attempt_at:p.next_attempt_at||null,actual_completion_confirmed:p.actual_completion_confirmed===true,customer_happy:p.customer_happy,commit_id:'R1A-'+r.command_id},s),now=(res.call||{}).attempted_at||new Date().toISOString(),after=s.get('Tasks',t.id);if(after&&Number(after.version)!==Number(before.version))s.insert('TaskEvents',{id:'TE-R1A-'+r.command_id,task_id:t.id,action:'CallOutcome',old_status:before.status,new_status:after.status,old_owner:before.owner_id,new_owner:after.owner_id,old_due:before.due_at,new_due:after.due_at,reason:p.outcome,actor:a.id,timestamp:now,created_at:now,commit_id:'R1A-'+r.command_id});_r1sInsertAudit(s,'AE-R1A-'+r.command_id,'Calls',id,'RecordCall',null,res.call,a.id,r.command_id,p.notes,'R1 AppSheet/S10',now);return{status:'Recorded',call:res.call,external_calls:0};}
 
@@ -89,7 +268,7 @@ function _r1sCancel(ctx){var r=ctx.request,p=_r1sPayload(r,['reason','effective_
 function _r1sReinstate(ctx){var r=ctx.request,p=_r1sPayload(r,['reason','new_date','risk_review','commitment_review','finance_review','evidence_reference'],['reason','new_date','commitment_review','finance_review','evidence_reference']);return _s15Execute('Reinstate',Object.assign({command_id:r.command_id,job_id:r.job_id,expected_version:r.expected_version,actor:ctx.actor.id},p),ctx.store);}
 
 function _r1sDepositConfirm(ctx){var r=ctx.request,s=ctx.store,a=ctx.actor,p=_r1sPayload(r,['reference'],['reference']);
-  return s.withLock(function(){var job=s.get('Jobs',r.job_id);if(!job||Number(job.version)!==Number(r.expected_version))_r1sErr('R1A_STALE_VERSION');if(typeof confirmDeposit!=='function')_r1sErr('R1A_COMMAND_UNSUPPORTED');var before=job,res=confirmDeposit(s,r.job_id,a.id,p.reference),now=new Date().toISOString(),after=s.get('Jobs',r.job_id);_r1sInsertAudit(s,'AE-R1A-'+r.command_id,'Jobs',r.job_id,'DepositConfirm',before,after,a.id,r.command_id,p.reference,'R1 AppSheet/S13',now);return{status:res&&res.confirmed?'Confirmed':(res&&res.ok?'AlreadyConfirmed':'Failed'),deposit:res,external_calls:0};});}
+  return s.withLock(function(){var job=s.get('Jobs',r.job_id);if(!job)_r1sErr('R1A_STALE_VERSION');if(job.deposit_bank_confirmed_at)return{status:'AlreadyConfirmed',deposit:{ok:true,confirmed:false,reason:'Already confirmed'},external_calls:0};if(Number(job.version)!==Number(r.expected_version))_r1sErr('R1A_STALE_VERSION');if(typeof confirmDeposit!=='function')_r1sErr('R1A_COMMAND_UNSUPPORTED');var before=job,res=confirmDeposit(s,r.job_id,a.id,p.reference),now=new Date().toISOString(),after=s.get('Jobs',r.job_id);_r1sInsertAudit(s,'AE-R1A-'+r.command_id,'Jobs',r.job_id,'DepositConfirm',before,after,a.id,r.command_id,p.reference,'R1 AppSheet/S13',now);return{status:res&&res.confirmed?'Confirmed':(res&&res.ok?'AlreadyConfirmed':'Failed'),deposit:res,external_calls:0};});}
 
 function _r1sOperationalComplete(ctx){var r=ctx.request,s=ctx.store,a=ctx.actor;_r1sPayload(r,[],[]);
   return s.withLock(function(){var job=s.get('Jobs',r.job_id);if(!job||Number(job.version)!==Number(r.expected_version))_r1sErr('R1A_STALE_VERSION');if(typeof _s10ApproveOperationalCompletion!=='function')_r1sErr('R1A_COMMAND_UNSUPPORTED');var before=job,res=_s10ApproveOperationalCompletion(r.job_id,a.id,s),now=new Date().toISOString(),after=s.get('Jobs',r.job_id);_r1sInsertAudit(s,'AE-R1A-'+r.command_id,'Jobs',r.job_id,'OperationalComplete',before,after,a.id,r.command_id,res&&res.status,'R1 AppSheet/S10',now);return{status:res.status,created:!!res.created,gate:res.gate,ghl_task:res.ghl_task||null,external_calls:0};});}
@@ -311,9 +490,15 @@ function _r1sSoldIntake(ctx){
         if(jobsAfter!==jobsBefore+1||customersAfter!==customersBefore+1)_r1sErr('R1A_INTAKE_CARDINALITY');
       }else if(jobsAfter!==jobsBefore||customersAfter!==customersBefore){_r1sErr('R1A_INTAKE_CARDINALITY');}
       var job=res.job_id?s.get('Jobs',res.job_id):null;
-      if(res.status==='Processed'&&job){
+      if(job){
         if(job.pilot_job!==true||job.release_scope!=='R1')_r1sErr('R1A_OUTSIDE_PILOT');
         if(!/^SS-[A-Z]{4}-\d{4}$/.test(job.job_id))_r1sErr('R1A_JOB_ID_INVALID');
+        /* S13 owns calculations and its idempotent reconciliation. It creates only
+         * internal records/intents; no Xero transport is invoked from R1 intake. */
+        if(Number(job.original_gross_pence)>0){
+          if(typeof processJobPayments!=='function')_r1sErr('R1A_COMMAND_UNSUPPORTED');
+          processJobPayments(job.id,s,{command_id:r.command_id});
+        }
       }
       var out={status:journal.replay?'Replayed':res.status,duplicate:!!res.duplicate,intake_id:res.intake_id||('R1A-SOLD-'+r.command_id),job_id:res.job_id||null,job_id_human:job?job.job_id:null,customer_id:res.customer_id||(job?job.customer_id:null),version:job?Number(job.version):null,workflow_stage:job?job.workflow_stage:null,prebooking_tasks:res.prebooking_tasks||null,error:res.error||null,message:res.message||null,external_calls:0};
       if(!journal.replay&&res.job_id)_r1sInsertAudit(s,'AE-R1A-'+r.command_id,'Jobs',res.job_id,'SoldIntake',null,job,a.id,r.command_id,res.message,'R1 AppSheet/S05',now);
@@ -379,6 +564,6 @@ var R1A_ISSUE_CREATE_FIELDS=[
 ];
 var R1A_ISSUE_CREATE_REQUEST_COLUMNS=['id','command_id','job_id','expected_version'].concat(R1A_ISSUE_CREATE_FIELDS.map(function(f){return f.key;})).concat(['result_status','result_issue_id','result_message']);
 
-function _r1sServices(){return{TASK_COMPLETE:_r1sTaskComplete,CALL_RECORD:_r1sCallRecord,ISSUE_UPDATE:_r1sIssueUpdate,ISSUE_CREATE:_r1sIssueCreate,PLANNER_UPDATE:_r1sPlannerUpdate,MOVE_JOB:_r1sMoveJob,CHANGE_INSTALLER:_r1sChangeInstaller,CANCEL_JOB:_r1sCancel,REINSTATE_JOB:_r1sReinstate,DEPOSIT_CONFIRM:_r1sDepositConfirm,OPERATIONAL_COMPLETE:_r1sOperationalComplete,BOOKING_GATES:_r1sBookingGates,SOLD_INTAKE:_r1sSoldIntake,BOOKING_INTAKE:_r1sBookingIntake};}
+function _r1sServices(){return{TASK_COMPLETE:_r1sTaskComplete,TASK_EVIDENCE_ATTACH:_r1sTaskEvidenceAttach,CALL_RECORD:_r1sCallRecord,ISSUE_UPDATE:_r1sIssueUpdate,ISSUE_CREATE:_r1sIssueCreate,PLANNER_UPDATE:_r1sPlannerUpdate,MOVE_JOB:_r1sMoveJob,CHANGE_INSTALLER:_r1sChangeInstaller,CANCEL_JOB:_r1sCancel,REINSTATE_JOB:_r1sReinstate,DEPOSIT_CONFIRM:_r1sDepositConfirm,OPERATIONAL_COMPLETE:_r1sOperationalComplete,BOOKING_GATES:_r1sBookingGates,SOLD_INTAKE:_r1sSoldIntake,BOOKING_INTAKE:_r1sBookingIntake};}
 
-if(typeof module!=='undefined')module.exports={_r1sServices:_r1sServices,R1A_SOLD_FIELDS:R1A_SOLD_FIELDS,R1A_BOOKING_FIELDS:R1A_BOOKING_FIELDS,R1A_ISSUE_CREATE_FIELDS:R1A_ISSUE_CREATE_FIELDS,R1A_SOLD_REQUEST_COLUMNS:R1A_SOLD_REQUEST_COLUMNS,R1A_BOOKING_REQUEST_COLUMNS:R1A_BOOKING_REQUEST_COLUMNS,R1A_ISSUE_CREATE_REQUEST_COLUMNS:R1A_ISSUE_CREATE_REQUEST_COLUMNS,_r1sSoldExpression:_r1sSoldExpression,_r1sBookingExpression:_r1sBookingExpression};
+if(typeof module!=='undefined')module.exports={_r1sServices:_r1sServices,R1A_SOLD_FIELDS:R1A_SOLD_FIELDS,R1A_BOOKING_FIELDS:R1A_BOOKING_FIELDS,R1A_ISSUE_CREATE_FIELDS:R1A_ISSUE_CREATE_FIELDS,R1A_SOLD_REQUEST_COLUMNS:R1A_SOLD_REQUEST_COLUMNS,R1A_BOOKING_REQUEST_COLUMNS:R1A_BOOKING_REQUEST_COLUMNS,R1A_ISSUE_CREATE_REQUEST_COLUMNS:R1A_ISSUE_CREATE_REQUEST_COLUMNS,_r1sSoldExpression:_r1sSoldExpression,_r1sBookingExpression:_r1sBookingExpression,_r1sApplyPre02Contract:_r1sApplyPre02Contract,_r1sApplyPre04Verification:_r1sApplyPre04Verification,_r1sResolveContractEvidenceId:_r1sResolveContractEvidenceId,_r1sEnsureOfficeTaskEvidence:_r1sEnsureOfficeTaskEvidence,_r1sHashDrive:_r1sHashDrive};
