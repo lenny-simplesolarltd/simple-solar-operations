@@ -70,7 +70,7 @@ Also prefer bots for **MY_TASKS** / **TEAM_TASKS** / **INTAKE_REVIEW** / **PLANN
 Create / bind (DEV only):
 
 1. **Home** — dashboard: overdue / due today / next 7 days from My Tasks (group by `due_class` if using bot enrichment).
-2. **My Tasks** — table/deck on My Tasks slice. Sort: overdue first, then due_at.
+2. **My Tasks** — table/deck on My Tasks slice. Sort: overdue first, then due_at. Set **Row selected** to `LINKTOROW([id], "Task Detail")`.
 3. **Team Tasks** — table on Team Tasks slice (Office/Admin only via Security Filter / view Show_If).
 4. **Jobs** — searchable table; detail = Job Detail.
 5. **Job Detail** — show identity (`job_id`, display_name, stage), customer, work packages, materials, scaffold, tasks, actions.
@@ -78,9 +78,11 @@ Create / bind (DEV only):
 7. **Intake Review** — table with validation_errors.
 8. **Planner 3 Weeks** — table or calendar-like deck driven by PLANNER_3_WEEKS bot (resource = person, surname/postcode from Job display_name, Roof/Electrical/Erect/Strip columns).
 9. **Planner 6 Weeks** — same for 6 weeks.
-10. **History** — Tasks where status in Complete/Cancelled/NotRequired (separate slice).
+10. **History** — Tasks where status in Complete/Cancelled/NotRequired (separate slice). Its task links also use `LINKTOROW([id], "Task Detail")`.
+11. **Task Detail** — the single canonical Tasks detail view. Use this same view for My Tasks, Team Tasks, Job Detail inline task rows, History, and Job Search paths; do not create a My-Tasks-specific detail view.
+12. **Ready to Continue Booking** — Jobs slice filtered to `[workflow_stage]="ReadyToBook"`, visible to the same assigned Office/Admin/Manager users as Job Detail. Place it on Home and route rows to Job Detail.
 
-Navigation order: Home → My Tasks → Team Tasks → Booking In Progress → Jobs → Intake Review → Planner 3W → Planner 6W → Admin (Release modes / System status for Admin only).
+Navigation order: Home → My Tasks → Ready to Continue Booking → Team Tasks → Booking In Progress → Jobs → Intake Review → Planner 3W → Planner 6W → Admin (Release modes / System status for Admin only).
 
 ---
 
@@ -178,7 +180,7 @@ Create `DEVTaskCompleteRequests` in the DEV spreadsheet only, with these columns
 
 Set `id` and `command_id` Initial value to `UNIQUEID()`, `submitted_by` Initial value to `USEREMAIL()`, `submitted_at` Initial value to `NOW()`, and `status` Initial value to `"Ready"`. Make `id`, `command_id`, `task_id`, `expected_version`, `completion_note`, `evidence_path`, `evidence_id`, `submitted_by`, `submitted_at`, and `status` non-editable after form creation; make every `result_*` column read-only. Do not permit users to edit `submitted_by`.
 
-`evidence_path` is an AppSheet **File** column. AppSheet uploads into the configured DEV evidence folder (`S01_CONFIG.evidenceFolderId`). The bridge resolves the path with `_r1cResolveUpload`, creates/reuses an Evidence row idempotently for `job_id + drive_file_id`, and passes `Evidence.id` into TASK_COMPLETE. Categories: PRE02 → `Contract`, PRE04 → `CustomerDetails`. Do **not** give AppSheet Add/Edit on the Evidence table.
+`evidence_path` is an AppSheet **File** column. Set DEV `S01_CONFIG.evidenceFolderId` to the Data-folder root `1sPEw0P6L2jOG4oEazzs7gayckHmtQ__2`, not a table-specific `*_Images` leaf. AppSheet stores relative paths such as `DEVTaskCompleteRequests_Images/<filename>` and `DEVTaskEvidenceAttachRequests_Images/<filename>` beneath that root. The bridge resolves the path with `_r1cResolveUpload`, creates/reuses an Evidence row idempotently for `job_id + drive_file_id`, and passes `Evidence.id` into TASK_COMPLETE. Categories: PRE02 → `Contract`, PRE04 → `CustomerDetails`. Do **not** give AppSheet Add/Edit on the Evidence table.
 
 `evidence_id` remains an optional temporary text fallback for opaque refs when no file is uploaded. Prefer `evidence_path` for PRE02/PRE04.
 
@@ -186,6 +188,15 @@ From Task Detail (Open / Waiting / InProgress), use:
 
 ```
 LINKTOFORM("DEV Complete Task Form", "task_id", [id], "expected_version", [version])
+```
+
+Show the action only when `TASK_ACTION_AVAILABILITY.appsheet_commands.task_complete.available` is true. The local presentation fallback is:
+
+```
+AND(IN([status], {"Open","Waiting","InProgress"}), [revision_required] <> TRUE,
+  OR([owner_id]=ANY(SELECT(People[id], [email]=USEREMAIL())),
+     [backup_id]=ANY(SELECT(People[id], [email]=USEREMAIL())),
+     IN("Admin", SELECT(PersonRoles[role], AND([person_id]=ANY(SELECT(People[id], [email]=USEREMAIL())), [active]=TRUE)))))
 ```
 
 Bot: Adds only, filter `[status] = "Ready"`, call:
@@ -208,7 +219,7 @@ Create `DEVTaskEvidenceAttachRequests` in the DEV spreadsheet only, columns in o
 
 Initials: `id`/`command_id` = `UNIQUEID()`; `submitted_by` = `USEREMAIL()`; `submitted_at` = `NOW()`; `status` = `"Ready"`. Lock identity/input columns after create; `result_*` read-only. Do not allow editing `submitted_by`. `evidence_path` is File (same DEV evidence folder). No AppSheet Add/Edit on Evidence.
 
-Show_If for action **Add contract evidence** (not Complete Task):
+Show_If for action **Add contract evidence** (not Complete Task), combined with the same owner/backup/Admin authorization expression above:
 
 `AND([status] = "Complete", ISBLANK([evidence_id]), [template_code] = "PRE02")`
 
@@ -256,7 +267,7 @@ LINKTOFORM("DEV Create Issue Form", "job_id", [id], "expected_version", [version
 
 Bot: `appSheetR1CommandFromRequestRow("ISSUE_CREATE", [id], USEREMAIL())`.
 | Planner date patch | PLANNER_UPDATE | planned_start/end |
-| Booking Gates | BOOKING_GATES | empty payload |
+| Booking Gates (admin diagnostic only; no staff action) | BOOKING_GATES | empty payload |
 | Deposit Confirm | DEPOSIT_CONFIRM | request row via `appSheetR1CommandFromRequestRow` |
 
 ### DEPOSIT_CONFIRM (secure request row, DEV only)
@@ -307,7 +318,7 @@ Initial values: `command_id` = `UNIQUEID()`, `submitted_by` = `USEREMAIL()`, `id
 LINKTOFORM("DEV Booking Intake Form", "job_id", [id], "job_id_human", [job_id], "expected_version", [version])
 ```
 
-Also prefill customer and booking columns from the related Customer / Job. Show Continue Booking only when ACTION_AVAILABILITY `booking_intake.available` is true (`Prebooking`, `ReadyToBook`, or `BookingInProgress`). An early booking may link, but it must not skip `ReadyToBook`. `ReadyToBook` advances to `BookingInProgress` only through S05.
+Also prefill customer and booking columns from the related Customer / Job. The normal staff-facing **Continue Booking** action is owned by the assigned Office user (with permitted backup/Admin access) and is shown from Job Detail and the Ready to Continue Booking queue when `[workflow_stage]="ReadyToBook"` and ACTION_AVAILABILITY `booking_intake.available` is true. It passes both IDs from the selected row, so staff never type an internal job id. The backend still accepts an early booking link, but it must not skip `ReadyToBook`; `ReadyToBook` advances to `BookingInProgress` only through S05.
 
 Do **not** build the intake JSON in AppSheet. Expression Assistant hangs on the booking payload.
 
@@ -338,7 +349,9 @@ The script reads the helper row, builds the canonical command, and runs the exis
 
 Same for `TASK_ACTION_AVAILABILITY` on task rows.
 
-**Ready/booking gate workflow:** Run `BOOKING_GATES` after evidence-backed PRE completion. Refresh the Job after each committed stage change and pass the new `[version]`: `Prebooking → ReadyToBook`, then (when Booking intake is linked) `ReadyToBook → BookingInProgress`. The final call advances to `Booked` only after all applicable PRE tasks and BKG01–BKG03 are satisfied. Never expose a force/override field. BKG04/BKG05 then appear as post-Booked manual tasks.
+**Ready/booking gate workflow:** Do not expose `BOOKING_GATES` as a staff action. Successful PRE01–PRE05 task completion, PRE02 evidence attachment, and deposit confirmation internally rerun the canonical S06 prebooking evaluation. Incomplete requirements leave the Job at `Prebooking` without failing the staff command; the final satisfied requirement advances it once to `ReadyToBook`. `BOOKING_GATES` remains an authenticated explicit command for diagnostics/admin use only. Booking intake then advances `ReadyToBook → BookingInProgress`; the later booking evaluation advances to `Booked` only after BKG01–BKG03 are satisfied. Never expose a force/override field. BKG04/BKG05 then appear as post-Booked manual tasks.
+
+After a successful task request (`result_status="Succeeded"`), configure the form-saved navigation to return to **My Tasks**, enable automatic updates/Quick Sync, and run the client sync action before displaying the refreshed view. My Tasks is sourced from active task statuses, so the completed task disappears and any newly created work becomes visible after that successful sync. Do not navigate to a second task-detail view.
 
 For PRE02/PRE04 completion forms, capture required evidence via `evidence_path` (File upload → Evidence row). Keep `evidence_id` text only as a temporary opaque fallback. For PRE03 use the separate `DEPOSIT_CONFIRM` command to record bank actor/time/reference and then complete the single Ben/Dan task. A missing evidence value must remain visibly blocked.
 

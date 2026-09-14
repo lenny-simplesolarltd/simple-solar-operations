@@ -85,7 +85,7 @@ function _r1aCreate(options){
     } else if(input.read_type==='ACTION_AVAILABILITY'){
       var aj=_r1aAuthorizeJob(store,a,input.job_id);out=reads.actionAvailability(store,input.job_id);
       var active=!aj.archived_at&&['CancellationInProgress','Cancelled'].indexOf(aj.workflow_stage)<0,fn01=_r1aModeAvailable(store,'FN-01','Automated'),cancelModes=fn01&&_r1aModeAvailable(store,'FN-17','Manual')&&_r1aModeAvailable(store,'FN-20','Manual'),fn15=_r1aModeAvailable(store,'FN-15','Manual'),fn19=_r1aModeAvailable(store,'FN-19','Manual'),fn11=_r1aModeAvailable(store,'FN-11','Manual'),officeMgr=_r1aOfficeManager(a),isAdmin=_r1aAdmin(a);
-      var depOk=active&&fn15&&_r1aDirector(a)&&!aj.deposit_bank_confirmed_at,opcOk=active&&fn19&&fn11&&officeMgr&&!aj.operational_complete_at&&['InProgress','Aftercare'].indexOf(aj.workflow_stage)>=0,bkgOk=active&&fn01&&['Prebooking','ReadyToBook','BookingInProgress'].indexOf(aj.workflow_stage)>=0,reinOk=aj.workflow_stage==='Cancelled'&&cancelModes,bookInOk=active&&fn01&&['Prebooking','ReadyToBook','BookingInProgress'].indexOf(aj.workflow_stage)>=0;
+      var depOk=active&&fn15&&_r1aDirector(a)&&!aj.deposit_bank_confirmed_at,opcOk=active&&fn19&&fn11&&officeMgr&&!aj.operational_complete_at&&['InProgress','Aftercare'].indexOf(aj.workflow_stage)>=0,reinOk=aj.workflow_stage==='Cancelled'&&cancelModes,bookInOk=active&&fn01&&['Prebooking','ReadyToBook','BookingInProgress'].indexOf(aj.workflow_stage)>=0;
       var moveOk=active&&fn01&&['Booked','AwaitingInstallation','InProgress','BookingInProgress'].indexOf(aj.workflow_stage)>=0;
       var changeOk=moveOk;
       out.appsheet_commands={
@@ -99,7 +99,6 @@ function _r1aCreate(options){
         reinstate_job:_r1aFlag(reinOk,'REINSTATE_JOB','Jobs',aj.workflow_stage!=='Cancelled'?'STAGE_NOT_CANCELLED':'MODE_UNAVAILABLE'),
         deposit_confirm:_r1aFlag(depOk,'DEPOSIT_CONFIRM','Jobs',!active?'JOB_NOT_ACTIONABLE':!_r1aDirector(a)?'DIRECTOR_REQUIRED':!fn15?'MODE_UNAVAILABLE':'ALREADY_CONFIRMED'),
         operational_complete:_r1aFlag(opcOk,'OPERATIONAL_COMPLETE','Jobs',!active?'JOB_NOT_ACTIONABLE':!officeMgr?'OFFICE_OR_ADMIN_REQUIRED':!(fn19&&fn11)?'MODE_UNAVAILABLE':aj.operational_complete_at?'ALREADY_COMPLETE':'STAGE_NOT_ELIGIBLE'),
-        booking_gates:_r1aFlag(bkgOk,'BOOKING_GATES','Jobs',!active?'JOB_NOT_ACTIONABLE':!fn01?'MODE_UNAVAILABLE':'STAGE_NOT_ELIGIBLE'),
         sold_intake:_r1aFlag(fn01,'SOLD_INTAKE',null,fn01?null:'MODE_UNAVAILABLE'),
         booking_intake:_r1aFlag(bookInOk,'BOOKING_INTAKE','Jobs',!active?'JOB_NOT_ACTIONABLE':!fn01?'MODE_UNAVAILABLE':'STAGE_NOT_ELIGIBLE')
       };

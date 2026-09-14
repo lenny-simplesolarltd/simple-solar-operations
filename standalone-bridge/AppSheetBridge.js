@@ -2350,6 +2350,11 @@ function evaluateReadyToBook(job, store) {
   check('signed_contract_evidence', job.contract_status === 'Signed' && !!job.contract_evidence_id,
     job.contract_status === 'Signed' && job.contract_evidence_id ? 'Signed contract evidence recorded' : 'Signed contract evidence missing');
 
+  if (job.finance_route === 'Standard') {
+    const pre01 = taskSatisfaction(store, job.id, 'PRE01');
+    check('PRE01_satisfied', pre01.pass, pre01.detail);
+  }
+
   const pre02 = taskSatisfaction(store, job.id, 'PRE02');
   check('PRE02_satisfied', pre02.pass, pre02.detail);
 
@@ -4391,7 +4396,7 @@ function _r1aCreate(options){
     } else if(input.read_type==='ACTION_AVAILABILITY'){
       var aj=_r1aAuthorizeJob(store,a,input.job_id);out=reads.actionAvailability(store,input.job_id);
       var active=!aj.archived_at&&['CancellationInProgress','Cancelled'].indexOf(aj.workflow_stage)<0,fn01=_r1aModeAvailable(store,'FN-01','Automated'),cancelModes=fn01&&_r1aModeAvailable(store,'FN-17','Manual')&&_r1aModeAvailable(store,'FN-20','Manual'),fn15=_r1aModeAvailable(store,'FN-15','Manual'),fn19=_r1aModeAvailable(store,'FN-19','Manual'),fn11=_r1aModeAvailable(store,'FN-11','Manual'),officeMgr=_r1aOfficeManager(a),isAdmin=_r1aAdmin(a);
-      var depOk=active&&fn15&&_r1aDirector(a)&&!aj.deposit_bank_confirmed_at,opcOk=active&&fn19&&fn11&&officeMgr&&!aj.operational_complete_at&&['InProgress','Aftercare'].indexOf(aj.workflow_stage)>=0,bkgOk=active&&fn01&&['Prebooking','ReadyToBook','BookingInProgress'].indexOf(aj.workflow_stage)>=0,reinOk=aj.workflow_stage==='Cancelled'&&cancelModes,bookInOk=active&&fn01&&['Prebooking','ReadyToBook','BookingInProgress'].indexOf(aj.workflow_stage)>=0;
+      var depOk=active&&fn15&&_r1aDirector(a)&&!aj.deposit_bank_confirmed_at,opcOk=active&&fn19&&fn11&&officeMgr&&!aj.operational_complete_at&&['InProgress','Aftercare'].indexOf(aj.workflow_stage)>=0,reinOk=aj.workflow_stage==='Cancelled'&&cancelModes,bookInOk=active&&fn01&&['Prebooking','ReadyToBook','BookingInProgress'].indexOf(aj.workflow_stage)>=0;
       var moveOk=active&&fn01&&['Booked','AwaitingInstallation','InProgress','BookingInProgress'].indexOf(aj.workflow_stage)>=0;
       var changeOk=moveOk;
       out.appsheet_commands={
@@ -4405,7 +4410,6 @@ function _r1aCreate(options){
         reinstate_job:_r1aFlag(reinOk,'REINSTATE_JOB','Jobs',aj.workflow_stage!=='Cancelled'?'STAGE_NOT_CANCELLED':'MODE_UNAVAILABLE'),
         deposit_confirm:_r1aFlag(depOk,'DEPOSIT_CONFIRM','Jobs',!active?'JOB_NOT_ACTIONABLE':!_r1aDirector(a)?'DIRECTOR_REQUIRED':!fn15?'MODE_UNAVAILABLE':'ALREADY_CONFIRMED'),
         operational_complete:_r1aFlag(opcOk,'OPERATIONAL_COMPLETE','Jobs',!active?'JOB_NOT_ACTIONABLE':!officeMgr?'OFFICE_OR_ADMIN_REQUIRED':!(fn19&&fn11)?'MODE_UNAVAILABLE':aj.operational_complete_at?'ALREADY_COMPLETE':'STAGE_NOT_ELIGIBLE'),
-        booking_gates:_r1aFlag(bkgOk,'BOOKING_GATES','Jobs',!active?'JOB_NOT_ACTIONABLE':!fn01?'MODE_UNAVAILABLE':'STAGE_NOT_ELIGIBLE'),
         sold_intake:_r1aFlag(fn01,'SOLD_INTAKE',null,fn01?null:'MODE_UNAVAILABLE'),
         booking_intake:_r1aFlag(bookInOk,'BOOKING_INTAKE','Jobs',!active?'JOB_NOT_ACTIONABLE':!fn01?'MODE_UNAVAILABLE':'STAGE_NOT_ELIGIBLE')
       };
@@ -4607,6 +4611,17 @@ function _r1sApplyPre04Verification(store,job,actorId,now,commandId){
   return store.get('Jobs',job.id);
 }
 
+/* Internal post-command readiness hook. It only evaluates the Prebooking phase,
+ * so booking-link gates cannot advance a later phase and no public command is
+ * recursively invoked. */
+function _r1sReevaluatePrebooking(store,jobId,actorId,commandId,now){
+  if(!_r1sText(jobId))return null;
+  var job=store.get('Jobs',jobId);
+  if(!job||job.workflow_stage!=='Prebooking')return null;
+  if(typeof processBookingGates!=='function')_r1sErr('R1A_COMMAND_UNSUPPORTED');
+  return processBookingGates(jobId,store,{actor:actorId,command_id:'AUTO-'+commandId,now:now});
+}
+
 function _r1sTaskComplete(ctx){var r=ctx.request,s=ctx.store,a=ctx.actor,p=_r1sPayload(r,['completion_note','evidence_id','evidence_path'],['completion_note']),t=s.get('Tasks',r.task_id),jid='CJ-R1A-'+r.command_id;
   return s.withLock(function(){var prior=s.get('CommitJournal',jid);if(prior){if(prior.entity_type!=='Tasks'||prior.entity_id!==r.task_id||prior.changes_json!==JSON.stringify(p))_r1sErr('R1A_COMMAND_CONFLICT');if(prior.state!=='Committed')_r1sErr('R1A_RECOVERY_REQUIRED');return{status:'Replayed',task:s.get('Tasks',r.task_id),job:t&&t.job_id?s.get('Jobs',t.job_id):null,external_calls:0};}
     t=s.get('Tasks',r.task_id);if(Number(t.version)!==Number(r.expected_version))_r1sErr('R1A_STALE_VERSION');if(['Complete','NotRequired','Cancelled'].indexOf(t.status)>=0)_r1sErr('R1A_TASK_NOT_COMPLETABLE');if(['Open','Waiting','InProgress'].indexOf(t.status)<0||t.revision_required===true)_r1sErr('R1A_TASK_NOT_COMPLETABLE');
@@ -4636,13 +4651,14 @@ function _r1sTaskComplete(ctx){var r=ctx.request,s=ctx.store,a=ctx.actor,p=_r1sP
     var after=Object.assign({},t,{status:'Complete',completed_at:now,completed_by:a.id,completion_note:p.completion_note,evidence_id:evidenceId||null,updated_at:now,updated_by:a.id,version:Number(t.version)+1,commit_id:'R1A-'+r.command_id});
     s.update('Tasks',t.id,{status:after.status,completed_at:after.completed_at,completed_by:after.completed_by,completion_note:after.completion_note,evidence_id:after.evidence_id,updated_at:now,updated_by:a.id,version:after.version,commit_id:after.commit_id});
     s.insert('TaskEvents',{id:'TE-R1A-'+r.command_id,task_id:t.id,action:'Complete',old_status:t.status,new_status:'Complete',old_owner:t.owner_id,new_owner:t.owner_id,old_due:t.due_at,new_due:t.due_at,reason:p.completion_note,actor:a.id,timestamp:now,created_at:now,commit_id:'R1A-'+r.command_id});
-    var jobAfter=null;
+    var jobAfter=null,readiness=null;
     if(t.job_id&&(t.template_code==='PRE02'||t.template_code==='PRE04')){
       var job=s.get('Jobs',t.job_id);if(!job)_r1sErr('R1A_JOB_NOT_FOUND');
       if(t.template_code==='PRE02')jobAfter=_r1sApplyPre02Contract(s,job,a.id,evidenceId,now,r.command_id);
       if(t.template_code==='PRE04')jobAfter=_r1sApplyPre04Verification(s,job,a.id,now,r.command_id);
     }
-    _r1sInsertAudit(s,'AE-R1A-'+r.command_id,'Tasks',t.id,'Complete',t,after,a.id,r.command_id,p.completion_note,'R1 AppSheet/S04',now);s.update('CommitJournal',jid,{state:'Committed',committed_at:now});return{status:'Completed',task:s.get('Tasks',t.id),job:jobAfter,external_calls:0};}catch(e){s.update('CommitJournal',jid,{state:'RecoveryRequired'});throw e;}});}
+    if(t.job_id&&['PRE01','PRE02','PRE03','PRE04','PRE05'].indexOf(t.template_code)>=0){readiness=_r1sReevaluatePrebooking(s,t.job_id,a.id,r.command_id,now);jobAfter=s.get('Jobs',t.job_id);}
+    _r1sInsertAudit(s,'AE-R1A-'+r.command_id,'Tasks',t.id,'Complete',t,after,a.id,r.command_id,p.completion_note,'R1 AppSheet/S04',now);s.update('CommitJournal',jid,{state:'Committed',committed_at:now});return{status:'Completed',task:s.get('Tasks',t.id),job:jobAfter,readiness:readiness&&readiness.readiness||null,external_calls:0};}catch(e){s.update('CommitJournal',jid,{state:'RecoveryRequired'});throw e;}});}
 
 /* Legacy repair: attach required evidence to an already-Complete PRE02 with blank evidence_id.
  * Does not reopen the task or alter completed_at / completed_by / completion_note. */
@@ -4686,9 +4702,11 @@ function _r1sTaskEvidenceAttach(ctx){
       var grossBefore=job.original_gross_pence;
       var jobAfter=_r1sApplyPre02Contract(s,job,a.id,evidenceId,now,r.command_id);
       if(jobAfter.original_gross_pence!==grossBefore)_r1sErr('R1A_FINANCIAL_MUTATION');
+      var readiness=_r1sReevaluatePrebooking(s,t.job_id,a.id,r.command_id,now);
+      jobAfter=s.get('Jobs',t.job_id);
       _r1sInsertAudit(s,'AE-R1A-'+r.command_id,'Tasks',t.id,'EvidenceAttach',before,after,a.id,r.command_id,p.evidence_path,'R1 AppSheet/S04',now);
       s.update('CommitJournal',jid,{state:'Committed',committed_at:now});
-      return{status:'Attached',task:s.get('Tasks',t.id),job:jobAfter,evidence_id:evidenceId,external_calls:0};
+      return{status:'Attached',task:s.get('Tasks',t.id),job:jobAfter,evidence_id:evidenceId,readiness:readiness&&readiness.readiness||null,external_calls:0};
     }catch(e){s.update('CommitJournal',jid,{state:'RecoveryRequired'});throw e;}
   });
 }
@@ -4767,7 +4785,7 @@ function _r1sCancel(ctx){var r=ctx.request,p=_r1sPayload(r,['reason','effective_
 function _r1sReinstate(ctx){var r=ctx.request,p=_r1sPayload(r,['reason','new_date','risk_review','commitment_review','finance_review','evidence_reference'],['reason','new_date','commitment_review','finance_review','evidence_reference']);return _s15Execute('Reinstate',Object.assign({command_id:r.command_id,job_id:r.job_id,expected_version:r.expected_version,actor:ctx.actor.id},p),ctx.store);}
 
 function _r1sDepositConfirm(ctx){var r=ctx.request,s=ctx.store,a=ctx.actor,p=_r1sPayload(r,['reference'],['reference']);
-  return s.withLock(function(){var job=s.get('Jobs',r.job_id);if(!job)_r1sErr('R1A_STALE_VERSION');if(job.deposit_bank_confirmed_at)return{status:'AlreadyConfirmed',deposit:{ok:true,confirmed:false,reason:'Already confirmed'},external_calls:0};if(Number(job.version)!==Number(r.expected_version))_r1sErr('R1A_STALE_VERSION');if(typeof confirmDeposit!=='function')_r1sErr('R1A_COMMAND_UNSUPPORTED');var before=job,res=confirmDeposit(s,r.job_id,a.id,p.reference),now=new Date().toISOString(),after=s.get('Jobs',r.job_id);_r1sInsertAudit(s,'AE-R1A-'+r.command_id,'Jobs',r.job_id,'DepositConfirm',before,after,a.id,r.command_id,p.reference,'R1 AppSheet/S13',now);return{status:res&&res.confirmed?'Confirmed':(res&&res.ok?'AlreadyConfirmed':'Failed'),deposit:res,external_calls:0};});}
+  return s.withLock(function(){var job=s.get('Jobs',r.job_id);if(!job)_r1sErr('R1A_STALE_VERSION');if(job.deposit_bank_confirmed_at)return{status:'AlreadyConfirmed',deposit:{ok:true,confirmed:false,reason:'Already confirmed'},job:job,readiness:null,external_calls:0};if(Number(job.version)!==Number(r.expected_version))_r1sErr('R1A_STALE_VERSION');if(typeof confirmDeposit!=='function')_r1sErr('R1A_COMMAND_UNSUPPORTED');var before=job,res=confirmDeposit(s,r.job_id,a.id,p.reference),now=new Date().toISOString(),readiness=res&&res.confirmed?_r1sReevaluatePrebooking(s,r.job_id,a.id,r.command_id,now):null,after=s.get('Jobs',r.job_id);_r1sInsertAudit(s,'AE-R1A-'+r.command_id,'Jobs',r.job_id,'DepositConfirm',before,after,a.id,r.command_id,p.reference,'R1 AppSheet/S13',now);return{status:res&&res.confirmed?'Confirmed':(res&&res.ok?'AlreadyConfirmed':'Failed'),deposit:res,job:after,readiness:readiness&&readiness.readiness||null,external_calls:0};});}
 
 function _r1sOperationalComplete(ctx){var r=ctx.request,s=ctx.store,a=ctx.actor;_r1sPayload(r,[],[]);
   return s.withLock(function(){var job=s.get('Jobs',r.job_id);if(!job||Number(job.version)!==Number(r.expected_version))_r1sErr('R1A_STALE_VERSION');if(typeof _s10ApproveOperationalCompletion!=='function')_r1sErr('R1A_COMMAND_UNSUPPORTED');var before=job,res=_s10ApproveOperationalCompletion(r.job_id,a.id,s),now=new Date().toISOString(),after=s.get('Jobs',r.job_id);_r1sInsertAudit(s,'AE-R1A-'+r.command_id,'Jobs',r.job_id,'OperationalComplete',before,after,a.id,r.command_id,res&&res.status,'R1 AppSheet/S10',now);return{status:res.status,created:!!res.created,gate:res.gate,ghl_task:res.ghl_task||null,external_calls:0};});}

@@ -27,6 +27,11 @@ function evaluateReadyToBook(job, store) {
   check('signed_contract_evidence', job.contract_status === 'Signed' && !!job.contract_evidence_id,
     job.contract_status === 'Signed' && job.contract_evidence_id ? 'Signed contract evidence recorded' : 'Signed contract evidence missing');
 
+  if (job.finance_route === 'Standard') {
+    const pre01 = taskSatisfaction(store, job.id, 'PRE01');
+    check('PRE01_satisfied', pre01.pass, pre01.detail);
+  }
+
   const pre02 = taskSatisfaction(store, job.id, 'PRE02');
   check('PRE02_satisfied', pre02.pass, pre02.detail);
 

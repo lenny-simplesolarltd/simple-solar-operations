@@ -61,7 +61,8 @@ test('Lenny DEV seed Admin is authorized through PersonRoles without email speci
 test('sold intake refuses a forged service that is not the canonical handler and refuses extra envelope fields',()=>{const f=fixture();f.options.services=serviceCore._r1sServices();assert.throws(()=>f.adapter().command({command_id:'C-I',command_type:'SOLD_INTAKE',job_id:'J-1',payload:{customer_first_name:'A'}}),/INVALID_FIELDS/);assert.throws(()=>f.adapter().command({command_id:'C-I2',command_type:'SOLD_INTAKE',payload:{customer_first_name:'A',workflow_stage:'Booked'}}),/INVALID_FIELDS/);});
 test('unsupported fixture-scoped command fails closed',()=>assert.throws(()=>fixture().adapter().command(cmd()),/COMMAND_UNSUPPORTED/));
 test('unrelated job command refused',()=>{const f=fixture('hannah@example.test');f.options.services=serviceCore._r1sServices();assert.throws(()=>f.adapter().command(cmd()),/JOB_ACCESS_DENIED/)});
-test('action reads expose exact AppSheet command flags',()=>{const f=fixture();let a=f.adapter().read({read_type:'ACTION_AVAILABILITY',job_id:'J-1'}),t=f.adapter().read({read_type:'TASK_ACTION_AVAILABILITY',task_id:'T-1'});assert.deepEqual(Object.keys(a.data.appsheet_commands),['call_record','issue_update','issue_create','planner_update','move_job','change_installer','cancel_job','reinstate_job','deposit_confirm','operational_complete','booking_gates','sold_intake','booking_intake']);assert.equal(a.data.appsheet_commands.call_record.available,true);assert.equal(a.data.appsheet_commands.issue_create.available,true);assert.equal(a.data.appsheet_commands.cancel_job.available,true);assert.equal(a.data.appsheet_commands.move_job.available,true);assert.equal(a.data.appsheet_commands.deposit_confirm.available,false);assert.equal(a.data.appsheet_commands.deposit_confirm.reason,'DIRECTOR_REQUIRED');assert.equal(a.data.appsheet_commands.sold_intake.available,true);assert.equal(a.data.appsheet_commands.booking_intake.available,false);assert.equal(a.data.appsheet_commands.booking_intake.reason,'STAGE_NOT_ELIGIBLE');assert.equal(t.data.appsheet_commands.task_complete.available,true);assert.equal(t.data.appsheet_commands.task_evidence_attach.available,false);assert.equal(t.data.appsheet_commands.task_evidence_attach.reason,'ATTACH_NOT_AVAILABLE')});
+test('action reads expose staff commands but keep BOOKING_GATES out of staff UI',()=>{const f=fixture();let a=f.adapter().read({read_type:'ACTION_AVAILABILITY',job_id:'J-1'}),t=f.adapter().read({read_type:'TASK_ACTION_AVAILABILITY',task_id:'T-1'});assert.deepEqual(Object.keys(a.data.appsheet_commands),['call_record','issue_update','issue_create','planner_update','move_job','change_installer','cancel_job','reinstate_job','deposit_confirm','operational_complete','sold_intake','booking_intake']);assert.equal(a.data.appsheet_commands.booking_gates,undefined);assert.equal(a.data.appsheet_commands.call_record.available,true);assert.equal(a.data.appsheet_commands.issue_create.available,true);assert.equal(a.data.appsheet_commands.cancel_job.available,true);assert.equal(a.data.appsheet_commands.move_job.available,true);assert.equal(a.data.appsheet_commands.deposit_confirm.available,false);assert.equal(a.data.appsheet_commands.deposit_confirm.reason,'DIRECTOR_REQUIRED');assert.equal(a.data.appsheet_commands.sold_intake.available,true);assert.equal(a.data.appsheet_commands.booking_intake.available,false);assert.equal(a.data.appsheet_commands.booking_intake.reason,'STAGE_NOT_ELIGIBLE');assert.equal(t.data.appsheet_commands.task_complete.available,true);assert.equal(t.data.appsheet_commands.task_evidence_attach.available,false);assert.equal(t.data.appsheet_commands.task_evidence_attach.reason,'ATTACH_NOT_AVAILABLE')});
+test('ReadyToBook exposes Continue Booking through the existing booking intake action',()=>{const f=fixture();f.tables.Jobs[0].workflow_stage='ReadyToBook';const action=f.adapter().read({read_type:'ACTION_AVAILABILITY',job_id:'J-1'}).data.appsheet_commands.booking_intake;assert.equal(action.available,true);assert.equal(action.command_type,'BOOKING_INTAKE');assert.equal(action.expected_version_entity,'Jobs')});
 test('job search filters to assigned R1 pilot jobs and refuses blank query',()=>{const f=fixture();assert.throws(()=>f.adapter().read({read_type:'JOB_SEARCH',query:''}),/QUERY_REQUIRED/);const r=f.adapter().read({read_type:'JOB_SEARCH',query:'J-1'});assert.equal(r.data.count,1);assert.equal(r.data.results[0].id,'J-1');const h=fixture('hannah@example.test').adapter().read({read_type:'JOB_SEARCH',query:'J-1'});assert.equal(h.data.count,0);const nonPilot=f.adapter().read({read_type:'JOB_SEARCH',query:'J-N'});assert.equal(nonPilot.data.count,0)});
 test('operational queue allowlists R1 queues only and filters task visibility',()=>{const f=fixture();assert.throws(()=>f.adapter().read({read_type:'OPERATIONAL_QUEUE',queue:'materials'}),/QUEUE_NOT_IN_R1/);assert.throws(()=>f.adapter().read({read_type:'OPERATIONAL_QUEUE',queue:'archive'}),/QUEUE_NOT_IN_R1/);const r=f.adapter().read({read_type:'OPERATIONAL_QUEUE',queue:'booking'});assert.equal(r.data.queue,'booking');assert.equal(r.data.tasks.every(t=>t.owner_id==='P-tanya'||t.backup_id==='P-tanya'),true);assert.deepEqual(core.R1A_BOUND_QUEUES,['booking','calls','issues','payments','ghl','cancellation','intake_review'])});
 test('call command delegates canonical S10 shape and suppresses external effects',()=>{const f=fixture();f.options.services=serviceCore._r1sServices();global._s10RecordCall=(x,s)=>{s.insert('Calls',{id:x.id,job_id:x.job_id,task_id:x.task_id,attempted_at:'2026-09-07T00:00:00Z',attempted_by:x.attempted_by,outcome:x.outcome});return{created:true,call:s.get('Calls',x.id)}};const r=f.adapter().command({command_id:'CALL-1',command_type:'CALL_RECORD',job_id:'J-1',task_id:'T-1',expected_version:2,payload:{type:'Customer',outcome:'NoAnswer',notes:'No reply'}});assert.equal(r.result.status,'Recorded');assert.equal(r.result.external_calls,0);assert.equal(f.tables.Calls[0].attempted_by,'P-tanya')});
@@ -73,7 +74,7 @@ test('operational complete wraps approveOperationalCompletion under FN-19/FN-11 
 test('operational complete refuses VariationApprover-only, wrong mode, stale version and payload extras',()=>{const f=fixture('var@example.test');f.options.services=serviceCore._r1sServices();global._s10ApproveOperationalCompletion=()=>({status:'Completed'});assert.throws(()=>f.adapter().command({command_id:'OPC-2',command_type:'OPERATIONAL_COMPLETE',job_id:'J-OPC',expected_version:3,payload:{}}),/ROLE_DENIED/);const w=fixture();w.options.services=serviceCore._r1sServices();w.tables.ReleaseModes.find(m=>m.function_id==='FN-19').mode='Disabled';assert.throws(()=>w.adapter().command({command_id:'OPC-3',command_type:'OPERATIONAL_COMPLETE',job_id:'J-OPC',expected_version:3,payload:{}}),/MODE_DENIED/);const s=fixture();s.options.services=serviceCore._r1sServices();global._s10ApproveOperationalCompletion=()=>({status:'Completed'});assert.throws(()=>s.adapter().command({command_id:'OPC-4',command_type:'OPERATIONAL_COMPLETE',job_id:'J-OPC',expected_version:1,payload:{}}),/STALE_VERSION/);assert.throws(()=>s.adapter().command({command_id:'OPC-5',command_type:'OPERATIONAL_COMPLETE',job_id:'J-OPC',expected_version:3,payload:{note:'no'}}),/INVALID_FIELDS/)});
 test('booking gates wraps processBookingGates under FN-01 and reports committed stage',()=>{const f=fixture();f.options.services=serviceCore._r1sServices();global.processBookingGates=(jobId,s,options)=>{assert.equal(options.actor,'P-tanya');s.update('Jobs',jobId,{workflow_stage:'Booked',booking_approved_at:'2026-09-07T00:00:00Z',booking_approved_by:options.actor,version:3});return{success:true,readiness:{ready:true},gates:{ready:true,blocked:false,summary:'Ready',workflow_stage:'Booked'},tasks:{created:[]}}};const r=f.adapter().command({command_id:'BKG-1',command_type:'BOOKING_GATES',job_id:'J-BKG',expected_version:2,payload:{}});assert.equal(r.result.status,'Booked');assert.equal(r.result.external_calls,0)});
 test('booking gates refuses unauthorized, wrong mode, stale version and does not bypass blocked gates',()=>{const f=fixture('installer@example.test');f.options.services=serviceCore._r1sServices();assert.throws(()=>f.adapter().command({command_id:'BKG-2',command_type:'BOOKING_GATES',job_id:'J-BKG',expected_version:2,payload:{}}),/ROLE_DENIED/);const w=fixture();w.options.services=serviceCore._r1sServices();w.tables.ReleaseModes.find(m=>m.function_id==='FN-01').mode='Manual';assert.throws(()=>w.adapter().command({command_id:'BKG-3',command_type:'BOOKING_GATES',job_id:'J-BKG',expected_version:2,payload:{}}),/MODE_DENIED/);const s=fixture();s.options.services=serviceCore._r1sServices();global.processBookingGates=()=>({success:false,gates:{ready:false,blocked:true,summary:'Blocked'}});assert.throws(()=>s.adapter().command({command_id:'BKG-4',command_type:'BOOKING_GATES',job_id:'J-BKG',expected_version:99,payload:{}}),/STALE_VERSION/);const b=fixture();b.options.services=serviceCore._r1sServices();global.processBookingGates=()=>({success:false,gates:{ready:false,blocked:true,summary:'Blocked'},tasks:{created:[]}});const blocked=b.adapter().command({command_id:'BKG-5',command_type:'BOOKING_GATES',job_id:'J-BKG',expected_version:2,payload:{}});assert.equal(blocked.result.status,'Blocked');assert.equal(blocked.result.success,false);assert.throws(()=>b.adapter().command({command_id:'BKG-6',command_type:'BOOKING_GATES',job_id:'J-BKG',expected_version:2,payload:{force:true}}),/INVALID_FIELDS/)});
-test('deposit and operational availability flags require Admin/Office modes correctly',()=>{const f=fixture('ben@example.test');let d=f.adapter().read({read_type:'ACTION_AVAILABILITY',job_id:'J-DEP'});assert.equal(d.data.appsheet_commands.deposit_confirm.available,true);const o=fixture();assert.equal(o.adapter().read({read_type:'ACTION_AVAILABILITY',job_id:'J-OPC'}).data.appsheet_commands.operational_complete.available,true);assert.equal(o.adapter().read({read_type:'ACTION_AVAILABILITY',job_id:'J-BKG'}).data.appsheet_commands.booking_gates.available,true)});
+test('deposit and operational availability flags require Admin/Office modes correctly',()=>{const f=fixture('ben@example.test');let d=f.adapter().read({read_type:'ACTION_AVAILABILITY',job_id:'J-DEP'});assert.equal(d.data.appsheet_commands.deposit_confirm.available,true);const o=fixture();assert.equal(o.adapter().read({read_type:'ACTION_AVAILABILITY',job_id:'J-OPC'}).data.appsheet_commands.operational_complete.available,true);assert.equal(o.adapter().read({read_type:'ACTION_AVAILABILITY',job_id:'J-BKG'}).data.appsheet_commands.booking_gates,undefined)});
 test('wrong environment and sheet refuse; no external API source',()=>{const f=fixture();f.options.config.environment='PROD';assert.throws(()=>f.adapter().read({read_type:'SYSTEM_STATUS'}),/DEV_ONLY/);const src=fs.readFileSync('r1-appsheet/adapter.js','utf8')+fs.readFileSync('r1-appsheet/cloud-adapter.js','utf8')+fs.readFileSync('r1-appsheet/services.js','utf8');assert.doesNotMatch(src,/UrlFetchApp|MailApp|GmailApp|CalendarApp|DriveApp/)});
 test('generated Apps Script parses and exposes only narrow entry points',()=>{const src=fs.readFileSync('apps-script/r1-appsheet/R1AppSheetAdapter.js','utf8');new vm.Script(src);assert.match(src,/function appSheetR1Read/);assert.match(src,/function appSheetR1Command/);assert.match(src,/JOB_SEARCH/);assert.match(src,/jobSearch:pick\('_s17JobSearch'\)/);assert.match(src,/reads:_r1aDefaultReads\(\)/);assert.match(src,/planner:function\(s,asOf,weeks\)/);assert.match(src,/DEPOSIT_CONFIRM/);assert.match(src,/OPERATIONAL_COMPLETE/);assert.match(src,/BOOKING_GATES/);assert.match(src,/function _r1sSoldIntake/);assert.match(src,/function _r1sBookingIntake/);assert.match(src,/function _r1sIssueCreate/);assert.match(src,/function appSheetR1CommandFromRequestRow/);assert.doesNotMatch(src,/R1A_INTAKE_POLICY_NOT_APPROVED/);assert.match(src,/runR1APrepareDepositConfirmFixture/);assert.match(src,/_r1aPrepareOperationalCompleteFixture/);assert.match(src,/_r1aPrepareBookingGatesFixture/);assert.match(src,/TPL-GHL01/);assert.doesNotMatch(src,/insert\([^)]*TPL-R1A-GHL01|_r1aFixtureIns\([^)]*TPL-R1A-GHL01|_r1aFixtureUpsert\([^)]*TPL-R1A-GHL01/);assert.doesNotMatch(src,/updateRow|genericUpdate|activateProduction/)});
 
@@ -485,24 +486,31 @@ test('PRE02/PRE04 TASK_COMPLETE stamp Job fields with evidence; unrelated tasks 
   assert.equal(f.tables.Jobs.find(j => j.id === jobId).customer_details_verified_at, pre01Before.customer_details_verified_at);
   assert.equal(f.tables.Jobs.find(j => j.id === jobId).contract_evidence_id, 'EVID-CONTRACT-TONY');
 
-  // Deposit + readiness after PRE02/PRE04 stamps
+  // Deposit facts + final PRE03 completion automatically advance readiness.
   f.tables.Jobs.find(j => j.id === jobId).deposit_bank_confirmed_at = '2026-09-13T12:00:00.000Z';
   f.tables.Jobs.find(j => j.id === jobId).deposit_bank_confirmed_by = 'P-ben';
   f.tables.Jobs.find(j => j.id === jobId).deposit_bank_reference = 'TONY-DEP';
   const pre03 = f.tables.Tasks.find(t => t.job_id === jobId && t.template_code === 'PRE03');
-  f.tables.Tasks.find(t => t.id === pre03.id).status = 'Complete';
-  f.tables.Tasks.find(t => t.id === pre03.id).completed_at = '2026-09-13T12:05:00.000Z';
-  f.tables.Tasks.find(t => t.id === pre03.id).completed_by = 'P-ben';
-  f.tables.Tasks.find(t => t.id === pre03.id).completion_note = 'deposit seen';
-  f.tables.Tasks.find(t => t.id === pre03.id).evidence_id = 'EVID-PRE03';
-  job = f.tables.Jobs.find(j => j.id === jobId);
-  assert.equal(gates.evaluateReadyToBook(job, f.store).ready, true);
-  const gatesResult = f.adapter().command({
-    command_id: 'GATES-1', command_type: 'BOOKING_GATES', job_id: jobId, expected_version: job.version, payload: {}
+  assert.equal(gates.evaluateReadyToBook(f.tables.Jobs.find(j => j.id === jobId), f.store).ready, false);
+  f.options.actorEmail = () => 'ben@example.test';
+  const beforeJournals = f.tables.CommitJournal.length;
+  const beforeTasks = f.tables.Tasks.length;
+  const completed = f.adapter().command({
+    command_id: 'PRE03-FINAL', command_type: 'TASK_COMPLETE', task_id: pre03.id, expected_version: pre03.version,
+    payload: { completion_note: 'deposit seen' }
   });
-  assert.equal(gatesResult.result.status, 'ReadyToBook');
-  assert.equal(gatesResult.result.external_calls, 0);
+  assert.equal(completed.result.status, 'Completed');
+  assert.equal(completed.result.readiness.stage_advanced, true);
   assert.equal(f.tables.Jobs.find(j => j.id === jobId).workflow_stage, 'ReadyToBook');
+  assert.equal(f.tables.AuditEvents.filter(a => a.action === 'WorkflowStage:ReadyToBook').length, 1);
+  const replay = f.adapter().command({
+    command_id: 'PRE03-FINAL', command_type: 'TASK_COMPLETE', task_id: pre03.id, expected_version: pre03.version,
+    payload: { completion_note: 'deposit seen' }
+  });
+  assert.equal(replay.result.status, 'Replayed');
+  assert.equal(f.tables.CommitJournal.length, beforeJournals + 1);
+  assert.equal(f.tables.Tasks.length, beforeTasks);
+  assert.equal(f.tables.AuditEvents.filter(a => a.action === 'WorkflowStage:ReadyToBook').length, 1);
 });
 test('PRE02/PRE04 evidence_path creates Evidence, stamps Jobs, replays idempotently, and refuses bad uploads', () => {
   const gates = require('../s06/gates.js');
@@ -798,6 +806,37 @@ test('TASK_EVIDENCE_ATTACH repairs completed PRE02 via normal AppSheet request-r
     command_id: 'PRE04-X', command_type: 'TASK_COMPLETE', task_id: pre04.id, expected_version: pre04.version,
     payload: { completion_note: 'x', evidence_id: 'EV-OTHER-ATTACH' }
   }), /CROSS_JOB_EVIDENCE/);
+});
+
+test('PRE02 evidence attachment automatically reevaluates Prebooking readiness once', () => {
+  const gates = require('../s06/gates.js');
+  global.processBookingGates = gates.processBookingGates;
+  const f = fixture();
+  installIntake(f);
+  f.tables.Evidence = [];
+  f.options.resolveUpload = () => ({ drive_file_id: 'DRIVE-AUTO-PRE02', filename: 'contract.pdf', mime_type: 'application/pdf' });
+  const sold = f.adapter().command({ command_id: 'SOLD-AUTO-ATTACH', command_type: 'SOLD_INTAKE', payload: soldPayload() });
+  const job = f.tables.Jobs.find(j => j.id === sold.result.job_id);
+  Object.assign(job, {
+    contract_status: 'NotSent', contract_evidence_id: null, contract_signed_at: null,
+    customer_details_verified_at: '2026-09-13T10:00:00.000Z', customer_details_verified_by: 'P-tanya',
+    deposit_bank_confirmed_at: '2026-09-13T11:00:00.000Z', deposit_bank_confirmed_by: 'P-ben', deposit_bank_reference: 'DEP-AUTO'
+  });
+  ['PRE01', 'PRE03', 'PRE04'].forEach(code => {
+    const task = f.tables.Tasks.find(t => t.job_id === job.id && t.template_code === code);
+    Object.assign(task, { status: 'Complete', completed_at: '2026-09-13T11:30:00.000Z', completed_by: task.owner_id, completion_note: 'Verified', evidence_id: 'EV-' + code, version: 2 });
+  });
+  const pre02 = f.tables.Tasks.find(t => t.job_id === job.id && t.template_code === 'PRE02');
+  Object.assign(pre02, { status: 'Complete', completed_at: '2026-09-13T11:45:00.000Z', completed_by: 'P-tanya', completion_note: 'Signed', evidence_id: null, version: 2 });
+  assert.equal(gates.evaluateReadyToBook(job, f.store).ready, false);
+  const request = { command_id: 'ATTACH-AUTO', command_type: 'TASK_EVIDENCE_ATTACH', task_id: pre02.id, expected_version: 2, payload: { evidence_path: 'DEVTaskEvidenceAttachRequests_Images/contract.pdf' } };
+  const first = f.adapter().command(request);
+  const replay = f.adapter().command(request);
+  assert.equal(first.result.job.workflow_stage, 'ReadyToBook');
+  assert.equal(first.result.readiness.stage_advanced, true);
+  assert.equal(replay.result.status, 'Replayed');
+  assert.equal(f.tables.AuditEvents.filter(a => a.action === 'WorkflowStage:ReadyToBook').length, 1);
+  assert.equal(f.tables.Evidence.filter(e => e.drive_file_id === 'DRIVE-AUTO-PRE02').length, 1);
 });
 test('Tony reconcile allows Admin email when Session is blank and denies Office/unknown/inactive', () => {
   function tonyStore(people, roles) {

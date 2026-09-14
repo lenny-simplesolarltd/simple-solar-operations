@@ -233,8 +233,8 @@
     },
     {
       "file": "apps-script/r1-appsheet/R1AppSheetAdapter.js",
-      "bytes": 157659,
-      "sha256": "29afa31a9a23bfe18f0df09da07784e1548c3158583ec6dba2e4a1e3dd2e7466",
+      "bytes": 158580,
+      "sha256": "23e357b431b4879500d058b14fe6fd62da3f217880226816cf753f5b533f0c02",
       "entry_points": [
         "runR1CRequestProvisionCheck",
         "runR1CProvisionRequestTables",
@@ -843,8 +843,8 @@
   ],
   "standalone_bridge": {
     "file": "standalone-bridge/AppSheetBridge.js",
-    "bytes": 454461,
-    "sha256": "163ea7bbedd60e3ff15d5eddb069bb18867aa49244a77a4335a85f708a077df0",
+    "bytes": 455545,
+    "sha256": "ead417c51050da32e5a9de783e2fed1a664d7bf910af7e7b2f71a6b42dcfda49",
     "entry_points": [
       "runR1CRequestProvisionCheck",
       "runR1CProvisionRequestTables",

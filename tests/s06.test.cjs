@@ -174,6 +174,21 @@ test('S06: missing contract/PRE04/deposit evidence cannot reach ReadyToBook', ()
   assert.equal(store.list('AuditEvents').length,0);
 });
 
+test('S06: PRE01-PRE03 complete with PRE04 open stays Prebooking', () => {
+  const store = makeStore(); installBaseFixture(store);
+  const job = buildReadyJob(); job.workflow_stage = 'Prebooking'; job.booking_submission_id = null;
+  store.insert('Jobs', job); store.insert('Customers', buildCustomer(job.customer_id, 'Alice', 'Pending'));
+  createPrebookingTasksForSold(job, store);
+  ['PRE01', 'PRE02', 'PRE03'].forEach(code => {
+    const task = store.list('Tasks').find(t => t.job_id === job.id && t.template_code === code);
+    store.update('Tasks', task.id, { status: 'Complete', completed_at: '2026-09-01T10:00:00.000Z', completed_by: task.owner_id, completion_note: 'Verified', evidence_id: 'EV-' + code, version: 2 });
+  });
+  const result = processBookingGates(job.id, store, { actor: 'PERSON-tanya', command_id: 'PRE04-OPEN' });
+  assert.equal(result.readiness.ready, false);
+  assert.ok(result.readiness.gates.some(g => g.name === 'PRE04_satisfied' && !g.pass));
+  assert.equal(store.get('Jobs', job.id).workflow_stage, 'Prebooking');
+});
+
 test('S06: field gates cannot bypass outstanding mandatory PRE/BKG tasks', () => {
   const store=makeStore(); installBaseFixture(store);
   const job=buildReadyJob(); store.insert('Jobs',job); store.insert('Customers',buildCustomer(job.customer_id,'Alice','Blocked'));
@@ -183,7 +198,7 @@ test('S06: field gates cannot bypass outstanding mandatory PRE/BKG tasks', () =>
   assert.ok(result.gates.gates.some(g=>g.name==='task_BKG01'&&!g.pass));
 });
 
-test('S06: ReadyToBook requires PRE02/PRE03/PRE04 and records actor/time/version once', () => {
+test('S06: ReadyToBook requires PRE01/PRE02/PRE03/PRE04 and records actor/time/version once', () => {
   const store = makeStore(); installBaseFixture(store);
   const job = buildReadyJob();
   job.workflow_stage = 'Prebooking';
@@ -200,14 +215,13 @@ test('S06: ReadyToBook requires PRE02/PRE03/PRE04 and records actor/time/version
   processBookingGates(job.id, store, { actor: 'PERSON-tanya', command_id: 'RTB-PRE03-OPEN', now: '2026-09-01T10:00:00.000Z' });
   assert.equal(store.get('Jobs', job.id).workflow_stage, 'Prebooking');
 
-  ['PRE02', 'PRE03', 'PRE04'].forEach(code => {
+  ['PRE01', 'PRE02', 'PRE03', 'PRE04'].forEach(code => {
     const t = store.list('Tasks').find(x => x.job_id === job.id && x.template_code === code);
     store.update('Tasks', t.id, {
       status: 'Complete', completed_at: '2026-09-01T10:30:00.000Z', completed_by: t.owner_id,
       completion_note: 'Verified', evidence_id: 'EVID-' + code, version: 2
     });
   });
-  // PRE01 may remain open for ReadyToBook; it is a Booked-gate requirement.
   assert.equal(evaluateReadyToBook(store.get('Jobs', job.id), store).ready, true);
 
   const advanced = processBookingGates(job.id, store, {
