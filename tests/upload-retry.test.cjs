@@ -16,7 +16,7 @@ function memStore(sheetId=DEV){
 function attachRow(extra={}){return{id:'bc50e7af',command_id:'bc50e7af',task_id:'TASK-mtzl08pa-vpsvdn',expected_version:2,evidence_path:PATH,submitted_by:'tanya@example.test',submitted_at:'2026-09-13T16:52:04.000Z',status:'Ready',result_status:'',result_message:'',...extra};}
 function harness(rowsByTable,opts={}){
   const store=memStore(opts.sheetId);let now=T0;const calls=[],results=[];let outcome=opts.outcome||(()=>{const e=new Error('R1C_UPLOAD_PENDING');e.code='R1C_UPLOAD_PENDING';e.retryable=true;throw e;});
-  const deps={store,now:()=>new Date(now),readRows:t=>rowsByTable[t]===undefined?null:rowsByTable[t],writeResult:(t,id,s,m)=>{results.push({t,id,s,m});const r=(rowsByTable[t]||[]).find(r=>r.id===id);if(!r||!('result_status' in r))return false;r.result_status=s;r.result_message=m;return true;},command:(type,id,actor)=>{calls.push({type,id,actor});return outcome(type,id,actor);}};
+  const deps={store,now:()=>new Date(now),readRows:t=>rowsByTable[t]===undefined?null:rowsByTable[t],writeResult:(t,id,s,m,x)=>{results.push({t,id,s,m,x});const r=(rowsByTable[t]||[]).find(r=>r.id===id);if(!r||!('result_status' in r))return false;r.result_status=s;r.result_message=m;return true;},command:(type,id,actor)=>{calls.push({type,id,actor});return outcome(type,id,actor);}};
   return{store,deps,calls,results,advance:ms=>{now+=ms;},setOutcome:fn=>{outcome=fn;},outbox:()=>store.tables.Outbox};
 }
 const ok=status=>()=>({ok:true,command_type:'TASK_EVIDENCE_ATTACH',actor_id:'P-tanya',result:{status,external_calls:0}});
@@ -73,7 +73,7 @@ test('UR 04: bounded repeated pending -> backoff 1/2/4/8/16 min, five attempts t
     const t=retry._r1uTick(h.deps);assert.equal(t.processed.length,1,'attempt '+attempt);assert.equal(t.processed[0].attempt,attempt);
     if(attempt<5){assert.equal(t.processed[0].outcome,'RetryDue');assert.equal(t.processed[0].next_attempt,new Date(T0+(1+expectedNext.slice(0,attempt-1).reduce((a,b)=>a+b,0)-expectedNext[attempt-2]+expectedNext[attempt-2])*60000).toISOString());assert.equal(row.result_status,'UploadPending');}
   }
-  const o=h.outbox()[0];assert.equal(o.status,'NeedsReview');assert.equal(o.attempt_count,5);assert.match(o.response_summary,/R1C_UPLOAD_MISSING/);assert.equal(row.result_status,'Failed');assert.match(row.result_message,/R1C_UPLOAD_MISSING/);
+  const o=h.outbox()[0];assert.equal(o.status,'NeedsReview');assert.equal(o.attempt_count,5);assert.match(o.response_summary,/R1C_UPLOAD_MISSING/);assert.equal(row.result_status,'ActionRequired');assert.equal(row.result_message,'Your uploaded file never arrived. Start a new request and upload the file again.');assert.doesNotMatch(row.result_message,/R1[ACU]_/);assert.equal(h.results.at(-1).x.code,'R1C_UPLOAD_MISSING');assert.equal(h.results.at(-1).x.actorEmail,'tanya@example.test');
   assert.equal(h.calls.length,4,'bot attempt 1 + four backend attempts');
   h.advance(24*3600000);assert.equal(retry._r1uTick(h.deps).processed.length,0);assert.equal(h.calls.length,4,'exhausted item is never retried again');
   assert.equal(retry._r1uStatus(h.deps).by_status.NeedsReview,1);
@@ -111,7 +111,7 @@ test('UR 07: non-pending errors are final (no retry loop); replay of an already 
   const row=attachRow(),h=harness({DEVTaskEvidenceAttachRequests:[row]});
   retry._r1uScheduleRetry('TASK_EVIDENCE_ATTACH','bc50e7af','tanya@example.test',null,h.deps);
   h.advance(60000);h.setOutcome(fail('R1A_STALE_VERSION'));
-  let t=retry._r1uTick(h.deps);assert.equal(t.processed[0].outcome,'NeedsReview');assert.match(t.processed[0].summary,/R1A_STALE_VERSION/);assert.equal(row.result_status,'Failed');
+  let t=retry._r1uTick(h.deps);assert.equal(t.processed[0].outcome,'NeedsReview');assert.match(t.processed[0].summary,/R1A_STALE_VERSION/);assert.equal(row.result_status,'ActionRequired');assert.doesNotMatch(row.result_message,/R1[ACU]_/);
   h.advance(3600000);assert.equal(retry._r1uTick(h.deps).processed.length,0);assert.equal(h.calls.length,1);
   const row2=attachRow({id:'r2',command_id:'r2'}),h2=harness({DEVTaskEvidenceAttachRequests:[row2]});
   retry._r1uScheduleRetry('TASK_EVIDENCE_ATTACH','r2','tanya@example.test',null,h2.deps);h2.advance(60000);h2.setOutcome(ok('Replayed'));
@@ -148,7 +148,7 @@ function bundleFixture(){
   const fn01=tables.ReleaseModes.find(r=>r.function_code==='FN-01'||r.id==='RM-FN01');fn01.mode='Automated';fn01.authorised_job_scope='Pilot';
   tables.People.push({id:'P-tanya',email:'tanya@example.test',active:true,display_name:'Tanya',role:'Office',version:1});
   tables.PersonRoles.push({id:'role-tanya',person_id:'P-tanya',role:'Office',active:true,version:1});
-  tables.Jobs.push({id:'J-TONY',job_id:'SS-TONY',display_name:'Tony',pilot_job:true,release_scope:'R1',workflow_stage:'Booked',contract_status:'NotSent',contract_evidence_id:'',contract_signed_at:'',original_gross_pence:500000,version:3});
+  tables.Jobs.push({id:'J-TONY',job_id:'SS-TONY',display_name:'Tony',pilot_job:true,release_scope:'R1',workflow_stage:'Booked',contract_status:'NotSent',contract_id:'SIGNABLE-TONY-UR',contract_evidence_id:'',contract_signed_at:'',original_gross_pence:500000,version:3});
   tables.Tasks.push({id:'TASK-mtzl08pa-vpsvdn',job_id:'J-TONY',template_code:'PRE02',owner_id:'P-tanya',backup_id:'',status:'Complete',completed_at:'2026-09-12T09:00:00.000Z',completed_by:'P-tanya',completion_note:'Signed before evidence path existed',evidence_id:'',revision_required:false,version:2});
   const grids=Object.fromEntries(schema.tables.map(t=>{const h=t.columns.map(c=>c.name);return[t.name,[h,...tables[t.name].map(r=>h.map(k=>r[k]??''))]];}));
   grids.DEVTaskEvidenceAttachRequests=[['id','command_id','task_id','expected_version','evidence_path','submitted_by','submitted_at','status','result_status','result_message'],['bc50e7af','bc50e7af','TASK-mtzl08pa-vpsvdn',2,PATH,'tanya@example.test','2026-09-13T16:52:04.000Z','Ready','','']];
@@ -228,7 +228,56 @@ test('UR 12: generated bridge sweep recovers a pre-existing pending row that the
     t=g.c.runR1URetryUploadRequests();assert.equal(t.processed.length,1);assert.equal(t.processed[0].attempt,attempt);
     assert.equal(t.processed[0].outcome,attempt<5?'RetryDue':'NeedsReview');
   }
-  assert.match(g.rows('Outbox')[0].response_summary,/R1C_UPLOAD_MISSING/);assert.equal(g.rows('DEVTaskEvidenceAttachRequests')[0].result_status,'Failed');
+  assert.match(g.rows('Outbox')[0].response_summary,/R1C_UPLOAD_MISSING/);assert.equal(g.rows('DEVTaskEvidenceAttachRequests')[0].result_status,'ActionRequired');
   assert.equal(g.rows('Evidence').length,0);assert.equal(g.rows('CommitJournal').length,0);
   g.grids.Outbox[1][nextCol]='2026-09-13T16:53:10.000Z';assert.equal(g.c.runR1URetryUploadRequests().processed.length,0,'exhausted item stays in review');
+});
+
+test('UR 13: generated bridge persists staff-facing feedback on the request row; an Apps Script return is not business success',()=>{
+  const f=bundleFixture(),g=f.grids.DEVTaskEvidenceAttachRequests,col=k=>g[0].indexOf(k),row=()=>f.rows('DEVTaskEvidenceAttachRequests')[0];
+  g[0].push('result_code','result','result_at');g[1].push('','','');
+  g[1][col('expected_version')]=1;
+  const raw=f.c.appSheetR1CommandFromRequestRow('TASK_EVIDENCE_ATTACH','bc50e7af','tanya@example.test');
+  assert.equal(typeof raw,'string','the Apps Script function returns normally (execution Success) even though the command was refused');
+  let r=JSON.parse(raw);
+  assert.equal(r.ok,false);assert.equal(r.error,'R1A_STALE_VERSION');
+  assert.deepEqual(JSON.parse(JSON.stringify(r.feedback)),{status:'ActionRequired',heading:'ACTION REQUIRED',message:'This record changed after you opened the form. Go back, refresh, and try again.',code:'R1A_STALE_VERSION'});
+  assert.equal(r.request_result.written,true);
+  assert.equal(row().result_status,'ActionRequired');assert.equal(row().result_message,r.feedback.message);assert.doesNotMatch(row().result_message,/R1[ACU]_/);
+  assert.equal(row().result_code,'R1A_STALE_VERSION');assert.equal(JSON.parse(row().result).ok,false);assert.equal(Object.prototype.toString.call(row().result_at),'[object Date]');
+  assert.equal(row().status,'Ready','submission status is an input and is never rewritten');assert.equal(row().evidence_path,PATH);assert.equal(row().expected_version,1);
+  assert.equal(f.lookups(),0);assert.equal(f.rows('CommitJournal').length,0);assert.equal(f.rows('Outbox').length,0);assert.equal(f.rows('Evidence').length,0);
+  /* another user firing the bot for Tanya's row cannot overwrite her result */
+  r=JSON.parse(f.c.appSheetR1CommandFromRequestRow('TASK_EVIDENCE_ATTACH','bc50e7af','ben@example.test'));
+  assert.match(r.error,/ACTOR_MISMATCH/);assert.equal(r.request_result.written,false);assert.equal(r.request_result.reason,'NOT_ROW_OWNER');assert.equal(row().result_code,'R1A_STALE_VERSION');
+  /* corrected and fired again: success replaces the non-final result */
+  g[1][col('expected_version')]=2;f.setAvailable(true);
+  r=JSON.parse(f.c.appSheetR1CommandFromRequestRow('TASK_EVIDENCE_ATTACH','bc50e7af','tanya@example.test'));
+  assert.equal(r.ok,true,JSON.stringify(r));assert.equal(r.result.status,'Attached');assert.equal(r.feedback.status,'Succeeded');assert.equal(r.request_result.written,true);
+  assert.equal(row().result_status,'Succeeded');assert.equal(row().result_message,'Contract evidence added.');assert.equal(row().result_code,'');
+  const at=row().result_at.getTime();
+  /* exact replay keeps the recorded success and causes no duplicate effects */
+  r=JSON.parse(f.c.appSheetR1CommandFromRequestRow('TASK_EVIDENCE_ATTACH','bc50e7af','tanya@example.test'));
+  assert.equal(r.result.status,'Replayed');assert.equal(r.feedback.status,'Succeeded');assert.equal(r.request_result.written,false);assert.equal(r.request_result.reason,'FINAL_RESULT_PRESERVED');
+  assert.equal(row().result_at.getTime(),at);assert.equal(row().result_message,'Contract evidence added.');
+  assert.equal(f.rows('Evidence').length,1);assert.equal(f.rows('CommitJournal').filter(j=>j.state==='Committed').length,1);assert.equal(f.rows('TaskEvents').filter(e=>e.action==='EvidenceAttach').length,1);
+  /* JSON command path returns the same feedback vocabulary */
+  const j=JSON.parse(f.c.appSheetR1Command(JSON.stringify({command_id:'JSON-1',command_type:'TASK_COMPLETE',task_id:'TASK-mtzl08pa-vpsvdn',expected_version:3,payload:{completion_note:'x'}})));
+  assert.equal(j.ok,false);assert.equal(j.feedback.status,'Failed');assert.equal(j.feedback.code,j.error);assert.doesNotMatch(j.feedback.message,/R1[ACU]_/);
+});
+
+test('UR 14: sweep never re-runs a row whose bot call already recorded a refusal (live PRE02 attach row 1296b8b1 before the fix)',()=>{
+  const rows=[
+    attachRow({id:'1296b8b1',command_id:'1296b8b1',result_status:'ActionRequired',result_message:'Contract evidence can only be added to a completed contract task.'}),
+    attachRow({id:'failed-row',command_id:'failed-row',result_status:'Failed'}),
+    attachRow({id:'never-reached',command_id:'never-reached'}),
+    attachRow({id:'pending-no-outbox',command_id:'pending-no-outbox',result_status:'UploadPending'})
+  ];
+  const h=harness({DEVTaskEvidenceAttachRequests:rows});h.setOutcome(ok('Attached'));
+  const t=retry._r1uTick(h.deps);
+  assert.deepEqual(t.swept.map(x=>x.row_id).sort(),['never-reached','pending-no-outbox']);
+  assert.deepEqual(h.calls.map(c=>c.id).sort(),['never-reached','pending-no-outbox']);
+  assert.equal(h.outbox().some(o=>o.target.endsWith('/1296b8b1')||o.target.endsWith('/failed-row')),false);
+  assert.equal(rows[0].result_status,'ActionRequired');assert.equal(rows[1].result_status,'Failed');
+  assert.equal(retry._r1uTick(h.deps).swept.length,0,'second tick sweeps nothing new');
 });

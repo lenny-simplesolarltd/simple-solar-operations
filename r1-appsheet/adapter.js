@@ -3,7 +3,7 @@
 
 const R1A_BOUND_DEV_SHEET_ID = '1z7PNZtDdC4Z5eLbmTuQdqp0QpJSmuEvx3QvN3VyNTsc';
 const R1A_BOUND_READS = ['IDENTITY_PROBE','OFFICE_HOME','JOB_SEARCH','JOB_OVERVIEW','OPERATIONAL_QUEUE','RELEASE_MODE_STATUS','SYSTEM_STATUS','AUDIT_HISTORY','ACTION_AVAILABILITY','TASK_ACTION_AVAILABILITY','MY_TASKS','TEAM_TASKS','PLANNER_3_WEEKS','PLANNER_6_WEEKS','INTAKE_REVIEW','INSTALLER_WORKFLOW','GOODS_IN_DETAIL','STOCK_BALANCE'];
-const R1A_BOUND_COMMANDS = ['TASK_COMPLETE','TASK_EVIDENCE_ATTACH','CALL_RECORD','ISSUE_UPDATE','ISSUE_CREATE','PLANNER_UPDATE','MOVE_JOB','CHANGE_INSTALLER','CANCEL_JOB','REINSTATE_JOB','DEPOSIT_CONFIRM','OPERATIONAL_COMPLETE','BOOKING_GATES','SOLD_INTAKE','BOOKING_INTAKE','IW_START','IW_PROGRESS','IW_REPORT_COMPLETION','IW_REPORT_PROBLEM','IW_REPORT_VARIATION','IW_COMMISSIONING_DRAFT','IW_COMMISSIONING_SUBMIT','COMMISSIONING_REVIEW','GOODS_IN_RECEIVE','STOCK_QUARANTINE'];
+const R1A_BOUND_COMMANDS = ['TASK_COMPLETE','TASK_REOPEN','TASK_EVIDENCE_ATTACH','CALL_RECORD','ISSUE_UPDATE','ISSUE_CREATE','PLANNER_UPDATE','MOVE_JOB','CHANGE_INSTALLER','CANCEL_JOB','REINSTATE_JOB','DEPOSIT_CONFIRM','OPERATIONAL_COMPLETE','BOOKING_GATES','SOLD_INTAKE','BOOKING_INTAKE','IW_START','IW_PROGRESS','IW_REPORT_COMPLETION','IW_REPORT_PROBLEM','IW_REPORT_VARIATION','IW_COMMISSIONING_DRAFT','IW_COMMISSIONING_SUBMIT','COMMISSIONING_REVIEW','GOODS_IN_RECEIVE','STOCK_QUARANTINE'];
 const R1A_BOUND_QUEUES = ['booking','calls','issues','payments','ghl','cancellation','intake_review'];
 
 function _r1aCopy(v) { return JSON.parse(JSON.stringify(v)); }
@@ -46,6 +46,12 @@ function _r1aMode(store,id,wanted){var rows=store.list('ReleaseModes').filter(fu
 function _r1aModeAvailable(store,id,wanted){var rows=store.list('ReleaseModes').filter(function(r){return r.function_id===id;});return rows.length===1&&rows[0].target_release==='R1'&&rows[0].authorised_job_scope==='Pilot'&&rows[0].mode===wanted;}
 function _r1aVersion(row,expected){if(!Number.isSafeInteger(expected)||expected<1||Number(row.version)!==expected)_r1aRefuse('R1A_STALE_VERSION');}
 function _r1aFilterTasks(store,a,items){return (items||[]).filter(function(t){return (t.owner_id===a.id||t.backup_id===a.id||_r1aAdmin(a))&&(!t.job_id||(store.get('Jobs',t.job_id)||{}).pilot_job===true);});}
+/* Staff task search over S17 presentation rows (public Job ID / customer / postcode / task / owner). Read-only.
+ * Segment format must stay identical to _s17TaskSearchText in s17/admin.js. Blank query = no filter. */
+function _r1aTaskSearchText(t){return ['public_job_id','customer_name','postcode','title','owner_name','backup_name','template_code'].map(function(k){var v=t[k];if(v===null||v===undefined)return '';var x=String(v).trim();return x==='NOT_CONFIGURED'?'':x.toLowerCase();}).filter(Boolean).join(' | ');}
+function _r1aTaskQuery(items,query){if(!_r1aText(query))return items||[];var q=query.trim().toLowerCase(),qc=q.replace(/\s+/g,'');return (items||[]).filter(function(t){var text=typeof t.search_text==='string'?t.search_text:_r1aTaskSearchText(t);return text.split(' | ').some(function(seg){return seg.indexOf(q)>=0||(qc.length>=2&&seg.replace(/\s+/g,'').indexOf(qc)>=0);});});}
+/* TEAM_TASKS is not assignment-filtered, so customer identity is withheld for jobs the actor could not open via JOB_OVERVIEW. */
+function _r1aRedactTeamTasks(store,a,items){var cache={};return (items||[]).map(function(t){if(!t.job_id||!('customer_name' in t||'postcode' in t))return t;if(!Object.prototype.hasOwnProperty.call(cache,t.job_id))cache[t.job_id]=_r1aAssigned(store,a,t.job_id);if(cache[t.job_id])return t;var c=Object.assign({},t,{customer_name:null,postcode:null,job_label:t.public_job_id||null,customer_redacted:true});c.search_text=_r1aTaskSearchText(c);return c;});}
 
 function _r1aCreate(options){
   var store=options.store, reads=options.reads||{}, services=options.services||{};
@@ -78,7 +84,7 @@ function _r1aCreate(options){
     } else if(input.read_type==='JOB_OVERVIEW'){_r1aAuthorizeJob(store,a,input.job_id);out=reads.jobOverview(store,input.job_id);
     } else if(input.read_type==='OPERATIONAL_QUEUE'){
       if(!_r1aText(input.queue)||R1A_BOUND_QUEUES.indexOf(input.queue)<0)_r1aRefuse('R1A_QUEUE_NOT_IN_R1');
-      out=reads.operationalQueue(store,input.queue);out.tasks=_r1aFilterTasks(store,a,out.tasks||[]);out.count=out.tasks.length;
+      out=reads.operationalQueue(store,input.queue);out.tasks=_r1aTaskQuery(_r1aFilterTasks(store,a,out.tasks||[]),input.query);out.count=out.tasks.length;
     } else if(input.read_type==='RELEASE_MODE_STATUS'){if(!_r1aAdmin(a))_r1aRefuse('R1A_ROLE_DENIED');out=reads.releaseModes(store);
     } else if(input.read_type==='SYSTEM_STATUS'){if(!_r1aAdmin(a)&&a.roles.indexOf('Office')<0)_r1aRefuse('R1A_ROLE_DENIED');out=reads.systemStatus(store);
     } else if(input.read_type==='AUDIT_HISTORY'){_r1aAuthorizeJob(store,a,input.job_id);out=reads.auditHistory(store,input.job_id);
@@ -106,13 +112,13 @@ function _r1aCreate(options){
       var home=reads.officeHome(store,{as_of:input.as_of});
       var mine=_r1aFilterTasks(store,a,(home.overdue||[]).concat(home.due_today||[]).concat(home.due_soon||[]).concat(home.booking_review||[]));
       // Deduplicate by id
-      var seen={},tasks=[];mine.forEach(function(t){if(!seen[t.id]){seen[t.id]=true;tasks.push(t);}});
+      var seen={},tasks=[];mine.forEach(function(t){if(!seen[t.id]){seen[t.id]=true;tasks.push(t);}});tasks=_r1aTaskQuery(tasks,input.query);
       out={scope:'my',as_of:home.as_of||input.as_of||null,count:tasks.length,tasks:tasks};
     } else if(input.read_type==='TEAM_TASKS'){
       if(!_r1aOfficeManager(a)&&!_r1aAdmin(a))_r1aRefuse('R1A_ROLE_DENIED');
       var teamHome=reads.officeHome(store,{as_of:input.as_of});
       var team=(teamHome.overdue||[]).concat(teamHome.due_today||[]).concat(teamHome.due_soon||[]).concat(teamHome.booking_review||[]);
-      var tseen={},ttasks=[];team.forEach(function(t){if(!tseen[t.id]&&(!t.job_id||(store.get('Jobs',t.job_id)||{}).pilot_job===true)){tseen[t.id]=true;ttasks.push(t);}});
+      var tseen={},ttasks=[];team.forEach(function(t){if(!tseen[t.id]&&(!t.job_id||(store.get('Jobs',t.job_id)||{}).pilot_job===true)){tseen[t.id]=true;ttasks.push(t);}});ttasks=_r1aTaskQuery(_r1aRedactTeamTasks(store,a,ttasks),input.query);
       out={scope:'team',as_of:teamHome.as_of||input.as_of||null,count:ttasks.length,tasks:ttasks};
     } else if(input.read_type==='PLANNER_3_WEEKS'||input.read_type==='PLANNER_6_WEEKS'){
       if(!_r1aOffice(a))_r1aRefuse('R1A_ROLE_DENIED');
@@ -127,9 +133,11 @@ function _r1aCreate(options){
       var t=store.get('Tasks',input.task_id);if(!t)_r1aRefuse('R1A_TASK_NOT_FOUND');if(t.job_id)_r1aAuthorizeJob(store,a,t.job_id);else if(t.owner_id!==a.id&&!_r1aAdmin(a))_r1aRefuse('R1A_TASK_ACCESS_DENIED');
       out=reads.taskActionAvailability(store,input.task_id);
       var completeAvail=!!(out.actions&&out.actions.complete&&out.actions.complete.available),ownerOk=t.owner_id===a.id||t.backup_id===a.id||_r1aAdmin(a);
-      var attachAvail=t.status==='Complete'&&!_r1aText(t.evidence_id)&&t.template_code==='PRE02';
+      var reopenAvail=!!(out.actions&&out.actions.reopen&&out.actions.reopen.available);
+      var attachAvail=t.template_code==='PRE02'&&((t.status==='Complete'&&!_r1aText(t.evidence_id))||(['Open','Waiting','InProgress'].indexOf(t.status)>=0&&t.revision_required!==true));
       out.appsheet_commands={
         task_complete:_r1aFlag(completeAvail&&ownerOk,'TASK_COMPLETE','Tasks',!completeAvail?'COMPLETE_NOT_AVAILABLE':'TASK_OWNER_OR_BACKUP_REQUIRED'),
+        task_reopen:_r1aFlag(reopenAvail&&ownerOk,'TASK_REOPEN','Tasks',!reopenAvail?'REOPEN_NOT_AVAILABLE':'TASK_OWNER_OR_BACKUP_REQUIRED'),
         task_evidence_attach:_r1aFlag(attachAvail&&ownerOk,'TASK_EVIDENCE_ATTACH','Tasks',!attachAvail?'ATTACH_NOT_AVAILABLE':'TASK_OWNER_OR_BACKUP_REQUIRED')
       };
     }
@@ -143,7 +151,7 @@ function _r1aCreate(options){
     if(!_r1aOffice(a))_r1aRefuse('R1A_ROLE_DENIED');
     var service=services[input.command_type];
     if(typeof service!=='function')_r1aRefuse('R1A_COMMAND_UNSUPPORTED');
-    if(input.command_type==='TASK_COMPLETE'||input.command_type==='TASK_EVIDENCE_ATTACH'){
+    if(input.command_type==='TASK_COMPLETE'||input.command_type==='TASK_REOPEN'||input.command_type==='TASK_EVIDENCE_ATTACH'){
       var task=store.get('Tasks',input.task_id);if(!task)_r1aRefuse('R1A_TASK_NOT_FOUND');
       if(task.job_id)_r1aAuthorizeJob(store,a,task.job_id);else if(task.owner_id!==a.id&&!_r1aAdmin(a))_r1aRefuse('R1A_TASK_ACCESS_DENIED');
       if(task.owner_id!==a.id&&task.backup_id!==a.id&&!_r1aAdmin(a))_r1aRefuse('R1A_TASK_ACCESS_DENIED');
@@ -192,4 +200,4 @@ function _r1aDefaultReads(){
     planner:function(s,asOf,weeks){var g=(typeof globalThis!=='undefined'?globalThis:this);if(typeof g._s11BuildPlanner!=='function')_r1aRefuse('R1A_READ_UNSUPPORTED');var start=asOf||(typeof Utilities!=='undefined'&&Utilities.formatDate?Utilities.formatDate(new Date(),'Europe/London','yyyy-MM-dd'):new Date().toISOString().slice(0,10));return g._s11BuildPlanner(s,start,weeks);}
   };
 }
-if(typeof module!=='undefined')module.exports={R1A_BOUND_DEV_SHEET_ID,R1A_BOUND_READS,R1A_BOUND_COMMANDS,R1A_BOUND_QUEUES,_r1aActor,_r1aCreate,_r1aDefaultReads};
+if(typeof module!=='undefined')module.exports={R1A_BOUND_DEV_SHEET_ID,R1A_BOUND_READS,R1A_BOUND_COMMANDS,R1A_BOUND_QUEUES,_r1aActor,_r1aCreate,_r1aDefaultReads,_r1aTaskSearchText,_r1aTaskQuery};

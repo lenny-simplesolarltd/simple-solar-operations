@@ -7,16 +7,17 @@
  * NeedsReview, attempt_count, next_attempt):
  *   - the bot entry schedules ONE Outbox row per request row (idempotency_key R1U:<table>:<row id>);
  *   - runR1URetryUploadRequests (time-driven trigger) sweeps upload-bearing Ready rows that have no
- *     CommitJournal entry and no Outbox row (rows submitted before this module, or whose bot call never
- *     reached the backend), then re-runs due items through the normal request-row path;
+ *     CommitJournal entry, no Outbox row and no recorded refusal (rows submitted before this module, or whose
+ *     bot call never reached the backend), then re-runs due items through the normal request-row path;
  *   - every attempt re-reads the authoritative request row, acts as row.submitted_by (locked in AppSheet at
  *     create) and refuses if the row identity/inputs changed since scheduling (payload_hash fingerprint);
  *   - idempotency, expected_version, role/task authorization and audit come from the command path itself
  *     (CJ-R1A-/CJ-R1C- journals), so a retry can never duplicate Evidence rows or lifecycle side effects;
  *   - after R1U_MAX_ATTEMPTS the row becomes NeedsReview with R1C_UPLOAD_MISSING (explicit final failure);
  *     any non-pending error is final immediately (NeedsReview with the error code).
- * Writes: Outbox rows, and request-row result_status/result_message when those columns exist. Never
- * touches operational tables directly and never invents Evidence ids. */
+ * Writes: Outbox rows, and the request row's result_* columns through the shared command-result.js writer
+ * (same staff-facing vocabulary and messages as the bot entry; internal codes only in result_code/result).
+ * Never touches operational tables directly and never invents Evidence ids. */
 'use strict';
 var R1U_DEV_SHEET_ID = '1z7PNZtDdC4Z5eLbmTuQdqp0QpJSmuEvx3QvN3VyNTsc';
 var R1U_ACTION = 'R1RequestUploadRetry';
@@ -24,6 +25,7 @@ var R1U_MAX_ATTEMPTS = 5;
 var R1U_BACKOFF_MINUTES = [1, 2, 4, 8, 16];
 var R1U_STALLED_MS = 10 * 60 * 1000;
 var R1U_MAX_PER_TICK = 10;
+var R1U_SWEEP_SKIP_RESULTS = ['ActionRequired', 'Failed'];
 var R1U_UPLOAD_TABLES = {
   DEVTaskCompleteRequests: { command_type: 'TASK_COMPLETE', column: 'evidence_path' },
   DEVTaskEvidenceAttachRequests: { command_type: 'TASK_EVIDENCE_ATTACH', column: 'evidence_path' },
@@ -89,24 +91,25 @@ function _r1uSheetRows(ss, table) {
     var o = {}; h.forEach(function (k, i) { if (k && !Object.prototype.hasOwnProperty.call(o, k)) o[k] = r[i]; }); return o;
   }).filter(function (o) { return _r1uCell(o.id) !== ''; });
 }
-function _r1uSheetWriteResult(ss, table, rowId, status, message) {
+function _r1uResultApi() {
+  if (typeof _r1rFeedback === 'function' && typeof _r1rSheetWriteResult === 'function') return { feedback: _r1rFeedback, update: _r1rUpdate, write: _r1rSheetWriteResult };
+  if (typeof require === 'function' && typeof module !== 'undefined') { try { var m = require('./command-result.js'); return { feedback: m._r1rFeedback, update: m._r1rUpdate, write: m._r1rSheetWriteResult }; } catch (e) {} }
+  return null;
+}
+/* Staff-facing result for a retry outcome; falls back to the raw code only if the shared module is missing. */
+function _r1uFeedback(type, response, fallbackStatus) {
+  var api = _r1uResultApi();
+  if (api) { try { return api.feedback(type, response); } catch (e) {} }
+  var code = response && response.error ? String(response.error) : '';
+  return { status: fallbackStatus, message: code || fallbackStatus, code: code, result_json: '', extras: {} };
+}
+/* extra = {actorEmail, code, detail, extras}. The shared writer enforces row owner, existing columns and final-result preservation. */
+function _r1uSheetWriteResult(ss, table, rowId, status, message, extra) {
   try {
-    if (!ss || typeof ss.getId !== 'function' || ss.getId() !== R1U_DEV_SHEET_ID) return false;
-    var matches = ss.getSheets().filter(function (sh) { return sh.getName() === table; });
-    if (matches.length !== 1) return false;
-    var sh = matches[0], lastCol = sh.getLastColumn(), lastRow = sh.getLastRow();
-    if (lastCol < 1 || lastRow < 2) return false;
-    var h = sh.getRange(1, 1, 1, lastCol).getValues()[0].map(function (x) { return String(x || '').trim(); });
-    var idCol = h.indexOf('id'), sCol = h.indexOf('result_status'), mCol = h.indexOf('result_message');
-    if (idCol < 0 || sCol < 0 || mCol < 0) return false;
-    var ids = sh.getRange(2, idCol + 1, lastRow - 1, 1).getValues(), found = [];
-    ids.forEach(function (r, i) { if (_r1uCell(r[0]) === String(rowId)) found.push(i); });
-    if (found.length !== 1) return false;
-    var clean = function (v) { v = String(v === undefined || v === null ? '' : v).slice(0, 400); return /^[=+@'\-]/.test(v) ? "'" + v : v; };
-    sh.getRange(found[0] + 2, sCol + 1).setValue(clean(status));
-    sh.getRange(found[0] + 2, mCol + 1).setValue(clean(message));
-    if (typeof SpreadsheetApp !== 'undefined' && SpreadsheetApp.flush) SpreadsheetApp.flush();
-    return true;
+    var api = _r1uResultApi();
+    if (!api) return false;
+    extra = extra || {};
+    return !!api.write(ss, table, rowId, { status: status, message: message, code: extra.code || '', detail: extra.detail || '', extras: extra.extras || {}, actorEmail: extra.actorEmail }).written;
   } catch (e) { return false; }
 }
 function _r1uContext(deps) {
@@ -121,7 +124,7 @@ function _r1uContext(deps) {
   var ss = null;
   function sheet() { if (!ss) ss = _r1aOpenDevRequestSpreadsheet(); return ss; }
   ctx.readRows = typeof deps.readRows === 'function' ? deps.readRows : function (table) { return _r1uSheetRows(sheet(), table); };
-  ctx.writeResult = typeof deps.writeResult === 'function' ? deps.writeResult : function (table, rowId, status, message) { return _r1uSheetWriteResult(sheet(), table, rowId, status, message); };
+  ctx.writeResult = typeof deps.writeResult === 'function' ? deps.writeResult : function (table, rowId, status, message, extra) { return _r1uSheetWriteResult(sheet(), table, rowId, status, message, extra); };
   /* Retry attempts do a single Drive lookup (no in-call wait); the actor is the authoritative row's submitted_by. */
   ctx.command = typeof deps.command === 'function' ? deps.command : function (type, rowId, actor) {
     return _r1aCommandFromRequestRow(type, rowId, actor, { sessionEmail: '', resolveUpload: function (p) { return _r1cResolveUpload(p, { wait: false }); } });
@@ -129,7 +132,8 @@ function _r1uContext(deps) {
   return ctx;
 }
 function _r1uFind(store, key) { var rows = store.list('Outbox').filter(function (o) { return o.idempotency_key === key; }); if (rows.length > 1) _r1uRefuse('R1U_OUTBOX_AMBIGUOUS'); return rows[0] || null; }
-function _r1uSafeWrite(ctx, table, rowId, status, message) { try { return !!ctx.writeResult(table, rowId, status, message); } catch (e) { return false; } }
+function _r1uSafeWrite(ctx, table, rowId, status, message, extra) { try { return !!ctx.writeResult(table, rowId, status, message, extra || {}); } catch (e) { return false; } }
+function _r1uExtra(actor, fb) { return { actorEmail: actor, code: fb.code || '', detail: fb.result_json || '', extras: fb.extras || {} }; }
 function _r1uOutboxRow(table, row, type, now, attemptCount, status, nextAttempt, summary) {
   var rowId = _r1uCell(row.id);
   return {
@@ -164,7 +168,8 @@ function _r1uScheduleRetry(commandType, requestRowId, actorEmail, err, deps) {
     var lookups = err && err.attempts ? Number(err.attempts) : 1;
     var summary = 'R1C_UPLOAD_PENDING after bot attempt 1 of ' + R1U_MAX_ATTEMPTS + ' (' + lookups + ' Drive lookup(s)); next attempt ' + next;
     ctx.store.insert('Outbox', _r1uOutboxRow(table, row, type, now, 1, 'RetryDue', next, summary));
-    var written = _r1uSafeWrite(ctx, table, rowId, 'UploadPending', 'Upload not yet visible in Drive; backend retry 2 of ' + R1U_MAX_ATTEMPTS + ' scheduled for ' + next + '. No resubmission needed.');
+    var pendingFb = _r1uFeedback(type, { ok: false, error: 'R1C_UPLOAD_PENDING', retry: { scheduled: true, attempt: 1, next_attempt: next } }, 'UploadPending');
+    var written = _r1uSafeWrite(ctx, table, rowId, 'UploadPending', 'Your file is still uploading. The system will try again automatically (retry 2 of ' + R1U_MAX_ATTEMPTS + '), so you do not need to resubmit.', _r1uExtra(actor, pendingFb));
     return { scheduled: true, outbox_id: 'OUT-R1U-' + rowId, status: 'RetryDue', attempt: 1, max_attempts: R1U_MAX_ATTEMPTS, next_attempt: next, result_written: written };
   });
 }
@@ -179,6 +184,9 @@ function _r1uSweep(ctx, now) {
     if (!rows) return;
     rows.forEach(function (row) {
       if (_r1uEligibility(table, row)) return;
+      /* The bot already reached the backend and recorded a refusal: staff were told to submit a new request, so a
+       * later deploy must never silently re-run that refused row. */
+      if (R1U_SWEEP_SKIP_RESULTS.indexOf(_r1uCell(row.result_status)) >= 0) return;
       var rowId = _r1uCell(row.id), key = _r1uKey(table, rowId);
       if (keys[key] || journaled[_r1uCell(row.command_id)]) return;
       ctx.store.insert('Outbox', _r1uOutboxRow(table, row, _r1uRowType(table, row), now, 0, 'Pending', now.toISOString(), 'Swept: Ready upload request without journal entry'));
@@ -197,37 +205,44 @@ function _r1uDue(ctx, now) {
     return o.status === 'Processing' && !!o.next_attempt && due; /* stalled claim */
   }).sort(function (a, b) { return String(a.next_attempt || a.created_at).localeCompare(String(b.next_attempt || b.created_at)); }).slice(0, R1U_MAX_PER_TICK);
 }
-function _r1uFinish(ctx, item, table, rowId, status, summary, nextAttempt, resultStatus, resultMessage) {
+function _r1uFinish(ctx, item, table, rowId, status, summary, nextAttempt, resultStatus, resultMessage, extra) {
   ctx.store.update('Outbox', item.id, { status: status, next_attempt: nextAttempt || null, response_summary: String(summary).slice(0, 400) });
-  var written = _r1uSafeWrite(ctx, table, rowId, resultStatus, resultMessage);
+  var written = _r1uSafeWrite(ctx, table, rowId, resultStatus, resultMessage, extra);
   return { outbox_id: item.id, table: table, row_id: rowId, outcome: status, attempt: item.attempt_count, next_attempt: nextAttempt || null, summary: summary, result_written: written };
+}
+/* Final failure: Outbox keeps the diagnostic code; the request row gets the staff-facing message. */
+function _r1uFail(ctx, item, table, rowId, type, actor, code, summary) {
+  var fb = _r1uFeedback(type, { ok: false, error: code }, 'Failed');
+  return _r1uFinish(ctx, item, table, rowId, 'NeedsReview', summary || code, null, fb.status, fb.message, _r1uExtra(actor, fb));
 }
 function _r1uProcess(ctx, item) {
   var t = _r1uParseTarget(item.target), now = ctx.now();
   if (!t) return _r1uFinish(ctx, item, '', '', 'NeedsReview', 'R1U_TARGET_INVALID', null, 'Failed', 'R1U_TARGET_INVALID');
   var rows = ctx.readRows(t.table) || [], match = rows.filter(function (r) { return _r1uCell(r.id) === t.row_id; });
   if (match.length !== 1) return _r1uFinish(ctx, item, t.table, t.row_id, 'NeedsReview', 'R1U_REQUEST_NOT_FOUND', null, 'Failed', 'R1U_REQUEST_NOT_FOUND');
-  var row = match[0], reason = _r1uEligibility(t.table, row);
-  if (reason) return _r1uFinish(ctx, item, t.table, t.row_id, 'NeedsReview', reason, null, 'Failed', reason);
-  if (_r1uFingerprint(t.table, row) !== item.payload_hash) return _r1uFinish(ctx, item, t.table, t.row_id, 'NeedsReview', 'R1U_REQUEST_CHANGED', null, 'Failed', 'R1U_REQUEST_CHANGED: request identity or inputs changed after scheduling');
-  var type = _r1uRowType(t.table, row), actor = _r1uEmail(row.submitted_by), attempt = item.attempt_count, upload = _r1uCell(row[R1U_UPLOAD_TABLES[t.table].column]);
+  var row = match[0], reason = _r1uEligibility(t.table, row), rowActor = _r1uEmail(row.submitted_by), rowType = _r1uRowType(t.table, row);
+  if (reason) return _r1uFail(ctx, item, t.table, t.row_id, rowType, rowActor, reason);
+  if (_r1uFingerprint(t.table, row) !== item.payload_hash) return _r1uFail(ctx, item, t.table, t.row_id, rowType, rowActor, 'R1U_REQUEST_CHANGED', 'R1U_REQUEST_CHANGED: request identity or inputs changed after scheduling');
+  var type = rowType, actor = rowActor, attempt = item.attempt_count, upload = _r1uCell(row[R1U_UPLOAD_TABLES[t.table].column]);
   var result = null, error = null;
   try { result = ctx.command(type, t.row_id, actor); } catch (e) { error = e; }
   if (!error && result && result.ok === true) {
     var inner = result.result || {}, replay = inner.replay === true || inner.status === 'Replayed';
     var okSummary = 'Succeeded on attempt ' + attempt + (replay ? ' (replay of earlier commit)' : '') + (inner.status ? ': ' + inner.status : '');
-    return _r1uFinish(ctx, item, t.table, t.row_id, 'Succeeded', okSummary, null, 'Succeeded', okSummary);
+    var okFb = _r1uFeedback(type, result, 'Succeeded');
+    return _r1uFinish(ctx, item, t.table, t.row_id, 'Succeeded', okSummary, null, okFb.status, okFb.message === 'Succeeded' ? okSummary : okFb.message, _r1uExtra(actor, okFb));
   }
   var code = error ? (error.code || error.message || 'R1U_COMMAND_FAILED') : (result && result.error ? String(result.error) : 'R1U_UNEXPECTED_RESULT');
   if (code === 'R1C_UPLOAD_PENDING') {
     if (attempt >= R1U_MAX_ATTEMPTS) {
       var missing = 'R1C_UPLOAD_MISSING: upload "' + upload + '" never became visible in Drive after ' + attempt + ' attempts';
-      return _r1uFinish(ctx, item, t.table, t.row_id, 'NeedsReview', missing, null, 'Failed', missing + '. Re-upload through a new request.');
+      return _r1uFail(ctx, item, t.table, t.row_id, type, actor, 'R1C_UPLOAD_MISSING', missing);
     }
     var next = new Date(now.getTime() + _r1uBackoffMs(attempt)).toISOString();
-    return _r1uFinish(ctx, item, t.table, t.row_id, 'RetryDue', 'R1C_UPLOAD_PENDING after attempt ' + attempt + ' of ' + R1U_MAX_ATTEMPTS + '; next attempt ' + next, next, 'UploadPending', 'Upload not yet visible in Drive; backend retry ' + (attempt + 1) + ' of ' + R1U_MAX_ATTEMPTS + ' scheduled for ' + next + '. No resubmission needed.');
+    var pendingFb = _r1uFeedback(type, { ok: false, error: 'R1C_UPLOAD_PENDING', retry: { scheduled: true, attempt: attempt, next_attempt: next } }, 'UploadPending');
+    return _r1uFinish(ctx, item, t.table, t.row_id, 'RetryDue', 'R1C_UPLOAD_PENDING after attempt ' + attempt + ' of ' + R1U_MAX_ATTEMPTS + '; next attempt ' + next, next, 'UploadPending', 'Your file is still uploading. The system will try again automatically (retry ' + (attempt + 1) + ' of ' + R1U_MAX_ATTEMPTS + '), so you do not need to resubmit.', _r1uExtra(actor, pendingFb));
   }
-  return _r1uFinish(ctx, item, t.table, t.row_id, 'NeedsReview', code + ' on attempt ' + attempt + ' (final)', null, 'Failed', code);
+  return _r1uFail(ctx, item, t.table, t.row_id, type, actor, code, code + ' on attempt ' + attempt + ' (final)');
 }
 /* One trigger run: sweep, claim due items under the lock, then execute each outside the lock (the command path takes its own lock). */
 function _r1uTick(deps) {

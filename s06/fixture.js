@@ -40,10 +40,10 @@ function installBaseFixture(store) {
     store.insert('PersonRoles', { id: 'PROLE-tanya-office', person_id: 'PERSON-tanya', role: 'Office', active: true, created_at: '2026-01-01T00:00:00.000Z', created_by: 'fixture', updated_at: '2026-01-01T00:00:00.000Z', updated_by: 'fixture', version: 1, source_system: 'fixture', commit_id: 'fixture' });
   }
   if (!store.get('People', 'PERSON-ben')) {
-    store.insert('People', { id: 'PERSON-ben', email: 'ben@test.example.invalid', display_name: 'Ben', role: 'Admin', active: true, calendar_id: null, notification_email: null, capacity_per_day: null, available_from: null, available_to: null, backup_person_id: null, company_id: null, created_at: '2026-01-01T00:00:00.000Z', created_by: 'fixture', updated_at: '2026-01-01T00:00:00.000Z', updated_by: 'fixture', version: 1, source_system: 'fixture', source_record_id: null, commit_id: 'fixture' });
+    store.insert('People', { id: 'PERSON-ben', email: 'ben@test.example.invalid', display_name: 'Ben', role: 'Director', active: true, calendar_id: null, notification_email: null, capacity_per_day: null, available_from: null, available_to: null, backup_person_id: null, company_id: null, created_at: '2026-01-01T00:00:00.000Z', created_by: 'fixture', updated_at: '2026-01-01T00:00:00.000Z', updated_by: 'fixture', version: 1, source_system: 'fixture', source_record_id: null, commit_id: 'fixture' });
   }
-  if (!store.get('PersonRoles', 'PROLE-ben-admin')) {
-    store.insert('PersonRoles', { id: 'PROLE-ben-admin', person_id: 'PERSON-ben', role: 'Admin', active: true, created_at: '2026-01-01T00:00:00.000Z', created_by: 'fixture', updated_at: '2026-01-01T00:00:00.000Z', updated_by: 'fixture', version: 1, source_system: 'fixture', commit_id: 'fixture' });
+  if (!store.get('PersonRoles', 'PROLE-ben-director')) {
+    store.insert('PersonRoles', { id: 'PROLE-ben-director', person_id: 'PERSON-ben', role: 'Director', active: true, created_at: '2026-01-01T00:00:00.000Z', created_by: 'fixture', updated_at: '2026-01-01T00:00:00.000Z', updated_by: 'fixture', version: 1, source_system: 'fixture', commit_id: 'fixture' });
   }
   if (!store.get('People', 'PERSON-dan')) {
     store.insert('People', { id: 'PERSON-dan', email: 'dan@test.example.invalid', display_name: 'Dan', role: 'Director', active: true, calendar_id: null, notification_email: null, capacity_per_day: null, available_from: null, available_to: null, backup_person_id: null, company_id: null, created_at: '2026-01-01T00:00:00.000Z', created_by: 'fixture', updated_at: '2026-01-01T00:00:00.000Z', updated_by: 'fixture', version: 1, source_system: 'fixture', source_record_id: null, commit_id: 'fixture' });
@@ -134,6 +134,38 @@ function satisfyBookingTasks(store, jobId) {
     store.update('Tasks', t.id, { status:'Complete',completed_at:'2026-09-01T10:00:00.000Z',completed_by:t.owner_id,
       completion_note:'Fixture evidence recorded',evidence_id:'EVID-'+t.template_code,version:Number(t.version||0)+1 });
   });
+  const depositId = 'IS-' + jobId + '-deposit';
+  if (!store.get('InvoiceStages', depositId)) {
+    store.insert('InvoiceStages', {
+      id: depositId, job_id: jobId, stage: 'deposit', amount_net_pence: 100000, vat_pence: 20000, gross_pence: 120000,
+      due_date: null, status: 'Sent', xero_invoice_id: null, invoice_number: 'INV-' + jobId, xero_contact_id: null,
+      reference: null, request_id: null, last_synced_at: null, source_status: null,
+      sent_at: '2026-09-01T10:00:00.000Z', cancelled_at: null,
+      created_at: '2026-09-01T09:00:00.000Z', created_by: 'S06-fixture', updated_at: '2026-09-01T10:00:00.000Z',
+      updated_by: 'S06-fixture', version: 1, source_system: 'S06-fixture', commit_id: depositId
+    });
+  } else {
+    store.update('InvoiceStages', depositId, { invoice_number: 'INV-' + jobId, sent_at: '2026-09-01T10:00:00.000Z', status: 'Sent' });
+  }
+  satisfyBankConfirmation(store, jobId);
+}
+
+/* PRE03 fixture evidence: one Confirmed ManualBankChecks row reconciled to the Jobs deposit summary fields and the
+ * deposit InvoiceStage (status Confirmed, same reference). No-op when the job has no bank confirmation recorded. */
+function satisfyBankConfirmation(store, jobId) {
+  const job = store.get('Jobs', jobId);
+  if (!job || !job.deposit_bank_confirmed_at || !job.deposit_bank_confirmed_by || !job.deposit_bank_reference) return;
+  const stage = store.get('InvoiceStages', 'IS-' + jobId + '-deposit');
+  if (!stage) return;
+  store.update('InvoiceStages', stage.id, { status: 'Confirmed', reference: job.deposit_bank_reference });
+  const id = 'MBC-' + jobId + '-deposit';
+  if (!store.get('ManualBankChecks', id)) {
+    store.insert('ManualBankChecks', {
+      id, job_id: jobId, stage: 'deposit', checked_at: job.deposit_bank_confirmed_at, checked_by: job.deposit_bank_confirmed_by,
+      amount_pence: stage.gross_pence, outcome: 'Confirmed', evidence_reference: job.deposit_bank_reference,
+      created_at: job.deposit_bank_confirmed_at, commit_id: id
+    });
+  }
 }
 
 /* --- Test runners --- */

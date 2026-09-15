@@ -12,9 +12,91 @@ function taskSatisfaction(store, jobId, code) {
   const tasks = store.list('Tasks').filter(t => t.job_id === jobId && t.template_code === code);
   if (tasks.length !== 1) return { pass: false, detail: tasks.length ? 'Expected one task; found ' + tasks.length : 'Required task missing' };
   const task = tasks[0];
+  if (code === 'PRE01') {
+    if (task.status !== 'Complete') {
+      return { pass: false, detail: 'PRE01 outstanding (' + (task.status || 'missing status') + ')', task_id: task.id };
+    }
+    const stages = store.list('InvoiceStages').filter(s => s.job_id === jobId && String(s.stage || '').toLowerCase() === 'deposit');
+    if (stages.length !== 1) return { pass: false, detail: 'PRE01 deposit invoice stage missing', task_id: task.id };
+    const stage = stages[0];
+    const number = stage.invoice_number && String(stage.invoice_number).trim();
+    const xero = stage.xero_invoice_id && String(stage.xero_invoice_id).trim();
+    const idOk = !!number || (!!xero && xero !== 'NOT_CONFIGURED');
+    const sentOk = !!stage.sent_at;
+    return {
+      pass: idOk && sentOk,
+      detail: idOk && sentOk ? 'PRE01 satisfied (Complete with invoice sent)' : 'PRE01 Complete but invoice ID/sent status missing',
+      task_id: task.id
+    };
+  }
+  if (code === 'PRE02') {
+    if (task.status !== 'Complete') {
+      return { pass: false, detail: 'PRE02 outstanding (' + (task.status || 'missing status') + ')', task_id: task.id };
+    }
+    const job = store.get('Jobs', jobId);
+    const refOk = !!(job && job.contract_id && String(job.contract_id).trim());
+    const signedOk = !!(job && job.contract_status === 'Signed' && job.contract_evidence_id && job.contract_signed_at);
+    const pass = refOk && signedOk;
+    return {
+      pass,
+      detail: pass ? 'PRE02 satisfied (Complete with signed contract evidence)' : 'PRE02 Complete but signed contract reference/evidence missing',
+      task_id: task.id
+    };
+  }
+  if (code === 'PRE03') {
+    if (task.status !== 'Complete') {
+      return { pass: false, detail: 'PRE03 outstanding (' + (task.status || 'missing status') + ')', task_id: task.id };
+    }
+    const bank = bankConfirmationEvidence(store, jobId);
+    return {
+      pass: bank.pass,
+      detail: bank.pass ? 'PRE03 satisfied (manual bank check reconciled)' : 'PRE03 Complete but valid manual bank confirmation missing: ' + bank.detail,
+      task_id: task.id
+    };
+  }
+  if (code === 'PRE04') {
+    if (task.status !== 'Complete') {
+      return { pass: false, detail: 'PRE04 outstanding (' + (task.status || 'missing status') + ')', task_id: task.id };
+    }
+    const job = store.get('Jobs', jobId);
+    const verified = !!(job && job.customer_details_verified_at && job.customer_details_verified_by);
+    const matched = !!(job && job.sold_booking_match_status === 'Match');
+    const valued = !!(job && typeof job.original_gross_pence === 'number' && job.original_gross_pence > 0 && job.valuation_basis && String(job.valuation_basis).trim());
+    const pass = verified && matched && valued;
+    return {
+      pass,
+      detail: pass ? 'PRE04 satisfied (Complete with customer/value verification)' : 'PRE04 Complete but customer/value verification missing',
+      task_id: task.id
+    };
+  }
   const pass = SATISFIED_TASK_STATUSES.includes(task.status) &&
     (task.status !== 'NotRequired' || !!(task.completion_note || task.evidence_id));
   return { pass, detail: pass ? code + ' satisfied (' + task.status + ')' : code + ' outstanding (' + (task.status || 'missing status') + ')', task_id: task.id };
+}
+
+function bankConfirmationEvidence(store, jobId) {
+  function sameInstant(a, b) {
+    if (!a || !b) return false;
+    const ams = new Date(a).getTime(), bms = new Date(b).getTime();
+    return Number.isFinite(ams) && Number.isFinite(bms) && ams === bms;
+  }
+  const job = store.get('Jobs', jobId);
+  if (!job || !job.deposit_bank_confirmed_at || !job.deposit_bank_confirmed_by || !job.deposit_bank_reference) {
+    return { pass: false, detail: 'Job bank confirmation actor/date/reference missing' };
+  }
+  const stages = store.list('InvoiceStages').filter(s => s.job_id === jobId && String(s.stage || '').toLowerCase() === 'deposit');
+  if (stages.length !== 1 || !(typeof stages[0].gross_pence === 'number' && stages[0].gross_pence > 0)) {
+    return { pass: false, detail: 'Canonical deposit InvoiceStage missing or invalid' };
+  }
+  const checks = store.list('ManualBankChecks').filter(c =>
+    c.job_id === jobId && String(c.stage || '').toLowerCase() === 'deposit' && c.outcome === 'Confirmed' &&
+    sameInstant(c.checked_at, job.deposit_bank_confirmed_at) && c.checked_by === job.deposit_bank_confirmed_by &&
+    Number(c.amount_pence) === Number(stages[0].gross_pence) && c.evidence_reference === job.deposit_bank_reference);
+  if (checks.length !== 1) return { pass: false, detail: 'Exactly one reconciled ManualBankChecks confirmation required' };
+  if (stages[0].status !== 'Confirmed' || stages[0].reference !== job.deposit_bank_reference) {
+    return { pass: false, detail: 'Deposit InvoiceStage is not confirmed to the same bank reference' };
+  }
+  return { pass: true, detail: 'Manual bank check matches InvoiceStage', stage_id: stages[0].id, bank_check_id: checks[0].id };
 }
 
 function evaluateReadyToBook(job, store) {
@@ -24,8 +106,8 @@ function evaluateReadyToBook(job, store) {
 
   check('sold_linked', !!job.sold_submission_id, job.sold_submission_id ? 'Sold intake linked' : 'Sold intake missing');
   check('finance_route_valid', ['Standard', 'Phoenix', 'OtherReview'].includes(job.finance_route), 'Finance route: ' + (job.finance_route || 'missing'));
-  check('signed_contract_evidence', job.contract_status === 'Signed' && !!job.contract_evidence_id,
-    job.contract_status === 'Signed' && job.contract_evidence_id ? 'Signed contract evidence recorded' : 'Signed contract evidence missing');
+  check('signed_contract_evidence', job.contract_status === 'Signed' && !!job.contract_evidence_id && !!job.contract_signed_at && !!(job.contract_id && String(job.contract_id).trim()),
+    job.contract_status === 'Signed' && job.contract_evidence_id && job.contract_signed_at && job.contract_id ? 'Signed contract evidence recorded' : 'Signed contract evidence missing');
 
   if (job.finance_route === 'Standard') {
     const pre01 = taskSatisfaction(store, job.id, 'PRE01');
@@ -38,14 +120,15 @@ function evaluateReadyToBook(job, store) {
   const pre04 = taskSatisfaction(store, job.id, 'PRE04');
   check('PRE04_satisfied', pre04.pass, pre04.detail);
   check('customer_value_verified', !!job.customer_details_verified_at && !!job.customer_details_verified_by &&
-    typeof job.original_gross_pence === 'number' && job.original_gross_pence > 0,
-    'Customer verification actor/time and sold value must be recorded');
+    typeof job.original_gross_pence === 'number' && job.original_gross_pence > 0 &&
+    job.sold_booking_match_status === 'Match' && !!(job.valuation_basis && String(job.valuation_basis).trim()),
+    'Customer verification actor/time, Match status, valuation basis and sold value must be recorded');
 
   if (job.finance_route === 'Standard') {
     const pre03 = taskSatisfaction(store, job.id, 'PRE03');
     check('PRE03_satisfied', pre03.pass, pre03.detail);
-    check('deposit_confirmation_evidence', !!job.deposit_bank_confirmed_at && !!job.deposit_bank_confirmed_by && !!job.deposit_bank_reference,
-      'Bank confirmation actor/time/reference must be recorded');
+    const depositEvidence = bankConfirmationEvidence(store, job.id);
+    check('deposit_confirmation_evidence', depositEvidence.pass, depositEvidence.detail);
   } else {
     const pre05 = taskSatisfaction(store, job.id, 'PRE05');
     check('PRE05_satisfied', pre05.pass, pre05.detail);
@@ -104,7 +187,7 @@ function evaluateBookingGates(job, store) {
   }
 
   // 5. A booking cannot weaken the signed-evidence prebooking gate.
-  const contractOk = job.contract_status === 'Signed' && !!job.contract_evidence_id;
+  const contractOk = job.contract_status === 'Signed' && !!job.contract_evidence_id && !!job.contract_signed_at && !!(job.contract_id && String(job.contract_id).trim());
   check('contract_status', contractOk,
     'Contract: ' + (job.contract_status || 'missing') + (contractOk ? ' with evidence' : ' (signed evidence required)'),
     true);
@@ -116,9 +199,10 @@ function evaluateBookingGates(job, store) {
     true);
 
   // 7. Deposit is applicable only to Standard; finance routes use PRE05.
-  const depositOk = job.finance_route !== 'Standard' || (!!job.deposit_bank_confirmed_at && !!job.deposit_bank_confirmed_by && !!job.deposit_bank_reference);
+  const depositProof = job.finance_route === 'Standard' ? bankConfirmationEvidence(store, job.id) : { pass: true, detail: 'Not applicable' };
+  const depositOk = depositProof.pass;
   check('deposit_confirmed', depositOk,
-    depositOk ? 'Deposit confirmed at ' + job.deposit_bank_confirmed_at : 'Deposit not yet confirmed',
+    depositOk ? 'Deposit confirmed at ' + job.deposit_bank_confirmed_at : depositProof.detail,
     true);
 
   // 8. Gross amount present
@@ -225,7 +309,7 @@ function createTasksForJob(job, gateResult, store, options = {}) {
   const now = options.now || new Date().toISOString();
   const holidays = options.holidays || [];
   const tanyaId = resolvePersonByRole(store, 'Office') || 'PERSON-tanya';
-  const adminId = resolvePersonByRole(store, 'Admin') || 'PERSON-ben';
+  const bankConfirmationOwnerId = job.finance_route === 'Standard' ? resolveBankConfirmationOwner(store) : null;
   const created = [];
   const skipped = [];
   const errors = [];
@@ -305,8 +389,7 @@ function createTasksForJob(job, gateResult, store, options = {}) {
   // PRE03: Confirm bank deposit — if not yet confirmed
   if (job.finance_route === 'Standard') {
     const tpl = getTemplate('PRE03');
-    const danId = store.get('People', 'PERSON-dan') && store.get('People', 'PERSON-dan').active === true ? 'PERSON-dan' : null;
-    if (tpl) createTask(tpl, adminId, nextStaffedDay(now, holidays), 2, danId);
+    if (tpl) createTask(tpl, bankConfirmationOwnerId, nextStaffedDay(now, holidays), 2, resolveBankConfirmationBackup(store));
   }
 
   // PRE04: Check customer details and sold/presale amount — Sold creates it; BOOKING_GATES backfills if missing
@@ -400,13 +483,53 @@ function resolvePersonById(store, id) {
   return person && person.active === true ? person.id : null;
 }
 
+function personHasActiveRole(store, personId, role) {
+  const person = store.get('People', personId);
+  if (!person || person.active !== true) return false;
+  if (person.role === role) return true;
+  return store.list('PersonRoles').some(r => r.person_id === personId && r.role === role && r.active === true);
+}
+
+/* PRE03 "Confirm bank deposit" is a named personal responsibility, defined once here and resolved by canonical
+ * People.id. It is never resolved from a role list: resolvePersonByRole returns whichever active row comes first in
+ * sheet order, so several Admins made the owner nondeterministic. The owner must be an active person with an active
+ * role that can own a finance control through the R1 office adapter; otherwise creation fails visibly instead of
+ * choosing somebody else. Existing tasks are never reassigned here (instance_key idempotency skips them). */
+const S06_PRE03_RESPONSIBILITY = Object.freeze({
+  template_code: 'PRE03',
+  owner_person_id: 'PERSON-ben',
+  backup_person_id: 'PERSON-dan',
+  eligible_roles: Object.freeze(['Admin', 'Manager', 'Director'])
+});
+
+function personHasAnyActiveRole(store, personId, roles) {
+  return roles.some(role => personHasActiveRole(store, personId, role));
+}
+
+function resolveBankConfirmationOwner(store) {
+  const r = S06_PRE03_RESPONSIBILITY;
+  const id = resolvePersonById(store, r.owner_person_id);
+  if (!id) throw new Error('S06_CONFIG: active ' + r.owner_person_id + ' required for PRE03');
+  if (!personHasAnyActiveRole(store, id, r.eligible_roles)) throw new Error('S06_CONFIG: ' + r.owner_person_id + ' must have an active Admin, Manager or Director role for PRE03');
+  return id;
+}
+
+/* Dan is the optional PRE03 backup; missing, inactive or without an eligible role yields null, never another person. */
+function resolveBankConfirmationBackup(store) {
+  const r = S06_PRE03_RESPONSIBILITY;
+  const id = resolvePersonById(store, r.backup_person_id);
+  if (!id) return null;
+  return personHasAnyActiveRole(store, id, r.eligible_roles) ? id : null;
+}
+
 /* Prebooking tasks after Sold — before Booking form. Idempotent via instance_key. */
 function createPrebookingTasksForSold(job, store, options = {}) {
   const now = options.now || new Date().toISOString();
   const holidays = options.holidays || [];
   const tanyaId = resolvePersonByRole(store, 'Office') || 'PERSON-tanya';
   const adminId = resolvePersonByRole(store, 'Admin') || 'PERSON-ben';
-  const directorBackupId = resolvePersonById(store, 'PERSON-dan');
+  const bankConfirmationOwnerId = job.finance_route === 'Standard' ? resolveBankConfirmationOwner(store) : null;
+  const directorBackupId = resolveBankConfirmationBackup(store);
   const created = [];
   const skipped = [];
 
@@ -471,7 +594,7 @@ function createPrebookingTasksForSold(job, store, options = {}) {
   if (pre02Template) createTask(pre02Template, tanyaId, null, now, 1);
   if (job.finance_route === 'Standard') {
     const tpl = getTemplate('PRE03');
-    if (tpl) createTask(tpl, adminId, directorBackupId, nextStaffedDay(now, holidays), 2);
+    if (tpl) createTask(tpl, bankConfirmationOwnerId, directorBackupId, nextStaffedDay(now, holidays), 2);
   }
   {
     const tpl = getTemplate('PRE04');
@@ -582,7 +705,7 @@ function processBookingGates(jobId, store, options = {}) {
 
 module.exports = {
   DEV_SHEET_ID,
-  evaluateReadyToBook, evaluateBookingGates, taskSatisfaction, createTasksForJob, createPrebookingTasksForSold, processBookingGates,
+  evaluateReadyToBook, evaluateBookingGates, taskSatisfaction, bankConfirmationEvidence, createTasksForJob, createPrebookingTasksForSold, processBookingGates,
   ensurePre04Template,
-  isStaffedDay, nextStaffedDay, fridayBefore, resolvePersonByRole
+  isStaffedDay, nextStaffedDay, fridayBefore, resolvePersonByRole, resolveBankConfirmationOwner, resolveBankConfirmationBackup, S06_PRE03_RESPONSIBILITY
 };

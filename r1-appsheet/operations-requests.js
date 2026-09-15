@@ -7,6 +7,8 @@ var R1C_REQUEST_HEADERS = {
   DEVGoodsInRequestLines: ['id','request_id','order_line_id','quantity_good','quantity_damaged','quantity_short','evidence_id'],
   DEVStockCommandRequests: ['id','command_id','command_type','product_id','expected_version','expected_balance','quantity','reason','evidence_id','submitted_by','status']
 };
+/* Optional result columns written by command-result.js. Provisioning adds them; reads never require them. */
+var R1C_RESULT_COLUMNS = ['result_status','result_message','result_code','result','result_at'];
 function _r1cContracts() { return typeof R1C_COMMANDS !== 'undefined' ? R1C_COMMANDS : require('./operations-contract.js').R1C_COMMANDS; }
 function _r1cRequestTable(type) { if(!_r1cContracts()[type])return null;return type==='GOODS_IN_RECEIVE'?'DEVGoodsInRequests':type==='STOCK_QUARANTINE'?'DEVStockCommandRequests':'DEVInstallerCommandRequests'; }
 function _r1cRequestError(code){var e=new Error(code);e.code=code;throw e;}
@@ -101,11 +103,11 @@ function _r1cReadCloud(request,actorEmail){
 }
 function _r1cProvision(ss,apply){
   if(ss.getId()!==R1A_REQUEST_DEV_SHEET)_r1cRequestError('R1C_DEV_ONLY');
-  var plans=Object.keys(R1C_REQUEST_HEADERS).map(function(name){var matches=ss.getSheets().filter(function(sh){return sh.getName()===name;});if(matches.length>1)_r1cRequestError('R1C_REQUEST_SCHEMA');var sh=matches[0],h=sh&&sh.getLastColumn()?sh.getRange(1,1,1,sh.getLastColumn()).getValues()[0]:[];if(h.some(function(k,i){return !k||h.indexOf(k)!==i;}))_r1cRequestError('R1C_REQUEST_SCHEMA');return {table:name,create:!sh,missing_columns:R1C_REQUEST_HEADERS[name].filter(function(k){return h.indexOf(k)<0;}),existing_columns:h};});
+  var plans=Object.keys(R1C_REQUEST_HEADERS).map(function(name){var matches=ss.getSheets().filter(function(sh){return sh.getName()===name;});if(matches.length>1)_r1cRequestError('R1C_REQUEST_SCHEMA');var sh=matches[0],h=sh&&sh.getLastColumn()?sh.getRange(1,1,1,sh.getLastColumn()).getValues()[0]:[];if(h.some(function(k,i){return !k||h.indexOf(k)!==i;}))_r1cRequestError('R1C_REQUEST_SCHEMA');return {table:name,create:!sh,missing_columns:R1C_REQUEST_HEADERS[name].concat(name==='DEVGoodsInRequestLines'?[]:R1C_RESULT_COLUMNS).filter(function(k){return h.indexOf(k)<0;}),existing_columns:h};});
   if(apply)plans.forEach(function(p){var sh=ss.getSheets().filter(function(x){return x.getName()===p.table;})[0]||ss.insertSheet(p.table);if(p.missing_columns.length){var start=p.existing_columns.length+1,needed=start+p.missing_columns.length-1;if(sh.getMaxColumns()<needed)sh.insertColumnsAfter(sh.getMaxColumns(),needed-sh.getMaxColumns());sh.getRange(1,start,1,p.missing_columns.length).setValues([p.missing_columns]);}var headers=p.existing_columns.concat(p.missing_columns);headers.forEach(function(k,i){if(['expected_version','expected_submission_version','line_count','quantity','expected_balance','quantity_good','quantity_damaged','quantity_short','value_number','value_boolean','actual_end','value_date'].indexOf(k)<0)sh.getRange(2,i+1,sh.getMaxRows()-1,1).setNumberFormat('@');});});
   return {ok:true,applied:!!apply,tables:plans};
 }
 function _r1cProvisionCloud(apply){_r1cConfigGuard();var options=_r1aCloudOptions(),a=_r1aActor(options.store,options.actorEmail());if(a.roles.indexOf('Admin')<0&&a.roles.indexOf('Manager')<0)_r1cRequestError('R1C_ROLE_DENIED');return options.store.withLock(function(){return _r1cProvision(_r1aOpenDevRequestSpreadsheet(),apply);});}
 function runR1CRequestProvisionCheck(){return _r1cProvisionCloud(false);}
 function runR1CProvisionRequestTables(){return _r1cProvisionCloud(true);}
-if(typeof module!=='undefined')module.exports={R1C_REQUEST_HEADERS:R1C_REQUEST_HEADERS,R1C_UPLOAD_WAIT_MS:R1C_UPLOAD_WAIT_MS,_r1cResolveUpload:_r1cResolveUpload,_r1cResolveUploadOnce:_r1cResolveUploadOnce,_r1cRequestTable:_r1cRequestTable,_r1cBuildRequest:_r1cBuildRequest,_r1cCommandFromRow:_r1cCommandFromRow,_r1cProvision:_r1cProvision};
+if(typeof module!=='undefined')module.exports={R1C_REQUEST_HEADERS:R1C_REQUEST_HEADERS,R1C_RESULT_COLUMNS:R1C_RESULT_COLUMNS,R1C_UPLOAD_WAIT_MS:R1C_UPLOAD_WAIT_MS,_r1cResolveUpload:_r1cResolveUpload,_r1cResolveUploadOnce:_r1cResolveUploadOnce,_r1cRequestTable:_r1cRequestTable,_r1cBuildRequest:_r1cBuildRequest,_r1cCommandFromRow:_r1cCommandFromRow,_r1cProvision:_r1cProvision};

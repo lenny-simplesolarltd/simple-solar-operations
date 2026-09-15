@@ -5,7 +5,7 @@ function _r1aCloudOptions(){
   return {store:store,config:{environment:'DEV',sheetId:R1A_BOUND_DEV_SHEET_ID},actorEmail:function(){return Session.getActiveUser().getEmail();},effectiveUserEmail:function(){return Session.getEffectiveUser().getEmail();},reads:_r1aDefaultReads(),services:_r1sServices()};
 }
 function appSheetR1Read(requestJson,actorEmail){try{var request=JSON.parse(requestJson);return JSON.stringify(R1C_READS.indexOf(request.read_type)>=0?_r1cReadCloud(request,actorEmail):_r1aCreate(_r1aCloudOptions()).read(request));}catch(e){return JSON.stringify({ok:false,error:e.code||e.message||'R1A_REFUSED'});}}
-function appSheetR1Command(requestJson){try{return JSON.stringify(_r1aCreate(_r1aCloudOptions()).command(JSON.parse(requestJson)));}catch(e){return JSON.stringify({ok:false,error:e.code||e.message||'R1A_REFUSED'});}}
+function appSheetR1Command(requestJson){var type=null,fb=function(x){return typeof _r1rAttachFeedback==='function'?_r1rAttachFeedback(type,x):x;};try{var request=JSON.parse(requestJson);type=request&&typeof request.command_type==='string'?request.command_type:null;return JSON.stringify(fb(_r1aCreate(_r1aCloudOptions()).command(request)));}catch(e){return JSON.stringify(fb({ok:false,error:e.code||e.message||'R1A_REFUSED'}));}}
 
 /* Namespaced DEV synthetic fixtures for AppSheet command smokes. Exact DEV sheet only. */
 function _r1aFixtureResult(name,pass,detail){var r={test:name,pass:!!pass,detail:detail};console.log(JSON.stringify(r,null,2));return r;}

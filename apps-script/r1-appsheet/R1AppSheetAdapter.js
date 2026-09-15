@@ -19,7 +19,7 @@ function _r1cS12ReviewSubmission(store, submissionId, reviewerId, status, notes)
 
 const R1A_BOUND_DEV_SHEET_ID = '1z7PNZtDdC4Z5eLbmTuQdqp0QpJSmuEvx3QvN3VyNTsc';
 const R1A_BOUND_READS = ['IDENTITY_PROBE','OFFICE_HOME','JOB_SEARCH','JOB_OVERVIEW','OPERATIONAL_QUEUE','RELEASE_MODE_STATUS','SYSTEM_STATUS','AUDIT_HISTORY','ACTION_AVAILABILITY','TASK_ACTION_AVAILABILITY','MY_TASKS','TEAM_TASKS','PLANNER_3_WEEKS','PLANNER_6_WEEKS','INTAKE_REVIEW','INSTALLER_WORKFLOW','GOODS_IN_DETAIL','STOCK_BALANCE'];
-const R1A_BOUND_COMMANDS = ['TASK_COMPLETE','TASK_EVIDENCE_ATTACH','CALL_RECORD','ISSUE_UPDATE','ISSUE_CREATE','PLANNER_UPDATE','MOVE_JOB','CHANGE_INSTALLER','CANCEL_JOB','REINSTATE_JOB','DEPOSIT_CONFIRM','OPERATIONAL_COMPLETE','BOOKING_GATES','SOLD_INTAKE','BOOKING_INTAKE','IW_START','IW_PROGRESS','IW_REPORT_COMPLETION','IW_REPORT_PROBLEM','IW_REPORT_VARIATION','IW_COMMISSIONING_DRAFT','IW_COMMISSIONING_SUBMIT','COMMISSIONING_REVIEW','GOODS_IN_RECEIVE','STOCK_QUARANTINE'];
+const R1A_BOUND_COMMANDS = ['TASK_COMPLETE','TASK_REOPEN','TASK_EVIDENCE_ATTACH','CALL_RECORD','ISSUE_UPDATE','ISSUE_CREATE','PLANNER_UPDATE','MOVE_JOB','CHANGE_INSTALLER','CANCEL_JOB','REINSTATE_JOB','DEPOSIT_CONFIRM','OPERATIONAL_COMPLETE','BOOKING_GATES','SOLD_INTAKE','BOOKING_INTAKE','IW_START','IW_PROGRESS','IW_REPORT_COMPLETION','IW_REPORT_PROBLEM','IW_REPORT_VARIATION','IW_COMMISSIONING_DRAFT','IW_COMMISSIONING_SUBMIT','COMMISSIONING_REVIEW','GOODS_IN_RECEIVE','STOCK_QUARANTINE'];
 const R1A_BOUND_QUEUES = ['booking','calls','issues','payments','ghl','cancellation','intake_review'];
 
 function _r1aCopy(v) { return JSON.parse(JSON.stringify(v)); }
@@ -62,6 +62,12 @@ function _r1aMode(store,id,wanted){var rows=store.list('ReleaseModes').filter(fu
 function _r1aModeAvailable(store,id,wanted){var rows=store.list('ReleaseModes').filter(function(r){return r.function_id===id;});return rows.length===1&&rows[0].target_release==='R1'&&rows[0].authorised_job_scope==='Pilot'&&rows[0].mode===wanted;}
 function _r1aVersion(row,expected){if(!Number.isSafeInteger(expected)||expected<1||Number(row.version)!==expected)_r1aRefuse('R1A_STALE_VERSION');}
 function _r1aFilterTasks(store,a,items){return (items||[]).filter(function(t){return (t.owner_id===a.id||t.backup_id===a.id||_r1aAdmin(a))&&(!t.job_id||(store.get('Jobs',t.job_id)||{}).pilot_job===true);});}
+/* Staff task search over S17 presentation rows (public Job ID / customer / postcode / task / owner). Read-only.
+ * Segment format must stay identical to _s17TaskSearchText in s17/admin.js. Blank query = no filter. */
+function _r1aTaskSearchText(t){return ['public_job_id','customer_name','postcode','title','owner_name','backup_name','template_code'].map(function(k){var v=t[k];if(v===null||v===undefined)return '';var x=String(v).trim();return x==='NOT_CONFIGURED'?'':x.toLowerCase();}).filter(Boolean).join(' | ');}
+function _r1aTaskQuery(items,query){if(!_r1aText(query))return items||[];var q=query.trim().toLowerCase(),qc=q.replace(/\s+/g,'');return (items||[]).filter(function(t){var text=typeof t.search_text==='string'?t.search_text:_r1aTaskSearchText(t);return text.split(' | ').some(function(seg){return seg.indexOf(q)>=0||(qc.length>=2&&seg.replace(/\s+/g,'').indexOf(qc)>=0);});});}
+/* TEAM_TASKS is not assignment-filtered, so customer identity is withheld for jobs the actor could not open via JOB_OVERVIEW. */
+function _r1aRedactTeamTasks(store,a,items){var cache={};return (items||[]).map(function(t){if(!t.job_id||!('customer_name' in t||'postcode' in t))return t;if(!Object.prototype.hasOwnProperty.call(cache,t.job_id))cache[t.job_id]=_r1aAssigned(store,a,t.job_id);if(cache[t.job_id])return t;var c=Object.assign({},t,{customer_name:null,postcode:null,job_label:t.public_job_id||null,customer_redacted:true});c.search_text=_r1aTaskSearchText(c);return c;});}
 
 function _r1aCreate(options){
   var store=options.store, reads=options.reads||{}, services=options.services||{};
@@ -94,7 +100,7 @@ function _r1aCreate(options){
     } else if(input.read_type==='JOB_OVERVIEW'){_r1aAuthorizeJob(store,a,input.job_id);out=reads.jobOverview(store,input.job_id);
     } else if(input.read_type==='OPERATIONAL_QUEUE'){
       if(!_r1aText(input.queue)||R1A_BOUND_QUEUES.indexOf(input.queue)<0)_r1aRefuse('R1A_QUEUE_NOT_IN_R1');
-      out=reads.operationalQueue(store,input.queue);out.tasks=_r1aFilterTasks(store,a,out.tasks||[]);out.count=out.tasks.length;
+      out=reads.operationalQueue(store,input.queue);out.tasks=_r1aTaskQuery(_r1aFilterTasks(store,a,out.tasks||[]),input.query);out.count=out.tasks.length;
     } else if(input.read_type==='RELEASE_MODE_STATUS'){if(!_r1aAdmin(a))_r1aRefuse('R1A_ROLE_DENIED');out=reads.releaseModes(store);
     } else if(input.read_type==='SYSTEM_STATUS'){if(!_r1aAdmin(a)&&a.roles.indexOf('Office')<0)_r1aRefuse('R1A_ROLE_DENIED');out=reads.systemStatus(store);
     } else if(input.read_type==='AUDIT_HISTORY'){_r1aAuthorizeJob(store,a,input.job_id);out=reads.auditHistory(store,input.job_id);
@@ -122,13 +128,13 @@ function _r1aCreate(options){
       var home=reads.officeHome(store,{as_of:input.as_of});
       var mine=_r1aFilterTasks(store,a,(home.overdue||[]).concat(home.due_today||[]).concat(home.due_soon||[]).concat(home.booking_review||[]));
       // Deduplicate by id
-      var seen={},tasks=[];mine.forEach(function(t){if(!seen[t.id]){seen[t.id]=true;tasks.push(t);}});
+      var seen={},tasks=[];mine.forEach(function(t){if(!seen[t.id]){seen[t.id]=true;tasks.push(t);}});tasks=_r1aTaskQuery(tasks,input.query);
       out={scope:'my',as_of:home.as_of||input.as_of||null,count:tasks.length,tasks:tasks};
     } else if(input.read_type==='TEAM_TASKS'){
       if(!_r1aOfficeManager(a)&&!_r1aAdmin(a))_r1aRefuse('R1A_ROLE_DENIED');
       var teamHome=reads.officeHome(store,{as_of:input.as_of});
       var team=(teamHome.overdue||[]).concat(teamHome.due_today||[]).concat(teamHome.due_soon||[]).concat(teamHome.booking_review||[]);
-      var tseen={},ttasks=[];team.forEach(function(t){if(!tseen[t.id]&&(!t.job_id||(store.get('Jobs',t.job_id)||{}).pilot_job===true)){tseen[t.id]=true;ttasks.push(t);}});
+      var tseen={},ttasks=[];team.forEach(function(t){if(!tseen[t.id]&&(!t.job_id||(store.get('Jobs',t.job_id)||{}).pilot_job===true)){tseen[t.id]=true;ttasks.push(t);}});ttasks=_r1aTaskQuery(_r1aRedactTeamTasks(store,a,ttasks),input.query);
       out={scope:'team',as_of:teamHome.as_of||input.as_of||null,count:ttasks.length,tasks:ttasks};
     } else if(input.read_type==='PLANNER_3_WEEKS'||input.read_type==='PLANNER_6_WEEKS'){
       if(!_r1aOffice(a))_r1aRefuse('R1A_ROLE_DENIED');
@@ -143,9 +149,11 @@ function _r1aCreate(options){
       var t=store.get('Tasks',input.task_id);if(!t)_r1aRefuse('R1A_TASK_NOT_FOUND');if(t.job_id)_r1aAuthorizeJob(store,a,t.job_id);else if(t.owner_id!==a.id&&!_r1aAdmin(a))_r1aRefuse('R1A_TASK_ACCESS_DENIED');
       out=reads.taskActionAvailability(store,input.task_id);
       var completeAvail=!!(out.actions&&out.actions.complete&&out.actions.complete.available),ownerOk=t.owner_id===a.id||t.backup_id===a.id||_r1aAdmin(a);
-      var attachAvail=t.status==='Complete'&&!_r1aText(t.evidence_id)&&t.template_code==='PRE02';
+      var reopenAvail=!!(out.actions&&out.actions.reopen&&out.actions.reopen.available);
+      var attachAvail=t.template_code==='PRE02'&&((t.status==='Complete'&&!_r1aText(t.evidence_id))||(['Open','Waiting','InProgress'].indexOf(t.status)>=0&&t.revision_required!==true));
       out.appsheet_commands={
         task_complete:_r1aFlag(completeAvail&&ownerOk,'TASK_COMPLETE','Tasks',!completeAvail?'COMPLETE_NOT_AVAILABLE':'TASK_OWNER_OR_BACKUP_REQUIRED'),
+        task_reopen:_r1aFlag(reopenAvail&&ownerOk,'TASK_REOPEN','Tasks',!reopenAvail?'REOPEN_NOT_AVAILABLE':'TASK_OWNER_OR_BACKUP_REQUIRED'),
         task_evidence_attach:_r1aFlag(attachAvail&&ownerOk,'TASK_EVIDENCE_ATTACH','Tasks',!attachAvail?'ATTACH_NOT_AVAILABLE':'TASK_OWNER_OR_BACKUP_REQUIRED')
       };
     }
@@ -159,7 +167,7 @@ function _r1aCreate(options){
     if(!_r1aOffice(a))_r1aRefuse('R1A_ROLE_DENIED');
     var service=services[input.command_type];
     if(typeof service!=='function')_r1aRefuse('R1A_COMMAND_UNSUPPORTED');
-    if(input.command_type==='TASK_COMPLETE'||input.command_type==='TASK_EVIDENCE_ATTACH'){
+    if(input.command_type==='TASK_COMPLETE'||input.command_type==='TASK_REOPEN'||input.command_type==='TASK_EVIDENCE_ATTACH'){
       var task=store.get('Tasks',input.task_id);if(!task)_r1aRefuse('R1A_TASK_NOT_FOUND');
       if(task.job_id)_r1aAuthorizeJob(store,a,task.job_id);else if(task.owner_id!==a.id&&!_r1aAdmin(a))_r1aRefuse('R1A_TASK_ACCESS_DENIED');
       if(task.owner_id!==a.id&&task.backup_id!==a.id&&!_r1aAdmin(a))_r1aRefuse('R1A_TASK_ACCESS_DENIED');
@@ -285,13 +293,16 @@ function _r1sEnsureOfficeTaskEvidence(store,jobId,actorId,category,upload,now,co
   return{evidence_id:id,created:true};
 }
 
-function _r1sApplyPre02Contract(store,job,actorId,evidenceId,now,commandId){
-  var resolved=_r1sResolveContractEvidenceId(store,job.id,evidenceId);
-  if(job.contract_status==='Signed'&&job.contract_evidence_id===resolved&&job.contract_signed_at){
+function _r1sApplyPre02Contract(store,job,actorId,evidenceId,now,commandId,contractId){
+  var resolved=_r1sRequireJobContractEvidence(store,job.id,evidenceId);
+  var ref=_r1sText(contractId)?String(contractId).trim():(_r1sText(job.contract_id)?String(job.contract_id).trim():'');
+  if(!ref)_r1sErr('R1A_REQUIRED_CONTRACT_ID');
+  if(job.contract_status==='Signed'&&job.contract_evidence_id===resolved&&job.contract_signed_at&&String(job.contract_id||'')===ref){
     return store.get('Jobs',job.id);
   }
   var patch={
     contract_status:'Signed',
+    contract_id:ref,
     contract_evidence_id:resolved,
     contract_signed_at:job.contract_signed_at||now,
     updated_at:now,
@@ -303,14 +314,17 @@ function _r1sApplyPre02Contract(store,job,actorId,evidenceId,now,commandId){
   return store.get('Jobs',job.id);
 }
 
-function _r1sApplyPre04Verification(store,job,actorId,now,commandId){
-  if(job.customer_details_verified_at&&job.customer_details_verified_by){
+/* Record contract sent / awaiting signature without Completing PRE02 or claiming Signed. */
+function _r1sApplyPre02ContractSent(store,job,actorId,contractId,now,commandId){
+  if(!_r1sText(contractId))_r1sErr('R1A_REQUIRED_CONTRACT_ID');
+  if(job.contract_status==='Signed'&&_r1sText(job.contract_evidence_id))_r1sErr('R1A_CONTRACT_ALREADY_SIGNED');
+  var ref=String(contractId).trim();
+  if(job.contract_status==='Sent'&&String(job.contract_id||'')===ref){
     return store.get('Jobs',job.id);
   }
-  if(!(typeof job.original_gross_pence==='number'&&job.original_gross_pence>0))_r1sErr('R1A_SOLD_VALUE_REQUIRED');
   store.update('Jobs',job.id,{
-    customer_details_verified_at:now,
-    customer_details_verified_by:actorId,
+    contract_status:'Sent',
+    contract_id:ref,
     updated_at:now,
     updated_by:actorId,
     version:Number(job.version||0)+1,
@@ -319,59 +333,382 @@ function _r1sApplyPre04Verification(store,job,actorId,now,commandId){
   return store.get('Jobs',job.id);
 }
 
-/* Internal post-command readiness hook. It only evaluates the Prebooking phase,
- * so booking-link gates cannot advance a later phase and no public command is
- * recursively invoked. */
+/* Evidence id must resolve to a real Evidence row for this job — never invent opaque ids. */
+function _r1sRequireJobContractEvidence(store,jobId,evidenceId){
+  if(!_r1sText(evidenceId))_r1sErr('R1A_REQUIRED_EVIDENCE_ID');
+  var id=String(evidenceId).trim();
+  var byId=store.get('Evidence',id);
+  if(byId){
+    if(byId.job_id!==jobId)_r1sErr('R1A_CROSS_JOB_EVIDENCE');
+    return byId.id;
+  }
+  var byDrive=(store.list('Evidence')||[]).filter(function(e){return e.drive_file_id===id&&e.job_id===jobId;});
+  if(byDrive.length>1)_r1sErr('R1A_EVIDENCE_AMBIGUOUS');
+  if(byDrive.length===1)return byDrive[0].id;
+  _r1sErr('R1A_REQUIRED_CONTRACT_EVIDENCE');
+}
+
+function _r1sContractSignedFlag(v){
+  if(v===true)return true;
+  if(v===false||v===null||v===undefined||v==='')return false;
+  return ['yes','true','1','signed','y'].indexOf(String(v).trim().toLowerCase())>=0;
+}
+function _r1sPre02AwaitingSignature(p){
+  if(_r1sContractSignedFlag(p.contract_signed))return false;
+  if(p.contract_signed===false)return true;
+  if(_r1sText(p.contract_signed)){
+    var cs=String(p.contract_signed).trim().toLowerCase();
+    if(['no','false','0','n','sent','awaiting','awaiting_signature','awaiting-signature'].indexOf(cs)>=0)return true;
+  }
+  if(!_r1sText(p.outcome))return false;
+  return ['awaiting_signature','awaiting-signature','awaitingsignature','sent','awaiting'].indexOf(String(p.outcome).trim().toLowerCase())>=0;
+}
+
+function _r1sCanonicalGrossPence(job){
+  if(!(typeof job.original_gross_pence==='number'&&job.original_gross_pence>0))_r1sErr('R1A_SOLD_VALUE_REQUIRED');
+  if(typeof job.current_contract_gross_pence==='number'&&job.current_contract_gross_pence>0)return job.current_contract_gross_pence;
+  return job.original_gross_pence;
+}
+function _r1sYesFlag(v){
+  if(v===true)return true;
+  if(v===false||v===null||v===undefined||v==='')return false;
+  return ['yes','true','1','y'].indexOf(String(v).trim().toLowerCase())>=0;
+}
+function _r1sExplicitNoFlag(v){
+  if(v===false)return true;
+  if(v===null||v===undefined||v==='')return false;
+  return ['no','false','0','n'].indexOf(String(v).trim().toLowerCase())>=0;
+}
+/* Canonical expected deposit = the job's single deposit InvoiceStages row. Never client-supplied. */
+function _r1sDepositStage(store,jobId){
+  var stage=_r1sDepositInvoiceStage(store,jobId);
+  if(!(typeof stage.gross_pence==='number'&&Number.isSafeInteger(stage.gross_pence)&&stage.gross_pence>0))_r1sErr('R1A_DEPOSIT_AMOUNT_REQUIRED');
+  return stage;
+}
+/* GBP text/number → integer pence (max 2dp). allowZero only for explicit "not received" follow-ups. */
+function _r1sDepositAmountPence(v,allowZero){
+  if(_r1sBlank(v))_r1sErr('R1A_REQUIRED_DEPOSIT_AMOUNT');
+  var pence;try{pence=Number(_r1sPoundsToPence(v));}catch(e){_r1sErr('R1A_INVALID_DEPOSIT_AMOUNT');}
+  if(!Number.isSafeInteger(pence)||pence<0||(!allowZero&&pence===0))_r1sErr('R1A_INVALID_DEPOSIT_AMOUNT');
+  return pence;
+}
+function _r1sSameInstant(a,b){if(!a||!b)return false;var x=new Date(a).getTime(),y=new Date(b).getTime();return Number.isFinite(x)&&Number.isFinite(y)&&x===y;}
+/* Bank receipt date: YYYY-MM-DD (AppSheet Date) → noon UTC instant. A received date cannot be in the future. */
+function _r1sDepositReceivedAt(v){
+  var d;
+  if(Object.prototype.toString.call(v)==='[object Date]'&&!isNaN(v.getTime()))d=v;
+  else{
+    var text=String(v||'').trim(),m=/^(\d{4})-(\d{2})-(\d{2})$/.exec(text);
+    if(!m)_r1sErr('R1A_INVALID_DEPOSIT_RECEIVED_DATE');
+    d=new Date(text+'T12:00:00.000Z');
+    if(isNaN(d.getTime())||d.toISOString().slice(0,10)!==text)_r1sErr('R1A_INVALID_DEPOSIT_RECEIVED_DATE');
+  }
+  if(d.getTime()>Date.now()+86400000)_r1sErr('R1A_INVALID_DEPOSIT_RECEIVED_DATE');
+  return d.toISOString();
+}
+function _r1sInsertBankCheck(store,jobId,actorId,amountPence,checkedAt,outcome,reference,now,commandId){
+  var id='MBC-R1A-'+commandId,existing=store.get('ManualBankChecks',id);
+  var row={id:id,job_id:jobId,stage:'deposit',checked_at:checkedAt,checked_by:actorId,amount_pence:Number(amountPence),outcome:outcome,evidence_reference:_r1sText(reference)?String(reference).trim():null,created_at:now,commit_id:'R1A-'+commandId};
+  if(existing){if(JSON.stringify(existing)!==JSON.stringify(row))_r1sErr('R1A_COMMAND_CONFLICT');return existing;}
+  store.insert('ManualBankChecks',row);return row;
+}
+function _r1sApplyPre03Confirmation(store,job,stage,actorId,amountPence,receivedAt,reference,now,commandId){
+  if(Number(amountPence)!==Number(stage.gross_pence))_r1sErr('R1A_DEPOSIT_AMOUNT_MISMATCH');
+  var ref=String(reference).trim();
+  if(!(stage.status==='Confirmed'&&stage.reference===ref))store.update('InvoiceStages',stage.id,{status:'Confirmed',reference:ref,updated_at:now,updated_by:actorId,version:Number(stage.version||0)+1,commit_id:'R1A-'+commandId});
+  if(!(_r1sSameInstant(job.deposit_bank_confirmed_at,receivedAt)&&job.deposit_bank_confirmed_by===actorId&&job.deposit_bank_reference===ref))store.update('Jobs',job.id,{deposit_bank_confirmed_at:receivedAt,deposit_bank_confirmed_by:actorId,deposit_bank_reference:ref,updated_at:now,updated_by:actorId,version:Number(job.version||0)+1,commit_id:'R1A-'+commandId});
+  return store.get('Jobs',job.id);
+}
+/* True only when S06 bankConfirmationEvidence reconciles Jobs + ManualBankChecks + deposit InvoiceStage. */
+function _r1sBankConfirmationValid(store,jobId){
+  var probe=typeof bankConfirmationEvidence==='function'?bankConfirmationEvidence:null;
+  if(!probe&&typeof require==='function'){try{probe=require('../s06/gates.js').bankConfirmationEvidence;}catch(e){probe=null;}}
+  if(typeof probe!=='function')_r1sErr('R1A_COMMAND_UNSUPPORTED');
+  var r=probe(store,jobId);return!!(r&&r.pass);
+}
+/* Single write path for a successful manual deposit verification (PRE03 TASK_COMPLETE and legacy DEPOSIT_CONFIRM).
+ * Reconciles the submitted amount against the canonical deposit InvoiceStage, records exactly one Confirmed
+ * ManualBankChecks row for those facts (re-used if an identical confirmation already exists), stamps the Jobs
+ * summary fields + InvoiceStage Confirmed/reference, and never touches contract/invoice amounts. */
+function _r1sRecordDepositConfirmation(store,jobId,actorId,amountPence,receivedAt,reference,now,commandId){
+  var job=store.get('Jobs',jobId);if(!job)_r1sErr('R1A_JOB_NOT_FOUND');
+  if(!_r1sText(reference))_r1sErr('R1A_REQUIRED_DEPOSIT_BANK_REFERENCE');
+  var stage=_r1sDepositStage(store,jobId),ref=String(reference).trim();
+  if(Number(amountPence)!==Number(stage.gross_pence))_r1sErr('R1A_DEPOSIT_AMOUNT_MISMATCH');
+  var grossBefore=job.original_gross_pence,currentBefore=job.current_contract_gross_pence,stageGrossBefore=stage.gross_pence;
+  var existing=(store.list('ManualBankChecks')||[]).filter(function(c){return c.job_id===jobId&&String(c.stage||'').toLowerCase()==='deposit'&&c.outcome==='Confirmed'&&c.checked_by===actorId&&Number(c.amount_pence)===Number(amountPence)&&c.evidence_reference===ref&&_r1sSameInstant(c.checked_at,receivedAt);});
+  var check=existing.length?existing[0]:_r1sInsertBankCheck(store,jobId,actorId,amountPence,receivedAt,'Confirmed',ref,now,commandId);
+  var after=_r1sApplyPre03Confirmation(store,job,stage,actorId,amountPence,receivedAt,ref,now,commandId);
+  var stageAfter=store.get('InvoiceStages',stage.id);
+  if(after.original_gross_pence!==grossBefore||after.current_contract_gross_pence!==currentBefore||stageAfter.gross_pence!==stageGrossBefore)_r1sErr('R1A_FINANCIAL_MUTATION');
+  return{job:after,stage:stageAfter,bank_check:check};
+}
+function _r1sApplyPre04Verification(store,job,actorId,now,commandId,verifiedGrossPence){
+  var expected=_r1sCanonicalGrossPence(job);
+  if(Number(verifiedGrossPence)!==Number(expected))_r1sErr('R1A_VERIFIED_AMOUNT_MISMATCH');
+  if(job.customer_details_verified_at&&job.customer_details_verified_by&&job.sold_booking_match_status==='Match'&&_r1sText(job.valuation_basis)){
+    return store.get('Jobs',job.id);
+  }
+  store.update('Jobs',job.id,{
+    customer_details_verified_at:job.customer_details_verified_at||now,
+    customer_details_verified_by:job.customer_details_verified_by||actorId,
+    sold_booking_match_status:'Match',
+    valuation_basis:_r1sText(job.valuation_basis)?String(job.valuation_basis).trim():'Standard',
+    updated_at:now,
+    updated_by:actorId,
+    version:Number(job.version||0)+1,
+    commit_id:'R1A-'+commandId
+  });
+  return store.get('Jobs',job.id);
+}
+function _r1sApplyPre04MismatchReview(store,job,actorId,now,commandId){
+  if(job.sold_booking_match_status==='Review'){
+    return store.get('Jobs',job.id);
+  }
+  store.update('Jobs',job.id,{
+    sold_booking_match_status:'Review',
+    updated_at:now,
+    updated_by:actorId,
+    version:Number(job.version||0)+1,
+    commit_id:'R1A-'+commandId
+  });
+  return store.get('Jobs',job.id);
+}
+
+/* Internal post-command readiness hook. Advances Prebooking→ReadyToBook when ready.
+ * Demotes ReadyToBook→Prebooking when a reopened gating task makes readiness false.
+ * Never touches BookingInProgress+ and never recursively invokes a public command. */
 function _r1sReevaluatePrebooking(store,jobId,actorId,commandId,now){
   if(!_r1sText(jobId))return null;
   var job=store.get('Jobs',jobId);
-  if(!job||job.workflow_stage!=='Prebooking')return null;
-  if(typeof processBookingGates!=='function')_r1sErr('R1A_COMMAND_UNSUPPORTED');
-  return processBookingGates(jobId,store,{actor:actorId,command_id:'AUTO-'+commandId,now:now});
+  if(!job)return null;
+  if(job.workflow_stage==='Prebooking'){
+    if(typeof processBookingGates!=='function')_r1sErr('R1A_COMMAND_UNSUPPORTED');
+    return processBookingGates(jobId,store,{actor:actorId,command_id:'AUTO-'+commandId,now:now});
+  }
+  if(job.workflow_stage==='ReadyToBook'){
+    var evaluate=typeof evaluateReadyToBook==='function'?evaluateReadyToBook:null;
+    if(!evaluate&&typeof require==='function'){
+      try{evaluate=require('../s06/gates.js').evaluateReadyToBook;}catch(e){evaluate=null;}
+    }
+    if(typeof evaluate!=='function')_r1sErr('R1A_COMMAND_UNSUPPORTED');
+    var readiness=evaluate(job,store);
+    if(readiness&&readiness.ready)return{readiness:readiness};
+    var before=job;
+    store.update('Jobs',job.id,{
+      workflow_stage:'Prebooking',
+      updated_at:now,
+      updated_by:actorId,
+      version:Number(job.version||0)+1,
+      commit_id:'R1A-'+commandId
+    });
+    var after=store.get('Jobs',job.id);
+    _r1sInsertAudit(store,'AE-R1A-DEM-'+commandId,'Jobs',job.id,'WorkflowStage:Prebooking',before,after,actorId,commandId,(readiness&&readiness.summary)||'PrebookingBlocked','R1 AppSheet/S06',now);
+    if(readiness){readiness.workflow_stage='Prebooking';readiness.stage_demoted=true;readiness.ready=false;readiness.blocked=true;}
+    return{readiness:readiness||{ready:false,blocked:true,workflow_stage:'Prebooking',stage_demoted:true}};
+  }
+  return null;
 }
 
-function _r1sTaskComplete(ctx){var r=ctx.request,s=ctx.store,a=ctx.actor,p=_r1sPayload(r,['completion_note','evidence_id','evidence_path'],['completion_note']),t=s.get('Tasks',r.task_id),jid='CJ-R1A-'+r.command_id;
+/* PRE01 owns deposit InvoiceStages evidence: invoice ID/number + sent_at. Notes alone never satisfy it. */
+function _r1sDepositInvoiceStage(store,jobId){
+  var rows=(store.list('InvoiceStages')||[]).filter(function(s){return s.job_id===jobId&&String(s.stage||'').toLowerCase()==='deposit';});
+  if(rows.length!==1)_r1sErr('R1A_DEPOSIT_STAGE_MISSING');
+  return rows[0];
+}
+function _r1sPre01InvoiceEvidence(store,jobId){
+  var rows=(store.list('InvoiceStages')||[]).filter(function(s){return s.job_id===jobId&&String(s.stage||'').toLowerCase()==='deposit';});
+  if(rows.length!==1)return{pass:false,detail:'Deposit invoice stage missing'};
+  var stage=rows[0],num=_r1sText(stage.invoice_number)?String(stage.invoice_number).trim():'',xero=_r1sText(stage.xero_invoice_id)?String(stage.xero_invoice_id).trim():'';
+  var idOk=!!num||(!!xero&&xero!=='NOT_CONFIGURED'),sentOk=!!stage.sent_at;
+  return{pass:idOk&&sentOk,detail:idOk&&sentOk?'Deposit invoice ID and sent status recorded':'Deposit invoice ID/sent status missing',stage:stage};
+}
+function _r1sInvoiceSentFlag(v){
+  if(v===true)return true;
+  if(v===false||v===null||v===undefined||v==='')return false;
+  return ['yes','true','1','sent','y'].indexOf(String(v).trim().toLowerCase())>=0;
+}
+function _r1sPre01FailedOutcome(outcome){
+  if(!_r1sText(outcome))return false;
+  return ['failed','failure','follow_up','follow-up','followup'].indexOf(String(outcome).trim().toLowerCase())>=0;
+}
+function _r1sNextFollowUpAt(now){
+  try{
+    if(typeof nextStaffedDay==='function')return nextStaffedDay(now,[]);
+    if(typeof require==='function'){var g=require('../s06/gates.js');if(g&&typeof g.nextStaffedDay==='function')return g.nextStaffedDay(now,[]);}
+  }catch(e){}
+  return new Date(Date.parse(now)+86400000).toISOString();
+}
+function _r1sApplyPre01InvoiceSent(store,jobId,actorId,invoiceNumber,now,commandId){
+  var stage=_r1sDepositInvoiceStage(store,jobId);
+  var patch={
+    invoice_number:String(invoiceNumber).trim(),
+    sent_at:now,
+    updated_at:now,
+    updated_by:actorId,
+    version:Number(stage.version||0)+1,
+    commit_id:'R1A-'+commandId
+  };
+  if(['Confirmed','Paid','PartPaid','Voided','Credited'].indexOf(stage.status)<0)patch.status='Sent';
+  store.update('InvoiceStages',stage.id,patch);
+  return store.get('InvoiceStages',stage.id);
+}
+
+function _r1sTaskComplete(ctx){var r=ctx.request,s=ctx.store,a=ctx.actor,p=_r1sPayload(r,['completion_note','evidence_id','evidence_path','invoice_number','invoice_sent','outcome','contract_id','contract_signed','customer_details_verified','sold_value_verified','verified_gross_amount','deposit_bank_confirmed','deposit_amount','deposit_received_date','deposit_bank_reference'],['completion_note']),t=s.get('Tasks',r.task_id),jid='CJ-R1A-'+r.command_id;
   return s.withLock(function(){var prior=s.get('CommitJournal',jid);if(prior){if(prior.entity_type!=='Tasks'||prior.entity_id!==r.task_id||prior.changes_json!==JSON.stringify(p))_r1sErr('R1A_COMMAND_CONFLICT');if(prior.state!=='Committed')_r1sErr('R1A_RECOVERY_REQUIRED');return{status:'Replayed',task:s.get('Tasks',r.task_id),job:t&&t.job_id?s.get('Jobs',t.job_id):null,external_calls:0};}
     t=s.get('Tasks',r.task_id);if(Number(t.version)!==Number(r.expected_version))_r1sErr('R1A_STALE_VERSION');if(['Complete','NotRequired','Cancelled'].indexOf(t.status)>=0)_r1sErr('R1A_TASK_NOT_COMPLETABLE');if(['Open','Waiting','InProgress'].indexOf(t.status)<0||t.revision_required===true)_r1sErr('R1A_TASK_NOT_COMPLETABLE');
-    var evidenceId=p.evidence_id||t.evidence_id||null,pendingUpload=null,pendingCategory=null;
-    if(t.template_code==='PRE02'||t.template_code==='PRE04'){
-      pendingCategory=t.template_code==='PRE02'?'Contract':'CustomerDetails';
-      if(_r1sText(p.evidence_path)){
-        pendingUpload=_r1sResolveEvidencePath(p.evidence_path,ctx);
+    var evidenceId=p.evidence_id||t.evidence_id||null,pendingUpload=null,pendingCategory=null,pre01Failed=_r1sPre01FailedOutcome(p.outcome),pre02Awaiting=_r1sPre02AwaitingSignature(p),pre03Mismatch=false,pre03BlockReason=null,pre03AmountPence=null,pre03ReceivedAt=null,pre03Stage=null,pre04Mismatch=false,pre04BlockReason=null,pre04VerifiedPence=null;
+    if(t.template_code==='PRE01'){
+      if(!t.job_id)_r1sErr('R1A_JOB_NOT_FOUND');
+      if(!pre01Failed){
+        if(!_r1sText(p.invoice_number))_r1sErr('R1A_REQUIRED_INVOICE_NUMBER');
+        if(!_r1sInvoiceSentFlag(p.invoice_sent))_r1sErr('R1A_REQUIRED_INVOICE_SENT');
+        _r1sDepositInvoiceStage(s,t.job_id);
+      }
+    }
+    if(t.template_code==='PRE02'){
+      if(!t.job_id)_r1sErr('R1A_JOB_NOT_FOUND');
+      if(!_r1sText(p.contract_id))_r1sErr('R1A_REQUIRED_CONTRACT_ID');
+      if(pre02Awaiting){
+        /* Sent / awaiting signature — never Complete. Evidence not required. */
+      } else if(!_r1sContractSignedFlag(p.contract_signed)){
+        _r1sErr('R1A_REQUIRED_CONTRACT_SIGNED');
       } else {
-        if(!_r1sText(evidenceId))_r1sErr('R1A_REQUIRED_EVIDENCE_ID');
-        if(t.template_code==='PRE02')evidenceId=_r1sResolveContractEvidenceId(s,t.job_id,evidenceId);
-        else {
-          var ev=s.get('Evidence',String(evidenceId).trim());
-          if(ev&&ev.job_id!==t.job_id)_r1sErr('R1A_CROSS_JOB_EVIDENCE');
-          evidenceId=String(evidenceId).trim();
+        pendingCategory='Contract';
+        if(_r1sText(p.evidence_path)){
+          pendingUpload=_r1sResolveEvidencePath(p.evidence_path,ctx);
+        } else {
+          if(!_r1sText(evidenceId))_r1sErr('R1A_REQUIRED_EVIDENCE_ID');
+          evidenceId=_r1sRequireJobContractEvidence(s,t.job_id,evidenceId);
         }
+      }
+    }
+    if(t.template_code==='PRE03'){
+      if(!t.job_id)_r1sErr('R1A_JOB_NOT_FOUND');
+      var depYes=_r1sYesFlag(p.deposit_bank_confirmed),depNo=_r1sExplicitNoFlag(p.deposit_bank_confirmed);
+      if(!depYes&&!depNo)_r1sErr('R1A_REQUIRED_DEPOSIT_BANK_CONFIRMED');
+      pre03Stage=_r1sDepositStage(s,t.job_id);
+      if(depNo){
+        /* Explicit "not received": never Complete; optional amount/date are journaled with a NotReceived check. */
+        pre03Mismatch=true;pre03BlockReason='PRE03_DEPOSIT_NOT_RECEIVED';
+        pre03AmountPence=_r1sBlank(p.deposit_amount)?0:_r1sDepositAmountPence(p.deposit_amount,true);
+        pre03ReceivedAt=_r1sBlank(p.deposit_received_date)?null:_r1sDepositReceivedAt(p.deposit_received_date);
+      }else{
+        if(_r1sBlank(p.deposit_amount))_r1sErr('R1A_REQUIRED_DEPOSIT_AMOUNT');
+        if(_r1sBlank(p.deposit_received_date))_r1sErr('R1A_REQUIRED_DEPOSIT_RECEIVED_DATE');
+        if(!_r1sText(p.deposit_bank_reference))_r1sErr('R1A_REQUIRED_DEPOSIT_BANK_REFERENCE');
+        pre03AmountPence=_r1sDepositAmountPence(p.deposit_amount,false);
+        pre03ReceivedAt=_r1sDepositReceivedAt(p.deposit_received_date);
+        if(pre03AmountPence!==Number(pre03Stage.gross_pence)){pre03Mismatch=true;pre03BlockReason='PRE03_DEPOSIT_AMOUNT_MISMATCH';}
+      }
+      /* Documentary evidence is optional and can never replace the explicit bank check. */
+    }
+    if(t.template_code==='PRE04'){
+      if(!t.job_id)_r1sErr('R1A_JOB_NOT_FOUND');
+      var custYes=_r1sYesFlag(p.customer_details_verified),custNo=_r1sExplicitNoFlag(p.customer_details_verified);
+      var soldYes=_r1sYesFlag(p.sold_value_verified),soldNo=_r1sExplicitNoFlag(p.sold_value_verified);
+      if(!custYes&&!custNo)_r1sErr('R1A_REQUIRED_CUSTOMER_DETAILS_VERIFIED');
+      if(!soldYes&&!soldNo)_r1sErr('R1A_REQUIRED_SOLD_VALUE_VERIFIED');
+      if(custNo){pre04Mismatch=true;pre04BlockReason='PRE04_CUSTOMER_DETAILS_MISMATCH';}
+      else if(soldNo){pre04Mismatch=true;pre04BlockReason='PRE04_SOLD_VALUE_MISMATCH';}
+      else {
+        if(p.verified_gross_amount===undefined||p.verified_gross_amount===null||p.verified_gross_amount==='')_r1sErr('R1A_REQUIRED_VERIFIED_GROSS_AMOUNT');
+        pre04VerifiedPence=Number(_r1sPoundsToPence(p.verified_gross_amount));
+        var jobAmt=s.get('Jobs',t.job_id);if(!jobAmt)_r1sErr('R1A_JOB_NOT_FOUND');
+        if(pre04VerifiedPence!==Number(_r1sCanonicalGrossPence(jobAmt))){pre04Mismatch=true;pre04BlockReason='PRE04_VALUE_MISMATCH';}
+      }
+      /* Documentary upload is optional for PRE04; structured verification is authoritative. */
+      if(!pre04Mismatch&&_r1sText(p.evidence_path)){
+        pendingCategory='CustomerDetails';
+        pendingUpload=_r1sResolveEvidencePath(p.evidence_path,ctx);
+      } else if(!pre04Mismatch&&_r1sText(p.evidence_id)){
+        var evPre04=s.get('Evidence',String(p.evidence_id).trim());
+        if(evPre04&&evPre04.job_id!==t.job_id)_r1sErr('R1A_CROSS_JOB_EVIDENCE');
+        evidenceId=String(p.evidence_id).trim();
       }
     }
     var now=new Date().toISOString();
     s.insert('CommitJournal',{id:jid,commit_id:'R1A-'+r.command_id,state:'Prepared',command_id:r.command_id,entity_type:'Tasks',entity_id:t.id,expected_version:r.expected_version,changes_json:JSON.stringify(p),prepared_at:now,committed_at:null,created_at:now});
     try{
+    if(t.template_code==='PRE01'&&pre01Failed){
+      var followUpAt=_r1sNextFollowUpAt(now);
+      var failAfter=Object.assign({},t,{status:'Waiting',completed_at:null,completed_by:null,completion_note:p.completion_note,blocking_reason:'PRE01_INVOICE_SEND_FAILED',next_followup_at:followUpAt,updated_at:now,updated_by:a.id,version:Number(t.version)+1,commit_id:'R1A-'+r.command_id});
+      s.update('Tasks',t.id,{status:failAfter.status,completed_at:null,completed_by:null,completion_note:failAfter.completion_note,blocking_reason:failAfter.blocking_reason,next_followup_at:failAfter.next_followup_at,updated_at:now,updated_by:a.id,version:failAfter.version,commit_id:failAfter.commit_id});
+      s.insert('TaskEvents',{id:'TE-R1A-'+r.command_id,task_id:t.id,action:'FollowUp',old_status:t.status,new_status:'Waiting',old_owner:t.owner_id,new_owner:t.owner_id,old_due:t.due_at,new_due:t.due_at,reason:p.completion_note,actor:a.id,timestamp:now,created_at:now,commit_id:'R1A-'+r.command_id});
+      var failJob=s.get('Jobs',t.job_id),failReadiness=_r1sReevaluatePrebooking(s,t.job_id,a.id,r.command_id,now);
+      _r1sInsertAudit(s,'AE-R1A-'+r.command_id,'Tasks',t.id,'FollowUp',t,failAfter,a.id,r.command_id,p.completion_note,'R1 AppSheet/S04',now);
+      s.update('CommitJournal',jid,{state:'Committed',committed_at:now});
+      return{status:'FollowUpRequired',task:s.get('Tasks',t.id),job:failJob,invoice_stage:_r1sPre01InvoiceEvidence(s,t.job_id).stage||null,readiness:failReadiness&&failReadiness.readiness||null,external_calls:0};
+    }
+    if(t.template_code==='PRE02'&&pre02Awaiting){
+      var awaitFollowUp=_r1sNextFollowUpAt(now);
+      var jobSent=s.get('Jobs',t.job_id);if(!jobSent)_r1sErr('R1A_JOB_NOT_FOUND');
+      jobSent=_r1sApplyPre02ContractSent(s,jobSent,a.id,p.contract_id,now,r.command_id);
+      var awaitAfter=Object.assign({},t,{status:'Waiting',completed_at:null,completed_by:null,completion_note:p.completion_note,blocking_reason:'PRE02_AWAITING_SIGNATURE',next_followup_at:awaitFollowUp,updated_at:now,updated_by:a.id,version:Number(t.version)+1,commit_id:'R1A-'+r.command_id});
+      s.update('Tasks',t.id,{status:awaitAfter.status,completed_at:null,completed_by:null,completion_note:awaitAfter.completion_note,blocking_reason:awaitAfter.blocking_reason,next_followup_at:awaitAfter.next_followup_at,updated_at:now,updated_by:a.id,version:awaitAfter.version,commit_id:awaitAfter.commit_id});
+      s.insert('TaskEvents',{id:'TE-R1A-'+r.command_id,task_id:t.id,action:'FollowUp',old_status:t.status,new_status:'Waiting',old_owner:t.owner_id,new_owner:t.owner_id,old_due:t.due_at,new_due:t.due_at,reason:p.completion_note,actor:a.id,timestamp:now,created_at:now,commit_id:'R1A-'+r.command_id});
+      var awaitReadiness=_r1sReevaluatePrebooking(s,t.job_id,a.id,r.command_id,now);
+      _r1sInsertAudit(s,'AE-R1A-'+r.command_id,'Tasks',t.id,'FollowUp',t,awaitAfter,a.id,r.command_id,p.completion_note,'R1 AppSheet/S04',now);
+      s.update('CommitJournal',jid,{state:'Committed',committed_at:now});
+      return{status:'FollowUpRequired',task:s.get('Tasks',t.id),job:s.get('Jobs',t.job_id),readiness:awaitReadiness&&awaitReadiness.readiness||null,external_calls:0};
+    }
+    if(t.template_code==='PRE03'&&pre03Mismatch){
+      var pre03Follow=_r1sNextFollowUpAt(now),pre03Outcome=pre03BlockReason==='PRE03_DEPOSIT_NOT_RECEIVED'?'NotReceived':'AmountMismatch';
+      _r1sInsertBankCheck(s,t.job_id,a.id,pre03AmountPence,pre03ReceivedAt||now,pre03Outcome,p.deposit_bank_reference,now,r.command_id);
+      var pre03After=Object.assign({},t,{status:'Waiting',completed_at:null,completed_by:null,completion_note:p.completion_note,blocking_reason:pre03BlockReason,next_followup_at:pre03Follow,updated_at:now,updated_by:a.id,version:Number(t.version)+1,commit_id:'R1A-'+r.command_id});
+      s.update('Tasks',t.id,{status:'Waiting',completed_at:null,completed_by:null,completion_note:p.completion_note,blocking_reason:pre03BlockReason,next_followup_at:pre03Follow,updated_at:now,updated_by:a.id,version:pre03After.version,commit_id:pre03After.commit_id});
+      s.insert('TaskEvents',{id:'TE-R1A-'+r.command_id,task_id:t.id,action:'FollowUp',old_status:t.status,new_status:'Waiting',old_owner:t.owner_id,new_owner:t.owner_id,old_due:t.due_at,new_due:t.due_at,reason:p.completion_note,actor:a.id,timestamp:now,created_at:now,commit_id:'R1A-'+r.command_id});
+      var pre03Readiness=_r1sReevaluatePrebooking(s,t.job_id,a.id,r.command_id,now);
+      _r1sInsertAudit(s,'AE-R1A-'+r.command_id,'Tasks',t.id,'FollowUp',t,pre03After,a.id,r.command_id,p.completion_note,'R1 AppSheet/S13',now);
+      s.update('CommitJournal',jid,{state:'Committed',committed_at:now});
+      return{status:'FollowUpRequired',task:s.get('Tasks',t.id),job:s.get('Jobs',t.job_id),bank_check:s.get('ManualBankChecks','MBC-R1A-'+r.command_id),readiness:pre03Readiness&&pre03Readiness.readiness||null,external_calls:0};
+    }
+    if(t.template_code==='PRE04'&&pre04Mismatch){
+      var pre04Follow=_r1sNextFollowUpAt(now);
+      var jobReview=s.get('Jobs',t.job_id);if(!jobReview)_r1sErr('R1A_JOB_NOT_FOUND');
+      var grossBefore=jobReview.original_gross_pence,currentBefore=jobReview.current_contract_gross_pence;
+      jobReview=_r1sApplyPre04MismatchReview(s,jobReview,a.id,now,r.command_id);
+      if(jobReview.original_gross_pence!==grossBefore||jobReview.current_contract_gross_pence!==currentBefore)_r1sErr('R1A_FINANCIAL_MUTATION');
+      var pre04After=Object.assign({},t,{status:'Waiting',completed_at:null,completed_by:null,completion_note:p.completion_note,blocking_reason:pre04BlockReason,next_followup_at:pre04Follow,updated_at:now,updated_by:a.id,version:Number(t.version)+1,commit_id:'R1A-'+r.command_id});
+      s.update('Tasks',t.id,{status:pre04After.status,completed_at:null,completed_by:null,completion_note:pre04After.completion_note,blocking_reason:pre04After.blocking_reason,next_followup_at:pre04After.next_followup_at,updated_at:now,updated_by:a.id,version:pre04After.version,commit_id:pre04After.commit_id});
+      s.insert('TaskEvents',{id:'TE-R1A-'+r.command_id,task_id:t.id,action:'FollowUp',old_status:t.status,new_status:'Waiting',old_owner:t.owner_id,new_owner:t.owner_id,old_due:t.due_at,new_due:t.due_at,reason:p.completion_note,actor:a.id,timestamp:now,created_at:now,commit_id:'R1A-'+r.command_id});
+      var pre04Readiness=_r1sReevaluatePrebooking(s,t.job_id,a.id,r.command_id,now);
+      _r1sInsertAudit(s,'AE-R1A-'+r.command_id,'Tasks',t.id,'FollowUp',t,pre04After,a.id,r.command_id,p.completion_note,'R1 AppSheet/S04',now);
+      s.update('CommitJournal',jid,{state:'Committed',committed_at:now});
+      return{status:'FollowUpRequired',task:s.get('Tasks',t.id),job:s.get('Jobs',t.job_id),readiness:pre04Readiness&&pre04Readiness.readiness||null,external_calls:0};
+    }
     if(pendingUpload){
       var ensured=_r1sEnsureOfficeTaskEvidence(s,t.job_id,a.id,pendingCategory,pendingUpload,now,r.command_id);
       if(_r1sText(p.evidence_id)&&String(p.evidence_id).trim()!==ensured.evidence_id)_r1sErr('R1A_EVIDENCE_CONFLICT');
       evidenceId=ensured.evidence_id;
     }
-    var after=Object.assign({},t,{status:'Complete',completed_at:now,completed_by:a.id,completion_note:p.completion_note,evidence_id:evidenceId||null,updated_at:now,updated_by:a.id,version:Number(t.version)+1,commit_id:'R1A-'+r.command_id});
-    s.update('Tasks',t.id,{status:after.status,completed_at:after.completed_at,completed_by:after.completed_by,completion_note:after.completion_note,evidence_id:after.evidence_id,updated_at:now,updated_by:a.id,version:after.version,commit_id:after.commit_id});
+    var invoiceStage=null,bankCheck=null;
+    if(t.template_code==='PRE01')invoiceStage=_r1sApplyPre01InvoiceSent(s,t.job_id,a.id,p.invoice_number,now,r.command_id);
+    if(t.template_code==='PRE03'){
+      var pre03Recorded=_r1sRecordDepositConfirmation(s,t.job_id,a.id,pre03AmountPence,pre03ReceivedAt,p.deposit_bank_reference,now,r.command_id);
+      bankCheck=pre03Recorded.bank_check;invoiceStage=pre03Recorded.stage;
+    }
+    var after=Object.assign({},t,{status:'Complete',completed_at:now,completed_by:a.id,completion_note:p.completion_note,evidence_id:evidenceId||null,blocking_reason:null,updated_at:now,updated_by:a.id,version:Number(t.version)+1,commit_id:'R1A-'+r.command_id});
+    s.update('Tasks',t.id,{status:after.status,completed_at:after.completed_at,completed_by:after.completed_by,completion_note:after.completion_note,evidence_id:after.evidence_id,blocking_reason:null,updated_at:now,updated_by:a.id,version:after.version,commit_id:after.commit_id});
     s.insert('TaskEvents',{id:'TE-R1A-'+r.command_id,task_id:t.id,action:'Complete',old_status:t.status,new_status:'Complete',old_owner:t.owner_id,new_owner:t.owner_id,old_due:t.due_at,new_due:t.due_at,reason:p.completion_note,actor:a.id,timestamp:now,created_at:now,commit_id:'R1A-'+r.command_id});
     var jobAfter=null,readiness=null;
     if(t.job_id&&(t.template_code==='PRE02'||t.template_code==='PRE04')){
       var job=s.get('Jobs',t.job_id);if(!job)_r1sErr('R1A_JOB_NOT_FOUND');
-      if(t.template_code==='PRE02')jobAfter=_r1sApplyPre02Contract(s,job,a.id,evidenceId,now,r.command_id);
-      if(t.template_code==='PRE04')jobAfter=_r1sApplyPre04Verification(s,job,a.id,now,r.command_id);
+      if(t.template_code==='PRE02')jobAfter=_r1sApplyPre02Contract(s,job,a.id,evidenceId,now,r.command_id,p.contract_id);
+      if(t.template_code==='PRE04'){
+        var grossKeep=job.original_gross_pence,currentKeep=job.current_contract_gross_pence;
+        jobAfter=_r1sApplyPre04Verification(s,job,a.id,now,r.command_id,pre04VerifiedPence);
+        if(jobAfter.original_gross_pence!==grossKeep||jobAfter.current_contract_gross_pence!==currentKeep)_r1sErr('R1A_FINANCIAL_MUTATION');
+      }
     }
     if(t.job_id&&['PRE01','PRE02','PRE03','PRE04','PRE05'].indexOf(t.template_code)>=0){readiness=_r1sReevaluatePrebooking(s,t.job_id,a.id,r.command_id,now);jobAfter=s.get('Jobs',t.job_id);}
-    _r1sInsertAudit(s,'AE-R1A-'+r.command_id,'Tasks',t.id,'Complete',t,after,a.id,r.command_id,p.completion_note,'R1 AppSheet/S04',now);s.update('CommitJournal',jid,{state:'Committed',committed_at:now});return{status:'Completed',task:s.get('Tasks',t.id),job:jobAfter,readiness:readiness&&readiness.readiness||null,external_calls:0};}catch(e){s.update('CommitJournal',jid,{state:'RecoveryRequired'});throw e;}});}
+    _r1sInsertAudit(s,'AE-R1A-'+r.command_id,'Tasks',t.id,'Complete',t,after,a.id,r.command_id,p.completion_note,'R1 AppSheet/S04',now);s.update('CommitJournal',jid,{state:'Committed',committed_at:now});return{status:'Completed',task:s.get('Tasks',t.id),job:jobAfter,invoice_stage:invoiceStage,bank_check:bankCheck,readiness:readiness&&readiness.readiness||null,external_calls:0};}catch(e){s.update('CommitJournal',jid,{state:'RecoveryRequired'});throw e;}});}
 
-/* Legacy repair: attach required evidence to an already-Complete PRE02 with blank evidence_id.
- * Does not reopen the task or alter completed_at / completed_by / completion_note. */
-function _r1sTaskEvidenceAttach(ctx){
-  var r=ctx.request,s=ctx.store,a=ctx.actor,p=_r1sPayload(r,['evidence_path'],['evidence_path']),t=s.get('Tasks',r.task_id),jid='CJ-R1A-'+r.command_id;
+/* Reopen a terminal task (Complete or NotRequired) back to Open for correction.
+ * Preserves completion_note / evidence_id on the task row and all prior TaskEvents/AuditEvents.
+ * Clears completed_at / completed_by only. Gating PRE* reopen re-evaluates ReadyToBook. */
+function _r1sTaskReopen(ctx){
+  var r=ctx.request,s=ctx.store,a=ctx.actor,p=_r1sPayload(r,['reopen_reason'],['reopen_reason']),t=s.get('Tasks',r.task_id),jid='CJ-R1A-'+r.command_id;
   return s.withLock(function(){
     var prior=s.get('CommitJournal',jid);
     if(prior){
@@ -382,10 +719,78 @@ function _r1sTaskEvidenceAttach(ctx){
     t=s.get('Tasks',r.task_id);
     if(!t)_r1sErr('R1A_TASK_NOT_FOUND');
     if(Number(t.version)!==Number(r.expected_version))_r1sErr('R1A_STALE_VERSION');
-    if(t.status!=='Complete')_r1sErr('R1A_TASK_NOT_ATTACHABLE');
-    if(t.template_code!=='PRE02')_r1sErr('R1A_TASK_NOT_ATTACHABLE');
-    if(_r1sText(t.evidence_id))_r1sErr('R1A_EVIDENCE_ALREADY_ATTACHED');
-    if(!t.job_id)_r1sErr('R1A_JOB_NOT_FOUND');
+    if(['Complete','NotRequired'].indexOf(t.status)<0)_r1sErr('R1A_TASK_NOT_REOPENABLE');
+    var now=new Date().toISOString();
+    var before=Object.assign({},t);
+    s.insert('CommitJournal',{id:jid,commit_id:'R1A-'+r.command_id,state:'Prepared',command_id:r.command_id,entity_type:'Tasks',entity_id:t.id,expected_version:r.expected_version,changes_json:JSON.stringify(p),prepared_at:now,committed_at:null,created_at:now});
+    try{
+      var after=Object.assign({},t,{
+        status:'Open',
+        completed_at:null,
+        completed_by:null,
+        updated_at:now,
+        updated_by:a.id,
+        version:Number(t.version)+1,
+        commit_id:'R1A-'+r.command_id
+      });
+      s.update('Tasks',t.id,{
+        status:after.status,
+        completed_at:null,
+        completed_by:null,
+        updated_at:now,
+        updated_by:a.id,
+        version:after.version,
+        commit_id:after.commit_id
+      });
+      after=s.get('Tasks',t.id);
+      if(after.completion_note!==t.completion_note||after.evidence_id!==t.evidence_id)_r1sErr('R1A_TASK_HISTORY_MUTATION');
+      s.insert('TaskEvents',{id:'TE-R1A-'+r.command_id,task_id:t.id,action:'Reopen',old_status:t.status,new_status:'Open',old_owner:t.owner_id,new_owner:t.owner_id,old_due:t.due_at,new_due:t.due_at,reason:p.reopen_reason,actor:a.id,timestamp:now,created_at:now,commit_id:'R1A-'+r.command_id});
+      var jobAfter=t.job_id?s.get('Jobs',t.job_id):null,readiness=null;
+      if(t.job_id&&['PRE01','PRE02','PRE03','PRE04','PRE05'].indexOf(t.template_code)>=0){
+        readiness=_r1sReevaluatePrebooking(s,t.job_id,a.id,r.command_id,now);
+        jobAfter=s.get('Jobs',t.job_id);
+      }
+      _r1sInsertAudit(s,'AE-R1A-'+r.command_id,'Tasks',t.id,'Reopen',before,after,a.id,r.command_id,p.reopen_reason,'R1 AppSheet/S04',now);
+      s.update('CommitJournal',jid,{state:'Committed',committed_at:now});
+      return{status:'Reopened',task:s.get('Tasks',t.id),job:jobAfter,readiness:readiness&&readiness.readiness||null,external_calls:0};
+    }catch(e){s.update('CommitJournal',jid,{state:'RecoveryRequired'});throw e;}
+  });
+}
+
+/* TASK_EVIDENCE_ATTACH: signed-contract evidence for PRE02 only (every other template is refused).
+ *  Pending: PRE02 Open/Waiting/InProgress (not revision_required). Uploads the signed contract BEFORE completion:
+ *    creates/reuses the canonical Evidence row (category Contract, keyed by job + Drive file) and stores its id on
+ *    Tasks.evidence_id (version + 1) so the Complete Task form and TASK_COMPLETE consume it. It does NOT complete
+ *    PRE02, stamp Jobs contract fields or re-evaluate readiness: PRE02 TASK_COMPLETE (contract_id +
+ *    contract_signed=Yes + valid job Evidence) remains the only signed-contract transition. A later upload replaces
+ *    Tasks.evidence_id; earlier Evidence rows are kept.
+ *  Repair: PRE02 Complete with blank evidence_id (completed before evidence existed). Attaches evidence, applies
+ *    the PRE02 Jobs contract stamps and re-evaluates readiness without changing completion fields. */
+function _r1sPre02AttachMode(t){
+  if(!t||t.template_code!=='PRE02')return null;
+  if(t.status==='Complete')return _r1sText(t.evidence_id)?'AlreadyAttached':'Repair';
+  if(['Open','Waiting','InProgress'].indexOf(t.status)>=0&&t.revision_required!==true)return 'Pending';
+  return null;
+}
+function _r1sTaskEvidenceAttach(ctx){
+  var r=ctx.request,s=ctx.store,a=ctx.actor,p=_r1sPayload(r,['evidence_path'],['evidence_path']),t=s.get('Tasks',r.task_id),jid='CJ-R1A-'+r.command_id;
+  return s.withLock(function(){
+    var prior=s.get('CommitJournal',jid);
+    if(prior){
+      if(prior.entity_type!=='Tasks'||prior.entity_id!==r.task_id||prior.changes_json!==JSON.stringify(p))_r1sErr('R1A_COMMAND_CONFLICT');
+      if(prior.state!=='Committed')_r1sErr('R1A_RECOVERY_REQUIRED');
+      /* The committed audit's before-state records which mode ran, so a replay reports the same outcome. */
+      var priorAudit=s.get('AuditEvents','AE-R1A-'+r.command_id),pendingReplay=false;
+      try{pendingReplay=!!priorAudit&&JSON.parse(priorAudit.before_json||'{}').status!=='Complete';}catch(e){pendingReplay=false;}
+      return{status:'Replayed',completion_required:pendingReplay,task:s.get('Tasks',r.task_id),job:t&&t.job_id?s.get('Jobs',t.job_id):null,external_calls:0};
+    }
+    t=s.get('Tasks',r.task_id);
+    if(!t)_r1sErr('R1A_TASK_NOT_FOUND');
+    if(Number(t.version)!==Number(r.expected_version))_r1sErr('R1A_STALE_VERSION');
+    var mode=_r1sPre02AttachMode(t);
+    if(!mode)_r1sErr('R1A_TASK_NOT_ATTACHABLE');
+    if(mode==='AlreadyAttached')_r1sErr('R1A_EVIDENCE_ALREADY_ATTACHED');
+    if(!t.job_id||!s.get('Jobs',t.job_id))_r1sErr('R1A_JOB_NOT_FOUND');
     var upload=_r1sResolveEvidencePath(p.evidence_path,ctx);
     var now=new Date().toISOString();
     var before={
@@ -404,11 +809,17 @@ function _r1sTaskEvidenceAttach(ctx){
         commit_id:'R1A-'+r.command_id
       });
       var after=s.get('Tasks',t.id);
-      if(after.status!=='Complete'||after.completed_at!==t.completed_at||after.completed_by!==t.completed_by||after.completion_note!==t.completion_note)_r1sErr('R1A_TASK_COMPLETION_MUTATION');
-      s.insert('TaskEvents',{id:'TE-R1A-'+r.command_id,task_id:t.id,action:'EvidenceAttach',old_status:t.status,new_status:t.status,old_owner:t.owner_id,new_owner:t.owner_id,old_due:t.due_at,new_due:t.due_at,reason:'TASK_EVIDENCE_ATTACH',actor:a.id,timestamp:now,created_at:now,commit_id:'R1A-'+r.command_id});
+      if(after.status!==t.status||after.completed_at!==t.completed_at||after.completed_by!==t.completed_by||after.completion_note!==t.completion_note)_r1sErr('R1A_TASK_COMPLETION_MUTATION');
+      s.insert('TaskEvents',{id:'TE-R1A-'+r.command_id,task_id:t.id,action:'EvidenceAttach',old_status:t.status,new_status:t.status,old_owner:t.owner_id,new_owner:t.owner_id,old_due:t.due_at,new_due:t.due_at,reason:mode==='Pending'?'TASK_EVIDENCE_ATTACH:PendingCompletion':'TASK_EVIDENCE_ATTACH',actor:a.id,timestamp:now,created_at:now,commit_id:'R1A-'+r.command_id});
+      if(mode==='Pending'){
+        var jobPending=s.get('Jobs',t.job_id);
+        _r1sInsertAudit(s,'AE-R1A-'+r.command_id,'Tasks',t.id,'EvidenceAttach',before,after,a.id,r.command_id,p.evidence_path,'R1 AppSheet/S04',now);
+        s.update('CommitJournal',jid,{state:'Committed',committed_at:now});
+        return{status:'EvidenceUploaded',completion_required:true,task:s.get('Tasks',t.id),job:jobPending,evidence_id:evidenceId,evidence_created:!!ensured.created,readiness:null,external_calls:0};
+      }
       var job=s.get('Jobs',t.job_id);if(!job)_r1sErr('R1A_JOB_NOT_FOUND');
       var grossBefore=job.original_gross_pence;
-      var jobAfter=_r1sApplyPre02Contract(s,job,a.id,evidenceId,now,r.command_id);
+      var jobAfter=_r1sApplyPre02Contract(s,job,a.id,evidenceId,now,r.command_id,job.contract_id);
       if(jobAfter.original_gross_pence!==grossBefore)_r1sErr('R1A_FINANCIAL_MUTATION');
       var readiness=_r1sReevaluatePrebooking(s,t.job_id,a.id,r.command_id,now);
       jobAfter=s.get('Jobs',t.job_id);
@@ -492,8 +903,21 @@ function _r1sChangeInstaller(ctx){var r=ctx.request,p=_r1sPayload(r,['mode','per
 function _r1sCancel(ctx){var r=ctx.request,p=_r1sPayload(r,['reason','effective_date','work_performed','material_state','scaffold_state','finance_review','legacy_state'],['reason','effective_date','work_performed','material_state','scaffold_state','finance_review','legacy_state']);return _s15Execute('Cancel',Object.assign({command_id:r.command_id,job_id:r.job_id,expected_version:r.expected_version,actor:ctx.actor.id},p),ctx.store);}
 function _r1sReinstate(ctx){var r=ctx.request,p=_r1sPayload(r,['reason','new_date','risk_review','commitment_review','finance_review','evidence_reference'],['reason','new_date','commitment_review','finance_review','evidence_reference']);return _s15Execute('Reinstate',Object.assign({command_id:r.command_id,job_id:r.job_id,expected_version:r.expected_version,actor:ctx.actor.id},p),ctx.store);}
 
-function _r1sDepositConfirm(ctx){var r=ctx.request,s=ctx.store,a=ctx.actor,p=_r1sPayload(r,['reference'],['reference']);
-  return s.withLock(function(){var job=s.get('Jobs',r.job_id);if(!job)_r1sErr('R1A_STALE_VERSION');if(job.deposit_bank_confirmed_at)return{status:'AlreadyConfirmed',deposit:{ok:true,confirmed:false,reason:'Already confirmed'},job:job,readiness:null,external_calls:0};if(Number(job.version)!==Number(r.expected_version))_r1sErr('R1A_STALE_VERSION');if(typeof confirmDeposit!=='function')_r1sErr('R1A_COMMAND_UNSUPPORTED');var before=job,res=confirmDeposit(s,r.job_id,a.id,p.reference),now=new Date().toISOString(),readiness=res&&res.confirmed?_r1sReevaluatePrebooking(s,r.job_id,a.id,r.command_id,now):null,after=s.get('Jobs',r.job_id);_r1sInsertAudit(s,'AE-R1A-'+r.command_id,'Jobs',r.job_id,'DepositConfirm',before,after,a.id,r.command_id,p.reference,'R1 AppSheet/S13',now);return{status:res&&res.confirmed?'Confirmed':(res&&res.ok?'AlreadyConfirmed':'Failed'),deposit:res,job:after,readiness:readiness&&readiness.readiness||null,external_calls:0};});}
+/* Legacy DEPOSIT_CONFIRM (Director, FN-15). Retained for the DEVDepositConfirmRequests route, but it is no longer a weaker
+ * path: it requires the same manual bank-verification facts as PRE03 (explicit Yes, GBP amount reconciled server-side
+ * against the deposit InvoiceStage, received date, reference) and writes through the same recorder, so it cannot produce
+ * the Jobs/InvoiceStage summary state without a matching ManualBankChecks row. It never Completes the PRE03 task. */
+function _r1sDepositConfirm(ctx){var r=ctx.request,s=ctx.store,a=ctx.actor,p=_r1sPayload(r,['reference','deposit_bank_confirmed','deposit_amount','deposit_received_date'],['reference','deposit_bank_confirmed','deposit_amount','deposit_received_date']);
+  if(!_r1sYesFlag(p.deposit_bank_confirmed))_r1sErr('R1A_DEPOSIT_NOT_CONFIRMED');
+  var amountPence=_r1sDepositAmountPence(p.deposit_amount,false),receivedAt=_r1sDepositReceivedAt(p.deposit_received_date);
+  return s.withLock(function(){var job=s.get('Jobs',r.job_id);if(!job)_r1sErr('R1A_STALE_VERSION');
+    if(job.deposit_bank_confirmed_at&&_r1sBankConfirmationValid(s,r.job_id))return{status:'AlreadyConfirmed',deposit:{ok:true,confirmed:false,reason:'Already confirmed'},job:job,readiness:null,external_calls:0};
+    if(Number(job.version)!==Number(r.expected_version))_r1sErr('R1A_STALE_VERSION');
+    var before=job,now=new Date().toISOString();
+    var rec=_r1sRecordDepositConfirmation(s,r.job_id,a.id,amountPence,receivedAt,p.reference,now,r.command_id);
+    var readiness=_r1sReevaluatePrebooking(s,r.job_id,a.id,r.command_id,now),after=s.get('Jobs',r.job_id);
+    _r1sInsertAudit(s,'AE-R1A-'+r.command_id,'Jobs',r.job_id,'DepositConfirm',before,after,a.id,r.command_id,String(p.reference).trim(),'R1 AppSheet/S13',now);
+    return{status:'Confirmed',deposit:{ok:true,confirmed:true,stage_id:rec.stage.id,bank_check_id:rec.bank_check.id},job:after,bank_check:rec.bank_check,readiness:readiness&&readiness.readiness||null,external_calls:0};});}
 
 function _r1sOperationalComplete(ctx){var r=ctx.request,s=ctx.store,a=ctx.actor;_r1sPayload(r,[],[]);
   return s.withLock(function(){var job=s.get('Jobs',r.job_id);if(!job||Number(job.version)!==Number(r.expected_version))_r1sErr('R1A_STALE_VERSION');if(typeof _s10ApproveOperationalCompletion!=='function')_r1sErr('R1A_COMMAND_UNSUPPORTED');var before=job,res=_s10ApproveOperationalCompletion(r.job_id,a.id,s),now=new Date().toISOString(),after=s.get('Jobs',r.job_id);_r1sInsertAudit(s,'AE-R1A-'+r.command_id,'Jobs',r.job_id,'OperationalComplete',before,after,a.id,r.command_id,res&&res.status,'R1 AppSheet/S10',now);return{status:res.status,created:!!res.created,gate:res.gate,ghl_task:res.ghl_task||null,external_calls:0};});}
@@ -789,7 +1213,121 @@ var R1A_ISSUE_CREATE_FIELDS=[
 ];
 var R1A_ISSUE_CREATE_REQUEST_COLUMNS=['id','command_id','job_id','expected_version'].concat(R1A_ISSUE_CREATE_FIELDS.map(function(f){return f.key;})).concat(['result_status','result_issue_id','result_message']);
 
-function _r1sServices(){return{TASK_COMPLETE:_r1sTaskComplete,TASK_EVIDENCE_ATTACH:_r1sTaskEvidenceAttach,CALL_RECORD:_r1sCallRecord,ISSUE_UPDATE:_r1sIssueUpdate,ISSUE_CREATE:_r1sIssueCreate,PLANNER_UPDATE:_r1sPlannerUpdate,MOVE_JOB:_r1sMoveJob,CHANGE_INSTALLER:_r1sChangeInstaller,CANCEL_JOB:_r1sCancel,REINSTATE_JOB:_r1sReinstate,DEPOSIT_CONFIRM:_r1sDepositConfirm,OPERATIONAL_COMPLETE:_r1sOperationalComplete,BOOKING_GATES:_r1sBookingGates,SOLD_INTAKE:_r1sSoldIntake,BOOKING_INTAKE:_r1sBookingIntake};}
+/* ---- PRE03 owner assignment: read-only audit and DEV repair (Admin/Manager only) ----
+ * The canonical owner/backup come from S06 (resolveBankConfirmationOwner/Backup, defined once in s06/gates.js).
+ * Repair changes only Tasks.owner_id on one open PRE03 task: same task id, due dates, backup, status and history;
+ * version + 1; CommitJournal + TaskEvent 'Reassign' + AuditEvent. It never creates, completes or recreates tasks and
+ * does not re-evaluate readiness, because PRE03 gates do not depend on the owner. */
+var R1S_PRE03_REPAIRABLE_STATUSES=['Open','Waiting','InProgress','Blocked'];
+var R1S_PRE03_PRESERVED_FIELDS=['id','job_id','template_code','instance_key','group','title','backup_id','related_entity_type','related_entity_id','due_at','original_due_at','priority','status','blocking_reason','next_followup_at','completed_at','completed_by','completion_note','evidence_id','revision_required','created_rule_version','created_at','created_by','source_system'];
+function _r1sGatesApi(){
+  if(typeof resolveBankConfirmationOwner==='function'&&typeof resolveBankConfirmationBackup==='function')return{owner:resolveBankConfirmationOwner,backup:resolveBankConfirmationBackup};
+  if(typeof require==='function'){try{var g=require('../s06/gates.js');if(g&&typeof g.resolveBankConfirmationOwner==='function')return{owner:g.resolveBankConfirmationOwner,backup:g.resolveBankConfirmationBackup};}catch(e){}}
+  _r1sErr('R1A_COMMAND_UNSUPPORTED');
+}
+function _r1sRequireAdminActor(store,actor){
+  if(!store||typeof store.getEnvironment!=='function'||store.getEnvironment()!=='DEV')_r1sErr('R1A_DEV_ONLY');
+  if(!actor||!Array.isArray(actor.roles)||(actor.roles.indexOf('Admin')<0&&actor.roles.indexOf('Manager')<0))_r1sErr('R1A_ROLE_DENIED');
+}
+function _r1sPersonLabel(store,id){if(!_r1sText(id))return null;var p=store.get('People',id);return p&&_r1sText(p.display_name)?p.display_name.trim():id;}
+function _r1sErrWith(code,diagnostics){var e=new Error(code);e.code=code;e.diagnostics=diagnostics;throw e;}
+/* Identifier text as typed or stored in Sheets: trimmed, zero-width/BOM characters removed, no-break space as space. */
+function _r1sIdKey(v){return String(v===undefined||v===null?'':v).replace(/[\u200B-\u200D\u2060\uFEFF]/g,'').replace(/\u00A0/g,' ').trim();}
+function _r1sStoreInfo(store,info,jobs,tasks){
+  return{spreadsheet_id:typeof store.getSheetId==='function'?store.getSheetId():null,spreadsheet_name:info&&typeof info.spreadsheet_name==='string'?info.spreadsheet_name:null,
+    environment:typeof store.getEnvironment==='function'?store.getEnvironment():null,jobs_rows:jobs.length,tasks_rows:tasks.length};
+}
+/* Explicit job resolution for DEV admin tools. Jobs has two identifiers: public Jobs.job_id (SS-XXXX-0000) and the
+ * internal Jobs.id primary key (J-...). The supplied reference is matched against Jobs.job_id (case-insensitive) and
+ * Jobs.id (exact); it must identify exactly one row. The lookup record never contains customer data. */
+function _r1sResolveJobRef(jobs,ref){
+  var supplied=ref===undefined||ref===null?null:String(ref),key=_r1sIdKey(supplied);
+  var lookup={supplied_job_ref:supplied,normalized_job_ref:key||null,public_id_matches:0,internal_id_matches:0,matched_by:null,normalized_match:false,resolved_job_internal_id:null,resolved_public_job_id:null};
+  if(!key)_r1sErrWith('R1A_JOB_REF_REQUIRED',{lookup:lookup,hint:'Pass the public job ID (for example SS-SEXL-5961) or the internal Jobs.id. From the Apps Script editor run a no-argument wrapper such as runR1ARepairPre03AssignmentSSSEXL5961DryRun.'});
+  var upper=key.toUpperCase();
+  var byPublic=jobs.filter(function(j){var v=_r1sIdKey(j.job_id);return v!==''&&v.toUpperCase()===upper;});
+  var byInternal=jobs.filter(function(j){return _r1sIdKey(j.id)===key;});
+  var rows={};byPublic.concat(byInternal).forEach(function(j){rows[_r1sIdKey(j.id)]=j;});
+  var ids=Object.keys(rows);
+  lookup.public_id_matches=byPublic.length;lookup.internal_id_matches=byInternal.length;
+  if(ids.length>1)_r1sErrWith('R1A_JOB_AMBIGUOUS',{lookup:lookup});
+  if(!ids.length)_r1sErrWith('R1A_JOB_NOT_FOUND',{lookup:lookup});
+  var job=rows[ids[0]],matchedValue=byPublic.length?job.job_id:job.id;
+  lookup.matched_by=byPublic.length?'Jobs.job_id':'Jobs.id';
+  lookup.normalized_match=String(matchedValue)!==_r1sIdKey(matchedValue)||(supplied!==null&&supplied.trim()!==key);
+  /* Cleaned values: normalized_match says whether hidden characters were ignored to find them. */
+  lookup.resolved_job_internal_id=_r1sIdKey(job.id);
+  lookup.resolved_public_job_id=_r1sIdKey(job.job_id)||null;
+  return{job:job,lookup:lookup};
+}
+function _r1sPre03Row(store,t,job,owner,backup){
+  var open=R1S_PRE03_REPAIRABLE_STATUSES.indexOf(t.status)>=0;
+  return{job_id:job.id,job_id_human:job.job_id||null,task_id:t.id,task_status:t.status,task_version:Number(t.version),due_at:t.due_at||null,
+    current_owner_id:t.owner_id||null,current_owner_name:_r1sPersonLabel(store,t.owner_id),canonical_owner_id:owner,canonical_owner_name:_r1sPersonLabel(store,owner),
+    current_backup_id:t.backup_id||null,current_backup_name:_r1sPersonLabel(store,t.backup_id),canonical_backup_id:backup||null,canonical_backup_name:_r1sPersonLabel(store,backup),
+    backup_matches:(t.backup_id||null)===(backup||null),
+    action:t.owner_id===owner?'AlreadyCorrect':(open?'Reassign':'NotRepairable')};
+}
+/* 1 resolve job (Jobs.job_id or Jobs.id)  2 canonical Jobs.id  3 PRE03 by Tasks.job_id = Jobs.id + template_code
+ * 4 exactly one  5-6 status and owner/backup checked by the caller. diagnostics prove store, lookup and task. Read-only. */
+function _r1sPre03AssignmentPlan(store,jobRef,info){
+  var jobs=store.list('Jobs')||[],tasks=store.list('Tasks')||[];
+  var diagnostics={store:_r1sStoreInfo(store,info,jobs,tasks)};
+  function withDiagnostics(e,extra){e.diagnostics=Object.assign({},diagnostics,e.diagnostics||{},extra||{});return e;}
+  var resolved;
+  try{resolved=_r1sResolveJobRef(jobs,jobRef);}catch(e){throw withDiagnostics(e);}
+  var job=resolved.job,jobKey=_r1sIdKey(job.id);
+  diagnostics.lookup=resolved.lookup;
+  if(job.pilot_job!==true||job.release_scope!=='R1')_r1sErrWith('R1A_OUTSIDE_PILOT',diagnostics);
+  if(job.finance_route!=='Standard')_r1sErrWith('R1A_PRE03_NOT_APPLICABLE',diagnostics);
+  var pre03=tasks.filter(function(t){return _r1sIdKey(t.job_id)===jobKey&&t.template_code==='PRE03';});
+  diagnostics.pre03={match_rule:"Tasks.job_id = Jobs.id AND Tasks.template_code = 'PRE03'",task_ids:pre03.map(function(t){return t.id;}),task_statuses:pre03.map(function(t){return t.status;}),task_id:pre03.length===1?pre03[0].id:null};
+  if(!pre03.length)_r1sErrWith('R1A_PRE03_MISSING',diagnostics);
+  if(pre03.length>1)_r1sErrWith('R1A_PRE03_AMBIGUOUS',diagnostics);
+  var api=_r1sGatesApi(),row;
+  try{row=_r1sPre03Row(store,pre03[0],job,api.owner(store),api.backup(store));}catch(e){throw withDiagnostics(e);}
+  row.diagnostics=diagnostics;
+  return row;
+}
+function _r1sPre03AssignmentAudit(store,actor,info){
+  _r1sRequireAdminActor(store,actor);
+  var api=_r1sGatesApi(),owner=api.owner(store),backup=api.backup(store),jobRows=store.list('Jobs')||[],taskRows=store.list('Tasks')||[],jobs={};
+  jobRows.forEach(function(j){jobs[_r1sIdKey(j.id)]=j;});
+  var rows=taskRows.filter(function(t){var j=jobs[_r1sIdKey(t.job_id)];return t.template_code==='PRE03'&&!!j&&j.pilot_job===true&&j.release_scope==='R1';}).map(function(t){return _r1sPre03Row(store,t,jobs[_r1sIdKey(t.job_id)],owner,backup);});
+  return{ok:true,environment:'DEV',diagnostics:{store:_r1sStoreInfo(store,info,jobRows,taskRows)},canonical_owner_id:owner,canonical_owner_name:_r1sPersonLabel(store,owner),canonical_backup_id:backup||null,canonical_backup_name:_r1sPersonLabel(store,backup),
+    checked:rows.length,misassigned:rows.filter(function(r){return r.action!=='AlreadyCorrect';}),backup_mismatches:rows.filter(function(r){return !r.backup_matches;}),external_calls:0};
+}
+function _r1sRepairPre03Assignment(store,actor,input){
+  _r1sRequireAdminActor(store,actor);
+  input=input||{};
+  var apply=input.apply===true;
+  return store.withLock(function(){
+    var plan=_r1sPre03AssignmentPlan(store,input.job_ref,input.store_info);
+    var diagnostics=plan.diagnostics;delete plan.diagnostics;
+    var out={ok:true,environment:'DEV',dry_run:!apply,applied:false,actor_id:actor.id,diagnostics:diagnostics,plan:plan,external_calls:0};
+    if(!apply){out.status='DryRun';return out;}
+    if(plan.action==='NotRepairable')_r1sErr('R1A_PRE03_NOT_OPEN');
+    if(plan.action==='AlreadyCorrect'){out.status='AlreadyCorrect';return out;}
+    var t=store.get('Tasks',plan.task_id),cmd='PRE03-OWNER-REPAIR-'+t.id+'-V'+Number(t.version),jid='CJ-R1A-'+cmd,now=new Date().toISOString();
+    /* A journal for this exact task version with the owner still wrong means an earlier attempt did not finish. */
+    if(store.get('CommitJournal',jid))_r1sErr('R1A_RECOVERY_REQUIRED');
+    var reason='PRE03 owner repair: '+(plan.current_owner_name||plan.current_owner_id||'unassigned')+' -> '+plan.canonical_owner_name+' (canonical bank confirmation owner)';
+    store.insert('CommitJournal',{id:jid,commit_id:'R1A-'+cmd,state:'Prepared',command_id:cmd,entity_type:'Tasks',entity_id:t.id,expected_version:Number(t.version),changes_json:JSON.stringify({owner_id:plan.canonical_owner_id,from_owner_id:t.owner_id||null}),prepared_at:now,committed_at:null,created_at:now});
+    try{
+      store.update('Tasks',t.id,{owner_id:plan.canonical_owner_id,updated_at:now,updated_by:actor.id,version:Number(t.version)+1,commit_id:'R1A-'+cmd});
+      var after=store.get('Tasks',t.id);
+      R1S_PRE03_PRESERVED_FIELDS.forEach(function(k){if(JSON.stringify(after[k])!==JSON.stringify(t[k]))_r1sErr('R1A_TASK_HISTORY_MUTATION');});
+      if(after.owner_id!==plan.canonical_owner_id||Number(after.version)!==Number(t.version)+1)_r1sErr('R1A_TASK_HISTORY_MUTATION');
+      store.insert('TaskEvents',{id:'TE-R1A-'+cmd,task_id:t.id,action:'Reassign',old_status:t.status,new_status:after.status,old_owner:t.owner_id||null,new_owner:after.owner_id,old_due:t.due_at||null,new_due:after.due_at||null,reason:reason,actor:actor.id,timestamp:now,created_at:now,commit_id:'R1A-'+cmd});
+      _r1sInsertAudit(store,'AE-R1A-'+cmd,'Tasks',t.id,'Reassign',t,after,actor.id,cmd,reason,'R1 AppSheet/S06 PRE03 owner repair',now);
+      store.update('CommitJournal',jid,{state:'Committed',committed_at:now});
+    }catch(e){store.update('CommitJournal',jid,{state:'RecoveryRequired'});throw e;}
+    out.applied=true;out.status='Reassigned';out.command_id=cmd;out.task=store.get('Tasks',plan.task_id);
+    return out;
+  });
+}
+
+function _r1sServices(){return{TASK_COMPLETE:_r1sTaskComplete,TASK_REOPEN:_r1sTaskReopen,TASK_EVIDENCE_ATTACH:_r1sTaskEvidenceAttach,CALL_RECORD:_r1sCallRecord,ISSUE_UPDATE:_r1sIssueUpdate,ISSUE_CREATE:_r1sIssueCreate,PLANNER_UPDATE:_r1sPlannerUpdate,MOVE_JOB:_r1sMoveJob,CHANGE_INSTALLER:_r1sChangeInstaller,CANCEL_JOB:_r1sCancel,REINSTATE_JOB:_r1sReinstate,DEPOSIT_CONFIRM:_r1sDepositConfirm,OPERATIONAL_COMPLETE:_r1sOperationalComplete,BOOKING_GATES:_r1sBookingGates,SOLD_INTAKE:_r1sSoldIntake,BOOKING_INTAKE:_r1sBookingIntake};}
 
 
 /* DEV AppSheet operations boundary. Request rows are input only; authenticated actor is supplied separately.
@@ -985,6 +1523,8 @@ var R1C_REQUEST_HEADERS = {
   DEVGoodsInRequestLines: ['id','request_id','order_line_id','quantity_good','quantity_damaged','quantity_short','evidence_id'],
   DEVStockCommandRequests: ['id','command_id','command_type','product_id','expected_version','expected_balance','quantity','reason','evidence_id','submitted_by','status']
 };
+/* Optional result columns written by command-result.js. Provisioning adds them; reads never require them. */
+var R1C_RESULT_COLUMNS = ['result_status','result_message','result_code','result','result_at'];
 function _r1cContracts() { return typeof R1C_COMMANDS !== 'undefined' ? R1C_COMMANDS : require('./operations-contract.js').R1C_COMMANDS; }
 function _r1cRequestTable(type) { if(!_r1cContracts()[type])return null;return type==='GOODS_IN_RECEIVE'?'DEVGoodsInRequests':type==='STOCK_QUARANTINE'?'DEVStockCommandRequests':'DEVInstallerCommandRequests'; }
 function _r1cRequestError(code){var e=new Error(code);e.code=code;throw e;}
@@ -1079,7 +1619,7 @@ function _r1cReadCloud(request,actorEmail){
 }
 function _r1cProvision(ss,apply){
   if(ss.getId()!==R1A_REQUEST_DEV_SHEET)_r1cRequestError('R1C_DEV_ONLY');
-  var plans=Object.keys(R1C_REQUEST_HEADERS).map(function(name){var matches=ss.getSheets().filter(function(sh){return sh.getName()===name;});if(matches.length>1)_r1cRequestError('R1C_REQUEST_SCHEMA');var sh=matches[0],h=sh&&sh.getLastColumn()?sh.getRange(1,1,1,sh.getLastColumn()).getValues()[0]:[];if(h.some(function(k,i){return !k||h.indexOf(k)!==i;}))_r1cRequestError('R1C_REQUEST_SCHEMA');return {table:name,create:!sh,missing_columns:R1C_REQUEST_HEADERS[name].filter(function(k){return h.indexOf(k)<0;}),existing_columns:h};});
+  var plans=Object.keys(R1C_REQUEST_HEADERS).map(function(name){var matches=ss.getSheets().filter(function(sh){return sh.getName()===name;});if(matches.length>1)_r1cRequestError('R1C_REQUEST_SCHEMA');var sh=matches[0],h=sh&&sh.getLastColumn()?sh.getRange(1,1,1,sh.getLastColumn()).getValues()[0]:[];if(h.some(function(k,i){return !k||h.indexOf(k)!==i;}))_r1cRequestError('R1C_REQUEST_SCHEMA');return {table:name,create:!sh,missing_columns:R1C_REQUEST_HEADERS[name].concat(name==='DEVGoodsInRequestLines'?[]:R1C_RESULT_COLUMNS).filter(function(k){return h.indexOf(k)<0;}),existing_columns:h};});
   if(apply)plans.forEach(function(p){var sh=ss.getSheets().filter(function(x){return x.getName()===p.table;})[0]||ss.insertSheet(p.table);if(p.missing_columns.length){var start=p.existing_columns.length+1,needed=start+p.missing_columns.length-1;if(sh.getMaxColumns()<needed)sh.insertColumnsAfter(sh.getMaxColumns(),needed-sh.getMaxColumns());sh.getRange(1,start,1,p.missing_columns.length).setValues([p.missing_columns]);}var headers=p.existing_columns.concat(p.missing_columns);headers.forEach(function(k,i){if(['expected_version','expected_submission_version','line_count','quantity','expected_balance','quantity_good','quantity_damaged','quantity_short','value_number','value_boolean','actual_end','value_date'].indexOf(k)<0)sh.getRange(2,i+1,sh.getMaxRows()-1,1).setNumberFormat('@');});});
   return {ok:true,applied:!!apply,tables:plans};
 }
@@ -1087,9 +1627,430 @@ function _r1cProvisionCloud(apply){_r1cConfigGuard();var options=_r1aCloudOption
 function runR1CRequestProvisionCheck(){return _r1cProvisionCloud(false);}
 function runR1CProvisionRequestTables(){return _r1cProvisionCloud(true);}
 
+/* R1 command result feedback (DEV only).
+ *
+ * Apps Script "Success" only means the bot function returned. Business success is the parsed command response:
+ *   {ok:true,result:{status:...}}  or  {ok:false,error:'R1A_…'}.
+ * This module turns that response into a staff-facing outcome and writes it back onto the originating AppSheet
+ * request row. It is shared by appSheetR1CommandFromRequestRow (request-row.js), appSheetR1Command (JSON path)
+ * and the upload retry (upload-retry.js), so every path uses one vocabulary:
+ *   Succeeded | FollowUpRequired | ActionRequired | Failed | UploadPending
+ * Internal codes stay in result_code / result for diagnostics and are never the primary message.
+ * Writes only result_* columns (never inputs or `status`), only on rows owned by the acting user, and never
+ * replaces a final Succeeded / FollowUpRequired outcome. */
+'use strict';
+var R1R_DEV_SHEET_ID = '1z7PNZtDdC4Z5eLbmTuQdqp0QpJSmuEvx3QvN3VyNTsc';
+var R1R_STATUSES = ['Succeeded', 'FollowUpRequired', 'ActionRequired', 'Failed', 'UploadPending'];
+var R1R_FINAL_STATUSES = ['Succeeded', 'FollowUpRequired'];
+var R1R_HEADINGS = { Succeeded: 'SUCCESS', FollowUpRequired: 'SAVED – FOLLOW-UP NEEDED', ActionRequired: 'ACTION REQUIRED', Failed: 'COULD NOT COMPLETE', UploadPending: 'UPLOAD PROCESSING' };
+var R1R_RESULT_COLUMNS = ['result_status', 'result_message', 'result_code', 'result', 'result_at'];
+var R1R_EXTRA_COLUMNS = ['result_job_id', 'result_job_id_human', 'result_version', 'result_workflow_stage', 'result_issue_id', 'result_stage_id'];
+
+var R1R_MSG = {
+  STALE: 'This record changed after you opened the form. Go back, refresh, and try again.',
+  PERMISSION: "You don't have permission to do this. Ask the task owner or an administrator.",
+  TASK_PERMISSION: 'Only the task owner, their backup, or an administrator can do this.',
+  IDENTITY: "This request was submitted by a different user, so it wasn't processed.",
+  SIGN_IN: "Your sign-in isn't set up for this app. Ask an administrator to check your staff record.",
+  MODE: 'This action is switched off at the moment. Ask an administrator.',
+  PILOT: "This job isn't part of the R1 pilot, so this action isn't available.",
+  CONFIG: 'The app setup needs attention before this can run. Tell an administrator.',
+  RECOVERY: "An earlier change to this record didn't finish. An administrator needs to check it before you try again.",
+  CONFLICT: 'This request clashes with an earlier request that used the same ID. Start a new request from the task or job.',
+  NOT_FOUND: "The record couldn't be found. Go back, refresh, and try again.",
+  NOT_READY: "This request wasn't marked as ready, so it wasn't processed.",
+  INVALID: "Some of the information entered isn't valid. Check the form and try again.",
+  DATE: "A date entered isn't valid. Check the dates and try again.",
+  NOT_ACTIONABLE: 'This job is cancelled or archived, so no changes can be made.',
+  UPLOAD_PENDING: "Your file is still uploading. The system will retry automatically, so you don't need to resubmit.",
+  UNKNOWN: "The request couldn't be completed. Tell an administrator."
+};
+
+function _r1rA(message) { return ['ActionRequired', message]; }
+function _r1rF(message) { return ['Failed', message]; }
+var R1R_ERRORS = {
+  /* Task completion inputs */
+  R1A_REQUIRED_COMPLETION_NOTE: _r1rA('A completion note is required. Add a note and try again.'),
+  R1A_REQUIRED_EVIDENCE_ID: _r1rA('Signed contract evidence is required. Add the signed contract evidence and try again.'),
+  R1A_REQUIRED_EVIDENCE_PATH: _r1rA('Upload the signed contract file and try again.'),
+  R1A_REQUIRED_CONTRACT_EVIDENCE: _r1rA("The contract evidence doesn't match a file saved for this job. Upload the signed contract file and try again."),
+  R1A_CROSS_JOB_EVIDENCE: _r1rA('That evidence belongs to a different job. Add the evidence for this job and try again.'),
+  R1C_CROSS_JOB_EVIDENCE: _r1rA('That evidence belongs to a different job. Add the evidence for this job and try again.'),
+  R1A_EVIDENCE_AMBIGUOUS: _r1rA('More than one saved file matches that evidence. Upload the signed contract file directly and try again.'),
+  R1A_EVIDENCE_CONFLICT: _r1rA("The uploaded file and the evidence reference don't match. Use one of them and try again."),
+  R1A_EVIDENCE_ALREADY_ATTACHED: _r1rF('Contract evidence is already attached to this task, so nothing was changed.'),
+  R1A_REQUIRED_CONTRACT_ID: _r1rA('The contract reference is required. Enter the Signable or contract reference and try again.'),
+  R1A_REQUIRED_CONTRACT_SIGNED: _r1rA('Say whether the contract is signed. Choose Yes or No and try again.'),
+  R1A_CONTRACT_ALREADY_SIGNED: _r1rF('This contract is already recorded as signed, so it was not changed to sent.'),
+  R1A_REQUIRED_INVOICE_NUMBER: _r1rA('The deposit invoice number is required. Enter the invoice number and try again.'),
+  R1A_REQUIRED_INVOICE_SENT: _r1rA('Confirm the deposit invoice was sent by choosing Yes, or set the outcome to Failed if it could not be sent.'),
+  R1A_REQUIRED_DEPOSIT_BANK_CONFIRMED: _r1rA('Say whether the deposit has been seen in the bank. Choose Yes or No and try again.'),
+  R1A_REQUIRED_DEPOSIT_AMOUNT: _r1rA('Enter the deposit amount shown in the bank and try again.'),
+  R1A_INVALID_DEPOSIT_AMOUNT: _r1rA("The deposit amount isn't valid. Enter pounds and pence, for example 2612.95."),
+  R1A_REQUIRED_DEPOSIT_RECEIVED_DATE: _r1rA('Enter the date the deposit was received and try again.'),
+  R1A_INVALID_DEPOSIT_RECEIVED_DATE: _r1rA("The deposit received date isn't valid. Enter a real date that isn't in the future."),
+  R1A_REQUIRED_DEPOSIT_BANK_REFERENCE: _r1rA('Enter the bank payment reference and try again.'),
+  R1A_DEPOSIT_NOT_CONFIRMED: _r1rA('The deposit can only be confirmed once it has been seen in the bank. Choose Yes when it has arrived.'),
+  R1A_DEPOSIT_AMOUNT_MISMATCH: _r1rA("The amount entered doesn't match the expected deposit for this job. Check the bank amount and try again."),
+  R1A_DEPOSIT_STAGE_MISSING: _r1rF("This job doesn't have a deposit invoice set up yet. Ask an administrator to check the job's invoices."),
+  R1A_DEPOSIT_AMOUNT_REQUIRED: _r1rF("This job doesn't have a deposit amount set up yet. Ask an administrator to check the job's invoices."),
+  R1A_REQUIRED_CUSTOMER_DETAILS_VERIFIED: _r1rA('Say whether the customer details are correct. Choose Yes or No and try again.'),
+  R1A_REQUIRED_SOLD_VALUE_VERIFIED: _r1rA('Say whether the sold value is correct. Choose Yes or No and try again.'),
+  R1A_REQUIRED_VERIFIED_GROSS_AMOUNT: _r1rA('Enter the verified contract value in pounds and try again.'),
+  R1A_VERIFIED_AMOUNT_MISMATCH: _r1rA("The verified value doesn't match the job's contract value. Check the amount and try again."),
+  R1A_SOLD_VALUE_REQUIRED: _r1rF("This job doesn't have a sold value recorded. Ask an administrator to check the job."),
+  R1A_REQUIRED_REOPEN_REASON: _r1rA('A reason is required to reopen a task. Add the reason and try again.'),
+  R1A_TASK_NOT_COMPLETABLE: _r1rA("This task can't be completed in its current state. It may already be complete. Go back and check the task."),
+  R1A_TASK_NOT_REOPENABLE: _r1rA('Only completed or not-required tasks can be reopened. Go back and check the task.'),
+  R1A_TASK_NOT_ATTACHABLE: _r1rA('Contract evidence can only be added to an open contract task, or to a completed one that has no evidence yet.'),
+  /* Other office commands */
+  R1A_REQUIRED_OWNER_ID: _r1rA('Choose the new owner and try again.'),
+  R1A_REQUIRED_OLD_ALLOCATION_ID: _r1rA('Choose the allocation to change and try again.'),
+  R1A_REQUIRED_ACTIVITIES: _r1rA('Choose at least one activity to move and try again.'),
+  R1A_INVALID_DATE: _r1rA("A date entered isn't valid. Check the dates and try again."),
+  R1A_INVALID_INTEGER: _r1rA('A number entered must be a whole number. Check the form and try again.'),
+  R1A_INVALID_BOOLEAN: _r1rA('A Yes/No answer is missing or not valid. Check the form and try again.'),
+  R1A_INVALID_GROSS_AMOUNT: _r1rA("The amount isn't valid. Enter pounds and pence, for example 10451.78."),
+  R1A_INVALID_FINANCE_ROUTE: _r1rA('Choose a finance route: Standard, Phoenix or OtherReview.'),
+  R1A_INVALID_ISSUE_TYPE: _r1rA('Choose an issue type: Variation, Remedial or Complaint.'),
+  R1A_INVALID_SEVERITY: _r1rA('Choose a severity: Normal or Medium.'),
+  R1A_INVALID_CUSTOMER_IMPACT: _r1rA('Say whether the customer is affected. Choose Yes or No.'),
+  R1A_INVALID_FIELDS: _r1rF('The form sent information this action does not accept. Ask an administrator to check the form setup.'),
+  R1A_SALESPERSON_NOT_FOUND: _r1rA("The salesperson couldn't be found. Choose an active salesperson and try again."),
+  R1A_CUSTOMER_OVERWRITE: _r1rA("The customer details don't match the existing job. Check them in Intake Review."),
+  R1A_JOB_LINK_MISMATCH: _r1rA("This request doesn't match the selected job. Start again from the job."),
+  R1A_JOB_ID_INVALID: _r1rA("The job reference isn't valid. Start again from the job."),
+  R1A_TASK_JOB_MISMATCH: _r1rA("That task doesn't belong to this job. Start again from the job."),
+  R1A_ISSUE_JOB_MISMATCH: _r1rA("That issue doesn't belong to this job. Start again from the job."),
+  R1A_WORK_PACKAGE_JOB_MISMATCH: _r1rA("That work package doesn't belong to this job. Start again from the job."),
+  R1A_STAGE_NOT_ELIGIBLE: _r1rA("This job isn't at a stage where this action is allowed."),
+  R1A_JOB_NOT_ACTIONABLE: _r1rF(R1R_MSG.NOT_ACTIONABLE),
+  R1C_JOB_NOT_ACTIONABLE: _r1rF(R1R_MSG.NOT_ACTIONABLE),
+  /* Identity, permission, scope */
+  R1A_ACTOR_MISMATCH: _r1rF(R1R_MSG.IDENTITY), R1C_ACTOR_MISMATCH: _r1rF(R1R_MSG.IDENTITY), R1U_ACTOR_MISMATCH: _r1rF(R1R_MSG.IDENTITY),
+  R1A_AUTHENTICATED_EMAIL_REQUIRED: _r1rF(R1R_MSG.SIGN_IN), R1C_AUTHENTICATED_EMAIL_REQUIRED: _r1rF(R1R_MSG.SIGN_IN), R1U_AUTHENTICATED_EMAIL_REQUIRED: _r1rF(R1R_MSG.SIGN_IN),
+  R1A_UNKNOWN_OR_DUPLICATE_ACTOR: _r1rF(R1R_MSG.SIGN_IN), R1A_INACTIVE_ACTOR: _r1rF(R1R_MSG.SIGN_IN), R1A_NO_ACTIVE_ROLE: _r1rF(R1R_MSG.SIGN_IN),
+  R1A_TASK_ACCESS_DENIED: _r1rF(R1R_MSG.TASK_PERMISSION),
+  R1A_OUTSIDE_PILOT: _r1rF(R1R_MSG.PILOT), R1C_PILOT_REQUIRED: _r1rF(R1R_MSG.PILOT),
+  R1A_MODE_MISSING: _r1rF(R1R_MSG.MODE),
+  /* Request row / idempotency / recovery */
+  R1A_STALE_VERSION: _r1rA(R1R_MSG.STALE), R1C_STALE_VERSION: _r1rA(R1R_MSG.STALE),
+  R1C_STALE_SUBMISSION: _r1rA('The commissioning form changed after you opened it. Go back, refresh, and try again.'),
+  R1A_COMMAND_CONFLICT: _r1rF(R1R_MSG.CONFLICT), R1C_COMMAND_CONFLICT: _r1rF(R1R_MSG.CONFLICT),
+  R1A_REQUEST_NOT_READY: _r1rF(R1R_MSG.NOT_READY), R1C_REQUEST_NOT_READY: _r1rF(R1R_MSG.NOT_READY), R1U_REQUEST_NOT_READY: _r1rF(R1R_MSG.NOT_READY),
+  R1A_TASK_NOT_FOUND: _r1rF(R1R_MSG.NOT_FOUND), R1A_JOB_NOT_FOUND: _r1rF(R1R_MSG.NOT_FOUND), R1A_REQUEST_NOT_FOUND: _r1rF(R1R_MSG.NOT_FOUND), R1C_REQUEST_NOT_FOUND: _r1rF(R1R_MSG.NOT_FOUND),
+  R1C_REQUEST_NOT_FOUND_OR_AMBIGUOUS: _r1rF(R1R_MSG.NOT_FOUND), R1U_REQUEST_NOT_FOUND: _r1rF(R1R_MSG.NOT_FOUND), R1C_WORK_PACKAGE_NOT_FOUND: _r1rF(R1R_MSG.NOT_FOUND),
+  R1C_DELIVERY_NOT_FOUND: _r1rF(R1R_MSG.NOT_FOUND), R1C_ORDER_NOT_FOUND: _r1rF(R1R_MSG.NOT_FOUND), R1C_ROW_MISSING: _r1rF(R1R_MSG.NOT_FOUND),
+  R1U_REQUEST_CHANGED: _r1rF('This request was edited after it was submitted, so the automatic retry stopped. Start a new request.'),
+  /* Uploads */
+  R1C_UPLOAD_PENDING: ['UploadPending', R1R_MSG.UPLOAD_PENDING],
+  R1C_UPLOAD_MISSING: _r1rA('Your uploaded file never arrived. Start a new request and upload the file again.'),
+  R1C_UPLOAD_PATH_INVALID: _r1rA("The uploaded file couldn't be read. Upload the file again from the form."),
+  R1A_UPLOAD_INVALID: _r1rA("The uploaded file couldn't be read. Upload the file again from the form."),
+  R1C_UPLOAD_AMBIGUOUS: _r1rA('More than one file has that name. Rename the file and upload it again.'),
+  R1C_EVIDENCE_FILE_REQUIRED: _r1rA('A photo or file is required. Add it and try again.'),
+  R1C_INVALID_EVIDENCE: _r1rA("The attached file isn't valid. Upload it again."),
+  R1U_NO_UPLOAD: _r1rA('This request has no uploaded file. Add the file and try again.'),
+  /* Installer / goods-in / stock */
+  R1C_OFFICE_REASON_REQUIRED: _r1rA('Office staff must give a reason when acting for an installer. Add the reason and try again.'),
+  R1C_INVALID_QUANTITY: _r1rA("A quantity isn't valid. Check the quantities and try again."),
+  R1C_INVALID_NUMBER: _r1rA("A number entered isn't valid. Check the form and try again."),
+  R1C_INVALID_BOOLEAN: _r1rA('A Yes/No answer is missing or not valid. Check the form and try again.'),
+  R1C_INVALID_ANSWER: _r1rA("A commissioning answer isn't valid. Check the answers and try again."),
+  R1C_INVALID_ANSWERS: _r1rA("A commissioning answer isn't valid. Check the answers and try again."),
+  R1C_RECEIPT_LINES_NOT_SYNCED: _r1rA("Not all delivery lines were saved yet. Wait a moment, sync, and submit again."),
+  R1C_RECEIPT_LINES_REQUIRED: _r1rA('Add at least one delivery line and try again.'),
+  R1C_DUPLICATE_RECEIPT_LINE: _r1rA('The same delivery line was entered twice. Remove the duplicate and try again.'),
+  R1C_RECEIPT_PARENT_MISMATCH: _r1rA("A delivery line doesn't belong to this delivery. Check the lines and try again."),
+  R1C_STOCK_PRODUCT_REQUIRED: _r1rA('Choose the product and try again.'),
+  R1C_APPROVED_TEMPLATE_REQUIRED: _r1rF("There's no approved commissioning template for this work yet. Ask an administrator."),
+  R1C_APPROVED_QUESTION_REQUIRED: _r1rA("That commissioning question isn't on the approved template. Check the answers and try again."),
+  R1C_REVIEW_STATE_OR_NOTES: _r1rA('Choose a review outcome and add review notes, then try again.'),
+  R1C_REVIEW_REFUSED: _r1rA("This commissioning submission can't be reviewed in its current state."),
+  R1C_SUBMISSION_MISMATCH: _r1rA("That commissioning submission doesn't belong to this work. Start again from the work package."),
+  R1C_AMBIGUOUS_SUBMISSION: _r1rF('More than one commissioning draft matches. Ask an administrator.'),
+  R1C_TEMPLATE_AMBIGUOUS: _r1rF('More than one commissioning template matches. Ask an administrator.'),
+  R1C_JOB_MISMATCH: _r1rA("This request doesn't match the selected job. Start again from the job."),
+  R1C_COMMAND_TYPE_MISMATCH: _r1rF('The form sent a different action than the one being run. Ask an administrator to check the form setup.'),
+  R1U_COMMAND_TYPE_MISMATCH: _r1rF('The form sent a different action than the one being run. Ask an administrator to check the form setup.'),
+  R1C_EXPECTED_VERSION_REQUIRED: _r1rF(R1R_MSG.CONFIG),
+  R1A_REQUEST_TIMESTAMP_REQUIRED: _r1rF(R1R_MSG.CONFIG),
+  /* PRE03 owner repair (Admin/Manager DEV tool) */
+  R1A_JOB_AMBIGUOUS: _r1rF('More than one job matches that reference. Use the internal job ID instead.'),
+  R1A_JOB_REF_REQUIRED: _r1rA('A job reference is required. Enter the public job ID and try again.'),
+  R1A_PRE03_NOT_APPLICABLE: _r1rF("This job isn't on the Standard finance route, so it has no bank deposit task."),
+  R1A_PRE03_MISSING: _r1rF("This job has no bank deposit task to repair."),
+  R1A_PRE03_AMBIGUOUS: _r1rF('This job has more than one bank deposit task. Ask an administrator to check it.'),
+  R1A_PRE03_NOT_OPEN: _r1rF("The bank deposit task is already finished, so its owner can't be changed.")
+};
+
+var R1R_FIELD_LABELS = {
+  completion_note: 'A completion note', reopen_reason: 'A reason for reopening', reference: 'The bank reference', type: 'The call type', outcome: 'The outcome',
+  action: 'The issue action', reason: 'A reason', planned_start: 'The planned start date', planned_end: 'The planned end date', effective_date: 'The effective date',
+  work_performed: 'The work performed', material_state: 'The material state', scaffold_state: 'The scaffold state', finance_review: 'The finance review',
+  legacy_state: 'The legacy system state', new_date: 'The new date', commitment_review: 'The commitment review', evidence_reference: 'The evidence reference',
+  customer_first_name: "The customer's first name", customer_last_name: "The customer's last name", street_address: 'The street address', city: 'The town or city',
+  postcode: 'The postcode', finance_route: 'The finance route', mode: 'The change type', person_id: 'The installer'
+};
+
+var R1R_BLOCKING_MESSAGES = {
+  PRE01_INVOICE_SEND_FAILED: 'Saved. The deposit invoice was not sent, so this task is waiting for follow-up.',
+  PRE02_AWAITING_SIGNATURE: 'Saved. The contract is recorded as sent and awaiting signature, so this task is waiting for follow-up.',
+  PRE03_DEPOSIT_NOT_RECEIVED: "Saved. The deposit hasn't arrived in the bank yet, so this task is waiting for follow-up.",
+  PRE03_DEPOSIT_AMOUNT_MISMATCH: "Saved. The bank amount doesn't match the expected deposit, so this task is waiting for follow-up. Check the amount with the customer.",
+  PRE04_VALUE_MISMATCH: "Saved. The verified value doesn't match the contract value, so this task is waiting for review.",
+  PRE04_CUSTOMER_DETAILS_MISMATCH: 'Saved. The customer details need correcting, so this task is waiting for review.',
+  PRE04_SOLD_VALUE_MISMATCH: 'Saved. The sold value needs checking, so this task is waiting for review.'
+};
+
+function _r1rText(v) { return typeof v === 'string' && v.trim().length > 0; }
+function _r1rEmail(v) { if (typeof v !== 'string') return ''; var s = v.trim().toLowerCase(); return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(s) ? s : ''; }
+function _r1rHas(o, k) { return !!o && Object.prototype.hasOwnProperty.call(o, k); }
+function _r1rDateLabel(v) {
+  try {
+    if (v === null || v === undefined || v === '') return '';
+    var d = Object.prototype.toString.call(v) === '[object Date]' ? v : new Date(/^\d{4}-\d{2}-\d{2}$/.test(String(v)) ? String(v) + 'T12:00:00Z' : String(v));
+    if (isNaN(d.getTime())) return '';
+    if (typeof Utilities !== 'undefined' && Utilities.formatDate) return Utilities.formatDate(d, 'Europe/London', 'd MMM yyyy');
+    if (typeof Intl !== 'undefined' && Intl.DateTimeFormat) {
+      var parts = {}; new Intl.DateTimeFormat('en-GB', { timeZone: 'Europe/London', day: 'numeric', month: 'numeric', year: 'numeric' }).formatToParts(d).forEach(function (x) { parts[x.type] = x.value; });
+      return Number(parts.day) + ' ' + ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'][Number(parts.month) - 1] + ' ' + parts.year;
+    }
+    return d.toISOString().slice(0, 10);
+  } catch (e) { return ''; }
+}
+function _r1rHumanize(v) { return String(v || '').replace(/^(?:R1[ACU]|S\d+)_/, '').replace(/_/g, ' ').toLowerCase().trim(); }
+
+/* 'R1A_FOO' | 'S15_REVIEW: stale job revision' | plain text → {code, detail}. */
+function _r1rParseError(error) {
+  var text = String(error === undefined || error === null ? '' : error).trim();
+  var m = /^([A-Z][A-Z0-9]*_[A-Z0-9_]*[A-Z0-9])(?::\s*([\s\S]*))?$/.exec(text);
+  return m ? { code: m[1], detail: m[2] ? m[2].trim() : '' } : { code: 'UNCLASSIFIED', detail: text };
+}
+
+function _r1rErrorFeedback(commandType, error) {
+  var parsed = _r1rParseError(error), code = parsed.code, detail = parsed.detail, hit = R1R_ERRORS[code];
+  var out = function (status, message) { return { status: status, message: message, code: code, detail: detail }; };
+  if (hit) return out(hit[0], hit[1]);
+  if (/^R1[ACU]_REQUIRED_[A-Z0-9_]+$/.test(code)) {
+    var key = code.replace(/^R1[ACU]_REQUIRED_/, '').toLowerCase();
+    return out('ActionRequired', (R1R_FIELD_LABELS[key] || ('The ' + key.replace(/_/g, ' '))) + ' is required. Add it and try again.');
+  }
+  if (/STALE/.test(code) || (/^S\d+_REVIEW$/.test(code) && /stale/i.test(detail))) return out('ActionRequired', R1R_MSG.STALE);
+  if (/RECOVERY_REQUIRED$/.test(code)) return out('Failed', R1R_MSG.RECOVERY);
+  if (/_MODE_DENIED|_MODE_MISSING/.test(code)) return out('Failed', R1R_MSG.MODE);
+  if (/_DENIED/.test(code)) return out('Failed', R1R_MSG.PERMISSION);
+  if (/_DEV_ONLY$|_SCHEMA$|_TABLE_MISSING$|_UNSUPPORTED$|_NOT_CONFIGURED$|_RESOLVER_MISSING$|_COMMAND_ID_REQUIRED$|_BACKEND_MISSING|^S\d+_CONFIG$/.test(code)) return out('Failed', R1R_MSG.CONFIG);
+  if (/_CONFLICT$|^S\d+_REVIEW$/.test(code) && /conflict/i.test(code + ' ' + detail)) return out('Failed', R1R_MSG.CONFLICT);
+  if (/_DATE_INVALID$/.test(code)) return out('ActionRequired', R1R_MSG.DATE);
+  if (/^R1[ACU]_INVALID_/.test(code)) return out('ActionRequired', R1R_MSG.INVALID);
+  if (/^S\d+_REVIEW$/.test(code)) {
+    var plain = _r1rText(detail) && !/[A-Z0-9]+_[A-Z0-9_]{2,}/.test(detail) ? ': ' + detail.replace(/[.\s]+$/, '') : '';
+    return out('ActionRequired', 'This needs checking before it can go ahead' + plain + '.');
+  }
+  if (/^S\d+_REFUSED$/.test(code)) return out('Failed', "This action isn't allowed for this job at the moment.");
+  if (/_NOT_FOUND$/.test(code)) return out('Failed', R1R_MSG.NOT_FOUND);
+  return out('Failed', R1R_MSG.UNKNOWN);
+}
+
+function _r1rReadinessSuffix(inner) {
+  var rd = inner && inner.readiness || {}, job = inner && inner.job || {};
+  if (rd.stage_advanced && (job.workflow_stage === 'ReadyToBook' || rd.workflow_stage === 'ReadyToBook')) return ' The job is now Ready to Book.';
+  if (rd.stage_demoted) return ' The job has moved back to Prebooking until this task is done again.';
+  return '';
+}
+function _r1rJobRef(inner) { return inner && _r1rText(inner.job_id_human) ? ' ' + inner.job_id_human.trim() : ''; }
+
+function _r1rSuccessFeedback(commandType, inner) {
+  inner = inner && typeof inner === 'object' ? inner : {};
+  var s = inner.status, replay = inner.replay === true || s === 'Replayed', task = inner.task || null;
+  function ok(m) { return { status: 'Succeeded', message: m }; }
+  function follow(m) { return { status: 'FollowUpRequired', message: m }; }
+  function action(m) { return { status: 'ActionRequired', message: m }; }
+  function followUpDate(t) { var d = t && _r1rDateLabel(t.next_followup_at); return d ? ' Next follow-up: ' + d + '.' : ''; }
+  switch (commandType) {
+    case 'TASK_COMPLETE':
+      if (s === 'FollowUpRequired' || (replay && task && task.status !== 'Complete' && _r1rText(task.blocking_reason))) {
+        var reason = task && task.blocking_reason;
+        return follow((R1R_BLOCKING_MESSAGES[reason] || 'Saved. This task is waiting for follow-up.') + followUpDate(task));
+      }
+      if (s === 'Completed' || (replay && task && task.status === 'Complete')) return ok('Task completed successfully.' + (replay ? '' : _r1rReadinessSuffix(inner)));
+      if (replay) return ok('This request was already processed.');
+      break;
+    case 'TASK_REOPEN':
+      if (s === 'Reopened' || replay) return ok('Task reopened. It is back in the task list.' + (replay ? '' : _r1rReadinessSuffix(inner)));
+      break;
+    case 'TASK_EVIDENCE_ATTACH':
+      /* An upload to an open PRE02 is not the signed-contract transition: staff still have to complete the task. */
+      if (inner.completion_required === true || s === 'EvidenceUploaded') return follow('Signed contract evidence uploaded. Complete the contract task to confirm it is signed.');
+      if (s === 'Attached' || replay) return ok('Contract evidence added.' + (replay ? '' : _r1rReadinessSuffix(inner)));
+      break;
+    case 'DEPOSIT_CONFIRM':
+      if (s === 'Confirmed' || replay) return ok('Deposit confirmed.' + (replay ? '' : _r1rReadinessSuffix(inner)));
+      if (s === 'AlreadyConfirmed') return ok('The deposit was already confirmed. Nothing else is needed.');
+      break;
+    case 'SOLD_INTAKE':
+      if (s === 'Review') return follow('The sale was saved but needs checking in Intake Review before a job is created.');
+      if (inner.duplicate) return ok('This sale was already recorded' + (_r1rJobRef(inner) ? ' as job' + _r1rJobRef(inner) : '') + '. No new job was created.');
+      if (s === 'Processed' || replay) return ok(_r1rJobRef(inner) ? 'New job created:' + _r1rJobRef(inner) + '.' : 'New job created.');
+      break;
+    case 'BOOKING_INTAKE':
+      if (s === 'Review') return follow('The booking was saved but needs checking in Intake Review.');
+      if (inner.duplicate) return ok('This booking was already recorded' + (_r1rJobRef(inner) ? ' for job' + _r1rJobRef(inner) : '') + '.');
+      if (s === 'Processed' || replay) {
+        var stage = inner.workflow_stage === 'BookingInProgress' ? ' The job is now Booking In Progress.' : (inner.workflow_stage === 'Booked' ? ' The job is now Booked.' : '');
+        return ok('Booking saved' + (_r1rJobRef(inner) ? ' for job' + _r1rJobRef(inner) : '') + '.' + stage);
+      }
+      break;
+    case 'ISSUE_CREATE': if (s === 'Created' || replay) return ok('Issue raised.'); break;
+    case 'ISSUE_UPDATE': if (s === 'Updated' || replay) return ok('Issue updated.'); break;
+    case 'CALL_RECORD': if (s === 'Recorded' || replay) return ok('Call recorded.'); break;
+    case 'PLANNER_UPDATE': if (s === 'Updated' || replay) return ok('Planned dates updated.'); break;
+    case 'MOVE_JOB':
+      if (s === 'Moved' || replay) return ok('Job moved.');
+      if (s === 'NeedsReview') return action('The move needs checking before it can go ahead' + (_r1rText(inner.reason) ? ': ' + _r1rHumanize(inner.reason) : '') + '.');
+      break;
+    case 'CHANGE_INSTALLER':
+      if (s === 'Moved' || s === 'Planned' || replay) return ok('Installer changed.');
+      if (s === 'NeedsReview') return action('The installer change needs checking before it can go ahead' + (_r1rText(inner.reason) ? ': ' + _r1rHumanize(inner.reason) : '') + '.');
+      break;
+    case 'CANCEL_JOB': return ok('Job cancellation recorded.' + (inner.review ? ' Some items need review.' : ''));
+    case 'REINSTATE_JOB': return ok('Job reinstated.' + (inner.review ? ' Some items need review.' : ''));
+    case 'OPERATIONAL_COMPLETE':
+      if (s === 'Completed') return ok('Job marked operationally complete.');
+      if (s === 'AlreadyComplete') return ok('The job was already operationally complete. Nothing else is needed.');
+      if (s === 'NeedsReview') return action("The job can't be marked operationally complete yet. Check the outstanding items on the job.");
+      break;
+    case 'BOOKING_GATES':
+      if (s === 'ReadyToBook' || s === 'Booked') return ok('Booking checks passed. The job is ' + (s === 'Booked' ? 'Booked.' : 'Ready to Book.'));
+      if (s === 'Blocked' || s === 'NeedsReview') return follow("Booking checks aren't complete yet. Check the outstanding tasks on the job.");
+      break;
+    case 'IW_START': return ok('Work started.');
+    case 'IW_PROGRESS': return ok('Progress update saved.');
+    case 'IW_REPORT_COMPLETION': return ok(s === 'ReturnRequired' ? 'Return visit recorded. The office will arrange it.' : 'Completion reported. The office will confirm it.');
+    case 'IW_REPORT_PROBLEM': return ok('Problem reported.');
+    case 'IW_REPORT_VARIATION': return ok('Variation reported.');
+    case 'IW_COMMISSIONING_DRAFT': return ok('Commissioning draft saved.');
+    case 'IW_COMMISSIONING_SUBMIT': return ok('Commissioning submitted for review.');
+    case 'COMMISSIONING_REVIEW': return ok(s === 'Returned' ? 'Commissioning returned to the installer.' : 'Commissioning review saved.');
+    case 'GOODS_IN_RECEIVE': return ok('Delivery received.' + (inner.complete === false ? ' Some lines are still outstanding.' : ''));
+    case 'STOCK_QUARANTINE': return ok('Stock moved to quarantine.');
+  }
+  if (/^(NeedsReview|Review|Blocked|Failed|Refused)$/.test(String(s || ''))) return action('The request was received but needs checking before it can go ahead.');
+  return ok('Request completed successfully.');
+}
+
+function _r1rExtras(commandType, inner) {
+  var x = {};
+  function put(k, v) { if (v !== undefined && v !== null && v !== '') x[k] = v; }
+  if (!inner || typeof inner !== 'object') return x;
+  if (commandType === 'SOLD_INTAKE' || commandType === 'BOOKING_INTAKE') {
+    put('result_job_id', inner.job_id); put('result_job_id_human', inner.job_id_human); put('result_version', inner.version);
+    if (commandType === 'BOOKING_INTAKE') put('result_workflow_stage', inner.workflow_stage);
+  }
+  if (commandType === 'ISSUE_CREATE') put('result_issue_id', inner.issue_id);
+  if (commandType === 'DEPOSIT_CONFIRM') put('result_stage_id', inner.deposit && inner.deposit.stage_id);
+  return x;
+}
+
+/* Business outcome of one command response (object or the JSON string an Apps Script bot receives). */
+function _r1rFeedback(commandType, response) {
+  var r = response;
+  if (typeof r === 'string') { try { r = JSON.parse(r); } catch (e) { r = null; } }
+  var fb, inner = null;
+  if (!r || typeof r !== 'object') fb = { status: 'Failed', message: R1R_MSG.UNKNOWN, code: 'R1R_NO_RESPONSE', detail: '' };
+  else if (r.ok === true) { inner = r.result && typeof r.result === 'object' ? r.result : {}; fb = _r1rSuccessFeedback(commandType, inner); fb.code = ''; fb.detail = ''; }
+  else if (r.error === 'R1C_UPLOAD_PENDING' && r.retry && r.retry.scheduled === false) fb = { status: 'ActionRequired', message: "Your file is still uploading and an automatic retry couldn't be scheduled. Wait a minute, then submit a new request.", code: 'R1C_UPLOAD_PENDING', detail: '' };
+  else fb = _r1rErrorFeedback(commandType, r.error);
+  if (R1R_STATUSES.indexOf(fb.status) < 0) fb.status = 'Failed';
+  fb.heading = R1R_HEADINGS[fb.status];
+  fb.extras = fb.status === 'Succeeded' || fb.status === 'FollowUpRequired' ? _r1rExtras(commandType, inner) : {};
+  var d = { ok: !!(r && r.ok === true), command_type: commandType || null, status: fb.status, code: fb.code || null };
+  if (inner) {
+    if (inner.status) d.business_status = inner.status;
+    if (inner.replay === true || inner.status === 'Replayed') d.replay = true;
+    if (inner.completion_required === true) d.completion_required = true;
+    if (inner.task) { d.task_status = inner.task.status || null; if (inner.task.blocking_reason) d.blocking_reason = inner.task.blocking_reason; }
+    if (inner.job_id_human) d.job_id_human = inner.job_id_human;
+    var stage = inner.workflow_stage || (inner.job && inner.job.workflow_stage);
+    if (stage) d.workflow_stage = stage;
+  }
+  if (fb.detail) d.detail = String(fb.detail).slice(0, 300);
+  if (r && r.retry) d.retry = { scheduled: r.retry.scheduled, attempt: r.retry.attempt, next_attempt: r.retry.next_attempt || null };
+  fb.result_json = JSON.stringify(d);
+  return fb;
+}
+
+/* Additive `feedback` on a bot response (JSON path and request-row path). Never throws. */
+function _r1rAttachFeedback(commandType, response) {
+  try {
+    if (!response || typeof response !== 'object') return response;
+    var fb = _r1rFeedback(commandType, response);
+    response.feedback = { status: fb.status, heading: fb.heading, message: fb.message, code: fb.code || null };
+  } catch (e) {}
+  return response;
+}
+function _r1rUpdate(fb, actorEmail) {
+  return { status: fb.status, message: fb.message, code: fb.code || '', detail: fb.result_json || '', extras: fb.extras || {}, actorEmail: actorEmail };
+}
+
+/* Pure write plan for one request row. Only result columns that exist, only the row owner, final outcomes kept. */
+function _r1rPlanWrite(headers, row, update) {
+  if (!row || typeof row !== 'object') return { skip: 'ROW_NOT_FOUND' };
+  var cols = (headers || []).map(function (h) { return String(h || '').trim(); }).filter(Boolean);
+  if (cols.indexOf('result_status') < 0 && cols.indexOf('result_message') < 0) return { skip: 'NO_RESULT_COLUMNS' };
+  if (!update || R1R_STATUSES.indexOf(update.status) < 0 || !_r1rText(update.message)) return { skip: 'INVALID_UPDATE' };
+  var actor = _r1rEmail(update.actorEmail);
+  if (!actor) return { skip: 'ACTOR_REQUIRED' };
+  var owner = _r1rEmail(row.submitted_by) || _r1rEmail(row.requested_by);
+  if (!owner || owner !== actor) return { skip: 'NOT_ROW_OWNER' };
+  var existing = String(row.result_status === undefined || row.result_status === null ? '' : row.result_status).trim();
+  if (R1R_FINAL_STATUSES.indexOf(existing) >= 0) return { skip: 'FINAL_RESULT_PRESERVED', existing_status: existing };
+  var message = update.message.trim();
+  if (update.status === 'Failed' && _r1rText(String(row.command_id || ''))) message += ' Reference: ' + String(row.command_id).trim() + '.';
+  var values = { result_status: update.status, result_message: message, result_code: update.code || '', result: update.detail || '', result_at: update.at ? new Date(update.at) : new Date() };
+  var extras = update.extras || {};
+  R1R_EXTRA_COLUMNS.forEach(function (k) { if (_r1rHas(extras, k)) values[k] = extras[k]; });
+  var write = {};
+  Object.keys(values).forEach(function (k) { if (cols.indexOf(k) >= 0 && values[k] !== undefined && values[k] !== null) write[k] = values[k]; });
+  return { write: write };
+}
+function _r1rCell(value, column) {
+  if (typeof value !== 'string') return value;
+  var v = value.slice(0, column === 'result' ? 2000 : 500);
+  return /^[=+\-@]/.test(v) ? "'" + v : v;
+}
+/* Sheet writer for the exact DEV request spreadsheet. Never throws; returns {written, reason?, columns?}. */
+function _r1rSheetWriteResult(ss, table, rowId, update) {
+  try {
+    if (!ss || typeof ss.getId !== 'function' || ss.getId() !== R1R_DEV_SHEET_ID) return { written: false, reason: 'DEV_ONLY' };
+    var wanted = String(rowId === undefined || rowId === null ? '' : rowId).trim();
+    if (!_r1rText(table) || !wanted) return { written: false, reason: 'ROW_NOT_FOUND' };
+    var matches = ss.getSheets().filter(function (sh) { return sh.getName() === table; });
+    if (matches.length !== 1) return { written: false, reason: 'TABLE_MISSING' };
+    var sh = matches[0], lastCol = sh.getLastColumn(), lastRow = sh.getLastRow();
+    if (lastCol < 1 || lastRow < 2) return { written: false, reason: 'ROW_NOT_FOUND' };
+    var h = sh.getRange(1, 1, 1, lastCol).getValues()[0].map(function (x) { return String(x || '').trim(); });
+    var idCol = h.indexOf('id');
+    if (idCol < 0) return { written: false, reason: 'NO_ID_COLUMN' };
+    var values = sh.getRange(2, 1, lastRow - 1, lastCol).getValues(), found = [];
+    values.forEach(function (r, i) { if (String(r[idCol] === undefined || r[idCol] === null ? '' : r[idCol]).trim() === wanted) found.push(i); });
+    if (found.length !== 1) return { written: false, reason: found.length ? 'ROW_AMBIGUOUS' : 'ROW_NOT_FOUND' };
+    var row = {};
+    h.forEach(function (k, i) { if (k && !_r1rHas(row, k)) row[k] = values[found[0]][i]; });
+    var plan = _r1rPlanWrite(h, row, update);
+    if (plan.skip) return { written: false, reason: plan.skip };
+    var columns = Object.keys(plan.write);
+    columns.forEach(function (k) { sh.getRange(found[0] + 2, h.indexOf(k) + 1, 1, 1).setValues([[_r1rCell(plan.write[k], k)]]); });
+    if (typeof SpreadsheetApp !== 'undefined' && SpreadsheetApp.flush) SpreadsheetApp.flush();
+    return { written: true, columns: columns };
+  } catch (e) { return { written: false, reason: 'WRITE_ERROR' }; }
+}
+
 /* Read AppSheet helper-table rows and build canonical intake commands.
  * AppSheet must not serialize the booking payload. DEV spreadsheet only.
- * This module never writes helper tables or operational sheets. */
+ * The bot entry writes only the result_* columns of the request row it processed (command-result.js);
+ * it never writes request inputs, `status`, or operational sheets directly. */
 'use strict';
 
 var R1A_REQUEST_DEV_SHEET = '1z7PNZtDdC4Z5eLbmTuQdqp0QpJSmuEvx3QvN3VyNTsc';
@@ -1098,6 +2059,7 @@ var R1A_REQUEST_TABLES = {
   BOOKING_INTAKE: 'DEVBookingIntakeRequests',
   DEPOSIT_CONFIRM: 'DEVDepositConfirmRequests',
   TASK_COMPLETE: 'DEVTaskCompleteRequests',
+  TASK_REOPEN: 'DEVTaskReopenRequests',
   TASK_EVIDENCE_ATTACH: 'DEVTaskEvidenceAttachRequests',
   ISSUE_CREATE: 'DEVCreateIssueRequests',
   IW_START: 'DEVInstallerCommandRequests',
@@ -1120,7 +2082,12 @@ function _r1aReqEmail(v) {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(s) ? s : '';
 }
 function _r1aReqFields(commandType) {
-  if (commandType === 'DEPOSIT_CONFIRM') return [{key: 'reference', type: 'text', required: true}];
+  if (commandType === 'DEPOSIT_CONFIRM') return [
+    {key: 'reference', type: 'text', required: true},
+    {key: 'deposit_bank_confirmed', type: 'bool', required: true},
+    {key: 'deposit_amount', type: 'number', required: true},
+    {key: 'deposit_received_date', type: 'date', required: true}
+  ];
   if (commandType === 'SOLD_INTAKE' && typeof R1A_SOLD_FIELDS !== 'undefined') return R1A_SOLD_FIELDS;
   if (commandType === 'BOOKING_INTAKE' && typeof R1A_BOOKING_FIELDS !== 'undefined') return R1A_BOOKING_FIELDS;
   if (commandType === 'ISSUE_CREATE' && typeof R1A_ISSUE_CREATE_FIELDS !== 'undefined') return R1A_ISSUE_CREATE_FIELDS;
@@ -1162,7 +2129,8 @@ function _r1aReadRequestRowFromSpreadsheet(ss, tableName, requestRowId, expected
   if (headers.indexOf('id') < 0 || headers.indexOf('command_id') < 0) _r1aReqRefuse('R1A_REQUEST_SCHEMA');
   if ((tableName === 'DEVBookingIntakeRequests' || tableName === 'DEVCreateIssueRequests' || tableName === 'DEVDepositConfirmRequests') && (headers.indexOf('job_id') < 0 || headers.indexOf('expected_version') < 0)) _r1aReqRefuse('R1A_REQUEST_SCHEMA');
   if (tableName === 'DEVDepositConfirmRequests' && ['submitted_by','submitted_at','status','reference','result_status','result_message'].some(function(k) { return headers.indexOf(k) < 0; })) _r1aReqRefuse('R1A_REQUEST_SCHEMA');
-  if (tableName === 'DEVTaskCompleteRequests' && ['task_id','expected_version','completion_note','evidence_path','evidence_id','submitted_by','submitted_at','status','result_status','result_message'].some(function(k) { return headers.indexOf(k) < 0; })) _r1aReqRefuse('R1A_REQUEST_SCHEMA');
+  if (tableName === 'DEVTaskCompleteRequests' && ['task_id','expected_version','completion_note','evidence_path','evidence_id','invoice_number','invoice_sent','outcome','contract_id','contract_signed','customer_details_verified','sold_value_verified','verified_gross_amount','deposit_bank_confirmed','deposit_amount','deposit_received_date','deposit_bank_reference','submitted_by','submitted_at','status','result_status','result_message'].some(function(k) { return headers.indexOf(k) < 0; })) _r1aReqRefuse('R1A_REQUEST_SCHEMA');
+  if (tableName === 'DEVTaskReopenRequests' && ['task_id','expected_version','reopen_reason','submitted_by','submitted_at','status','result_status','result_message'].some(function(k) { return headers.indexOf(k) < 0; })) _r1aReqRefuse('R1A_REQUEST_SCHEMA');
   if (tableName === 'DEVTaskEvidenceAttachRequests' && ['task_id','expected_version','evidence_path','submitted_by','submitted_at','status','result_status','result_message'].some(function(k) { return headers.indexOf(k) < 0; })) _r1aReqRefuse('R1A_REQUEST_SCHEMA');
   var values = sh.getRange(2, 1, lastRow - 1, lastCol).getValues();
   var wanted = String(requestRowId).trim();
@@ -1210,7 +2178,9 @@ function _r1aAssertActorField(actorEmail, value, actorId) {
   /* Non-email values are checked again against the authenticated actor id by the service. */
 }
 
-/* Build TASK_COMPLETE from DEVTaskCompleteRequests. evidence_path is preferred for PRE02/PRE04. */
+/* Build TASK_COMPLETE from DEVTaskCompleteRequests. evidence_path is preferred for PRE02 and optional for PRE03/PRE04.
+ * PRE01 requires invoice_number + invoice_sent=Yes (or outcome=Failed for follow-up, which does not Complete).
+ * PRE02 requires contract_id + contract_signed=Yes + evidence (or contract_signed=No / outcome=AwaitingSignature for Sent follow-up). */
 function _r1aBuildTaskCompleteRequest(row, actorEmail) {
   if (!row || typeof row !== 'object' || Array.isArray(row)) _r1aReqRefuse('R1A_REQUEST_NOT_FOUND');
   var commandId = _r1aReqCell(row.command_id);
@@ -1228,12 +2198,77 @@ function _r1aBuildTaskCompleteRequest(row, actorEmail) {
   if (path !== undefined) payload.evidence_path = String(path).trim();
   var evid = _r1aReqCell(row.evidence_id);
   if (evid !== undefined) payload.evidence_id = String(evid).trim();
+  var invoiceNumber = _r1aReqCell(row.invoice_number);
+  if (invoiceNumber !== undefined) payload.invoice_number = String(invoiceNumber).trim();
+  var invoiceSent = _r1aReqCell(row.invoice_sent);
+  if (invoiceSent !== undefined) {
+    if (row.invoice_sent === true || row.invoice_sent === false) payload.invoice_sent = row.invoice_sent;
+    else payload.invoice_sent = String(invoiceSent).trim();
+  }
+  var outcome = _r1aReqCell(row.outcome);
+  if (outcome !== undefined) payload.outcome = String(outcome).trim();
+  var contractId = _r1aReqCell(row.contract_id);
+  if (contractId !== undefined) payload.contract_id = String(contractId).trim();
+  var contractSigned = _r1aReqCell(row.contract_signed);
+  if (contractSigned !== undefined) {
+    if (row.contract_signed === true || row.contract_signed === false) payload.contract_signed = row.contract_signed;
+    else payload.contract_signed = String(contractSigned).trim();
+  }
+  var customerDetailsVerified = _r1aReqCell(row.customer_details_verified);
+  if (customerDetailsVerified !== undefined) {
+    if (row.customer_details_verified === true || row.customer_details_verified === false) payload.customer_details_verified = row.customer_details_verified;
+    else payload.customer_details_verified = String(customerDetailsVerified).trim();
+  }
+  var soldValueVerified = _r1aReqCell(row.sold_value_verified);
+  if (soldValueVerified !== undefined) {
+    if (row.sold_value_verified === true || row.sold_value_verified === false) payload.sold_value_verified = row.sold_value_verified;
+    else payload.sold_value_verified = String(soldValueVerified).trim();
+  }
+  var verifiedGross = _r1aReqCell(row.verified_gross_amount);
+  if (verifiedGross !== undefined) {
+    if (typeof row.verified_gross_amount === 'number') payload.verified_gross_amount = row.verified_gross_amount;
+    else payload.verified_gross_amount = String(verifiedGross).trim();
+  }
+  var depositConfirmed = _r1aReqCell(row.deposit_bank_confirmed);
+  if (depositConfirmed !== undefined) {
+    if (row.deposit_bank_confirmed === true || row.deposit_bank_confirmed === false) payload.deposit_bank_confirmed = row.deposit_bank_confirmed;
+    else payload.deposit_bank_confirmed = String(depositConfirmed).trim();
+  }
+  var depositAmount = _r1aReqCell(row.deposit_amount);
+  if (depositAmount !== undefined) payload.deposit_amount = typeof row.deposit_amount === 'number' ? row.deposit_amount : String(depositAmount).trim();
+  var depositDate = _r1aReqCell(row.deposit_received_date);
+  if (depositDate !== undefined) payload.deposit_received_date = String(depositDate).trim();
+  var depositReference = _r1aReqCell(row.deposit_bank_reference);
+  if (depositReference !== undefined) payload.deposit_bank_reference = String(depositReference).trim();
   return {
     command_id: String(commandId).trim(),
     command_type: 'TASK_COMPLETE',
     task_id: String(taskId).trim(),
     expected_version: typeof row.expected_version === 'number' ? row.expected_version : String(row.expected_version).trim(),
     payload: payload
+  };
+}
+
+/* Build TASK_REOPEN from DEVTaskReopenRequests. Requires reopen_reason; never mutates evidence rows. */
+function _r1aBuildTaskReopenRequest(row, actorEmail) {
+  if (!row || typeof row !== 'object' || Array.isArray(row)) _r1aReqRefuse('R1A_REQUEST_NOT_FOUND');
+  var commandId = _r1aReqCell(row.command_id);
+  if (!_r1aReqText(commandId)) _r1aReqRefuse('R1A_COMMAND_ID_REQUIRED');
+  if (!_r1aReqPresent(row.submitted_by)) _r1aReqRefuse('R1A_AUTHENTICATED_EMAIL_REQUIRED');
+  _r1aAssertSubmittedBy(actorEmail, row.submitted_by);
+  if (String(row.status || '').trim() !== 'Ready') _r1aReqRefuse('R1A_REQUEST_NOT_READY');
+  if (!_r1aReqPresent(row.submitted_at)) _r1aReqRefuse('R1A_REQUEST_TIMESTAMP_REQUIRED');
+  var taskId = _r1aReqCell(row.task_id);
+  if (!_r1aReqText(taskId)) _r1aReqRefuse('R1A_TASK_NOT_FOUND');
+  if (!_r1aReqPresent(row.expected_version)) _r1aReqRefuse('R1A_STALE_VERSION');
+  var reason = _r1aReqCell(row.reopen_reason);
+  if (!_r1aReqText(reason)) _r1aReqRefuse('R1A_REQUIRED_REOPEN_REASON');
+  return {
+    command_id: String(commandId).trim(),
+    command_type: 'TASK_REOPEN',
+    task_id: String(taskId).trim(),
+    expected_version: typeof row.expected_version === 'number' ? row.expected_version : String(row.expected_version).trim(),
+    payload: { reopen_reason: String(reason).trim() }
   };
 }
 
@@ -1326,26 +2361,67 @@ function _r1aCommandFromRequestRow(commandType, requestRowId, actorEmail, deps) 
     ? deps.readRow(R1A_REQUEST_TABLES[type], String(requestRowId).trim(), sheetId)
     : _r1aReadRequestRowFromSpreadsheet(_r1aOpenDevRequestSpreadsheet(), R1A_REQUEST_TABLES[type], requestRowId, R1A_REQUEST_DEV_SHEET);
   var request = type === 'TASK_COMPLETE' ? _r1aBuildTaskCompleteRequest(row, actor)
-    : (type === 'TASK_EVIDENCE_ATTACH' ? _r1aBuildTaskEvidenceAttachRequest(row, actor) : _r1aBuildIntakeRequest(type, row, actor));
+    : (type === 'TASK_REOPEN' ? _r1aBuildTaskReopenRequest(row, actor)
+      : (type === 'TASK_EVIDENCE_ATTACH' ? _r1aBuildTaskEvidenceAttachRequest(row, actor) : _r1aBuildIntakeRequest(type, row, actor)));
   var dispatch = typeof deps.dispatch === 'function' ? deps.dispatch : function(req, email) { return _r1aDispatchBuiltRequest(req, email, deps.resolveUpload); };
   return dispatch(request, actor);
 }
 
-/* AppSheet bot entry. R1C_UPLOAD_PENDING (upload not yet visible in Drive) is retryable: the request row is
- * left untouched and a bounded backend retry is scheduled (upload-retry.js); every other error is final. */
-function appSheetR1CommandFromRequestRow(commandType, requestRowId, actorEmail) {
-  try { return JSON.stringify(_r1aCommandFromRequestRow(commandType, requestRowId, actorEmail)); }
+function _r1aResultApi() {
+  if (typeof _r1rFeedback === 'function' && typeof _r1rSheetWriteResult === 'function') return { feedback: _r1rFeedback, update: _r1rUpdate, write: _r1rSheetWriteResult };
+  if (typeof require === 'function' && typeof module !== 'undefined') {
+    try { var m = require('./command-result.js'); return { feedback: m._r1rFeedback, update: m._r1rUpdate, write: m._r1rSheetWriteResult }; } catch (e) {}
+  }
+  return null;
+}
+function _r1aDefaultResultWriter(table, rowId, update) {
+  if (typeof _r1cConfigGuard === 'function') _r1cConfigGuard();
+  var api = _r1aResultApi();
+  if (!api) return { written: false, reason: 'RESULT_MODULE_MISSING' };
+  return api.write(_r1aOpenDevRequestSpreadsheet(), table, rowId, update);
+}
+/* Run one request-row command and persist its business outcome onto that row.
+ * Apps Script returning is never treated as success: the outcome comes from the command response.
+ * R1C_UPLOAD_PENDING stays retryable: a bounded backend retry is scheduled (upload-retry.js), which owns that row's result.
+ * deps (tests): readRow/readRows/dispatch/sessionEmail/resolveUpload as for _r1aCommandFromRequestRow, plus writeResult(table,rowId,update) and scheduleRetry. */
+function _r1aRunRequestRowCommand(commandType, requestRowId, actorEmail, deps) {
+  deps = deps || {};
+  var response;
+  try { response = _r1aCommandFromRequestRow(commandType, requestRowId, actorEmail, deps); }
   catch (e) {
-    var out = { ok: false, error: e.code || e.message || 'R1A_REFUSED' };
+    response = { ok: false, error: e.code || e.message || 'R1A_REFUSED' };
     if (e && e.code === 'R1C_UPLOAD_PENDING') {
-      out.retryable = true;
-      if (typeof _r1uScheduleRetry === 'function') {
-        try { out.retry = _r1uScheduleRetry(commandType, requestRowId, actorEmail, e); }
-        catch (scheduleError) { out.retry = { scheduled: false, error: scheduleError.code || scheduleError.message || 'R1U_SCHEDULE_FAILED' }; }
+      response.retryable = true;
+      var schedule = typeof deps.scheduleRetry === 'function' ? deps.scheduleRetry : (typeof _r1uScheduleRetry === 'function' ? _r1uScheduleRetry : null);
+      if (schedule) {
+        try { response.retry = schedule(commandType, requestRowId, actorEmail, e); }
+        catch (scheduleError) { response.retry = { scheduled: false, error: scheduleError.code || scheduleError.message || 'R1U_SCHEDULE_FAILED' }; }
       }
     }
-    return JSON.stringify(out);
   }
+  var api = _r1aResultApi();
+  if (!api) return response;
+  var type = typeof commandType === 'string' ? commandType.trim() : '';
+  var fb;
+  try { fb = api.feedback(type, response); } catch (formatError) { return response; }
+  response.feedback = { status: fb.status, heading: fb.heading, message: fb.message, code: fb.code || null };
+  if (response.error === 'R1C_UPLOAD_PENDING' && response.retry && response.retry.scheduled === true) {
+    response.request_result = { written: false, reason: 'UPLOAD_RETRY_OWNS_RESULT' };
+    return response;
+  }
+  var table = R1A_REQUEST_TABLES[type], rowId = _r1aReqPresent(requestRowId) ? String(requestRowId).trim() : '';
+  if (!table || !rowId) { response.request_result = { written: false, reason: 'NO_REQUEST_ROW' }; return response; }
+  var writer = typeof deps.writeResult === 'function' ? deps.writeResult : _r1aDefaultResultWriter;
+  try { response.request_result = writer(table, rowId, api.update(fb, _r1aReqEmail(typeof actorEmail === 'string' ? actorEmail : ''))) || { written: false }; }
+  catch (writeError) { response.request_result = { written: false, reason: writeError.code || 'WRITE_ERROR' }; }
+  return response;
+}
+
+/* AppSheet bot entry (exactly three arguments). Returns the command response JSON plus additive `feedback` and
+ * `request_result`; the staff-facing outcome is written to the request row's result_* columns. */
+function appSheetR1CommandFromRequestRow(commandType, requestRowId, actorEmail) {
+  try { return JSON.stringify(_r1aRunRequestRowCommand(commandType, requestRowId, actorEmail)); }
+  catch (e) { return JSON.stringify({ ok: false, error: e.code || e.message || 'R1A_REFUSED' }); }
 }
 
 /* Shared Admin resolution for Tony DEV-only helpers (argument email; Session may be blank). */
@@ -1509,18 +2585,78 @@ function runR1AApplyTonyPre02ContractSideEffect(actorEmail, evidencePath, deps) 
   return output;
 }
 
+/* ---- DEV-only PRE03 owner audit and repair entry points (standalone bridge, Admin/Manager) ----
+ * Zero-argument wrappers are for the Apps Script editor Run button. The actor is the Apps Script session user (active
+ * user, then effective user for a manual editor run); an explicit email argument, when given, must match the session.
+ * Output is JSON and is also logged. The repair defaults to a dry run. */
+function _r1aRepairSessionEmail() {
+  try {
+    if (typeof Session === 'undefined') return '';
+    var active = _r1aReqEmail(String(Session.getActiveUser().getEmail() || ''));
+    return active || _r1aReqEmail(String(Session.getEffectiveUser().getEmail() || ''));
+  } catch (e) { return ''; }
+}
+function _r1aRepairContext(actorEmail, deps) {
+  deps = deps || {};
+  var options = typeof deps.cloudOptions === 'function' ? deps.cloudOptions() : _r1aCloudOptions();
+  if (!options || !options.store || options.store.getSheetId() !== R1A_REQUEST_DEV_SHEET || options.store.getEnvironment() !== 'DEV') _r1aReqRefuse('R1A_DEV_ONLY');
+  var session = typeof deps.sessionEmail === 'string' ? _r1aReqEmail(deps.sessionEmail) : _r1aRepairSessionEmail();
+  var given = _r1aReqEmail(typeof actorEmail === 'string' ? actorEmail : '');
+  if (given && session && given !== session) _r1aReqRefuse('R1A_ACTOR_MISMATCH');
+  var email = given || session;
+  if (!email) _r1aReqRefuse('R1A_AUTHENTICATED_EMAIL_REQUIRED');
+  var resolveActor = typeof _r1aActor === 'function' ? _r1aActor : (typeof require === 'function' ? require('./adapter.js')._r1aActor : null);
+  if (typeof resolveActor !== 'function') _r1aReqRefuse('R1A_COMMAND_UNSUPPORTED');
+  /* Store identity for diagnostics: the spreadsheet actually opened by this bridge. */
+  var storeInfo = { spreadsheet_name: null };
+  if (typeof deps.spreadsheetName === 'string') storeInfo.spreadsheet_name = deps.spreadsheetName;
+  else { try { if (typeof SpreadsheetApp !== 'undefined') storeInfo.spreadsheet_name = String(SpreadsheetApp.openById(options.store.getSheetId()).getName()); } catch (e) { storeInfo.spreadsheet_name = null; } }
+  return { store: options.store, actor: resolveActor(options.store, email), store_info: storeInfo };
+}
+function _r1aPre03RepairApi() {
+  if (typeof _r1sRepairPre03Assignment === 'function' && typeof _r1sPre03AssignmentAudit === 'function') return { repair: _r1sRepairPre03Assignment, audit: _r1sPre03AssignmentAudit };
+  if (typeof require === 'function') { var svc = require('./services.js'); return { repair: svc._r1sRepairPre03Assignment, audit: svc._r1sPre03AssignmentAudit }; }
+  _r1aReqRefuse('R1A_COMMAND_UNSUPPORTED');
+}
+function _r1aJsonRun(fn) {
+  var out;
+  try { out = fn(); } catch (e) { out = { ok: false, error: e.code || e.message || 'R1A_REFUSED' }; if (e && e.diagnostics) out.diagnostics = e.diagnostics; }
+  var text = JSON.stringify(out);
+  if (typeof Logger !== 'undefined' && Logger.log) Logger.log(text);
+  return text;
+}
+/* Read-only: every R1 pilot PRE03 task whose owner is not the canonical owner. */
+function runR1APre03AssignmentAudit(deps) {
+  deps = deps && typeof deps === 'object' && typeof deps.cloudOptions === 'function' ? deps : {};
+  return _r1aJsonRun(function () { var c = _r1aRepairContext(deps.actorEmail, deps); return _r1aPre03RepairApi().audit(c.store, c.actor, c.store_info); });
+}
+/* jobRef = public Jobs.job_id (SS-...) or internal Jobs.id (J-...). apply must be exactly true to write.
+ * Needs an argument: running it from the editor Run button returns R1A_JOB_REF_REQUIRED with a hint. */
+function runR1ARepairPre03Assignment(jobRef, apply, deps) {
+  deps = deps && typeof deps === 'object' && typeof deps.cloudOptions === 'function' ? deps : {};
+  return _r1aJsonRun(function () { var c = _r1aRepairContext(deps.actorEmail, deps); return _r1aPre03RepairApi().repair(c.store, c.actor, { job_ref: jobRef, apply: apply === true, store_info: c.store_info }); });
+}
+function runR1ARepairPre03AssignmentSSSEXL5961DryRun() { return runR1ARepairPre03Assignment('SS-SEXL-5961', false); }
+function runR1ARepairPre03AssignmentSSSEXL5961Apply() { return runR1ARepairPre03Assignment('SS-SEXL-5961', true); }
+
 if (typeof module !== 'undefined') module.exports = {
   R1A_REQUEST_DEV_SHEET: R1A_REQUEST_DEV_SHEET,
   R1A_REQUEST_TABLES: R1A_REQUEST_TABLES,
   _r1aReadRequestRowFromSpreadsheet: _r1aReadRequestRowFromSpreadsheet,
   _r1aBuildIntakeRequest: _r1aBuildIntakeRequest,
   _r1aBuildTaskCompleteRequest: _r1aBuildTaskCompleteRequest,
+  _r1aBuildTaskReopenRequest: _r1aBuildTaskReopenRequest,
   _r1aBuildTaskEvidenceAttachRequest: _r1aBuildTaskEvidenceAttachRequest,
   _r1aCommandFromRequestRow: _r1aCommandFromRequestRow,
+  _r1aRunRequestRowCommand: _r1aRunRequestRowCommand,
   appSheetR1CommandFromRequestRow: appSheetR1CommandFromRequestRow,
   runR1AReconcileTonyPaymentStages: runR1AReconcileTonyPaymentStages,
   runR1ABackfillTonyPre04: runR1ABackfillTonyPre04,
-  runR1AApplyTonyPre02ContractSideEffect: runR1AApplyTonyPre02ContractSideEffect
+  runR1AApplyTonyPre02ContractSideEffect: runR1AApplyTonyPre02ContractSideEffect,
+  runR1APre03AssignmentAudit: runR1APre03AssignmentAudit,
+  runR1ARepairPre03Assignment: runR1ARepairPre03Assignment,
+  runR1ARepairPre03AssignmentSSSEXL5961DryRun: runR1ARepairPre03AssignmentSSSEXL5961DryRun,
+  runR1ARepairPre03AssignmentSSSEXL5961Apply: runR1ARepairPre03AssignmentSSSEXL5961Apply
 };
 
 /* DEV-only bounded retry for the AppSheet upload-availability race.
@@ -1532,16 +2668,17 @@ if (typeof module !== 'undefined') module.exports = {
  * NeedsReview, attempt_count, next_attempt):
  *   - the bot entry schedules ONE Outbox row per request row (idempotency_key R1U:<table>:<row id>);
  *   - runR1URetryUploadRequests (time-driven trigger) sweeps upload-bearing Ready rows that have no
- *     CommitJournal entry and no Outbox row (rows submitted before this module, or whose bot call never
- *     reached the backend), then re-runs due items through the normal request-row path;
+ *     CommitJournal entry, no Outbox row and no recorded refusal (rows submitted before this module, or whose
+ *     bot call never reached the backend), then re-runs due items through the normal request-row path;
  *   - every attempt re-reads the authoritative request row, acts as row.submitted_by (locked in AppSheet at
  *     create) and refuses if the row identity/inputs changed since scheduling (payload_hash fingerprint);
  *   - idempotency, expected_version, role/task authorization and audit come from the command path itself
  *     (CJ-R1A-/CJ-R1C- journals), so a retry can never duplicate Evidence rows or lifecycle side effects;
  *   - after R1U_MAX_ATTEMPTS the row becomes NeedsReview with R1C_UPLOAD_MISSING (explicit final failure);
  *     any non-pending error is final immediately (NeedsReview with the error code).
- * Writes: Outbox rows, and request-row result_status/result_message when those columns exist. Never
- * touches operational tables directly and never invents Evidence ids. */
+ * Writes: Outbox rows, and the request row's result_* columns through the shared command-result.js writer
+ * (same staff-facing vocabulary and messages as the bot entry; internal codes only in result_code/result).
+ * Never touches operational tables directly and never invents Evidence ids. */
 'use strict';
 var R1U_DEV_SHEET_ID = '1z7PNZtDdC4Z5eLbmTuQdqp0QpJSmuEvx3QvN3VyNTsc';
 var R1U_ACTION = 'R1RequestUploadRetry';
@@ -1549,6 +2686,7 @@ var R1U_MAX_ATTEMPTS = 5;
 var R1U_BACKOFF_MINUTES = [1, 2, 4, 8, 16];
 var R1U_STALLED_MS = 10 * 60 * 1000;
 var R1U_MAX_PER_TICK = 10;
+var R1U_SWEEP_SKIP_RESULTS = ['ActionRequired', 'Failed'];
 var R1U_UPLOAD_TABLES = {
   DEVTaskCompleteRequests: { command_type: 'TASK_COMPLETE', column: 'evidence_path' },
   DEVTaskEvidenceAttachRequests: { command_type: 'TASK_EVIDENCE_ATTACH', column: 'evidence_path' },
@@ -1614,24 +2752,25 @@ function _r1uSheetRows(ss, table) {
     var o = {}; h.forEach(function (k, i) { if (k && !Object.prototype.hasOwnProperty.call(o, k)) o[k] = r[i]; }); return o;
   }).filter(function (o) { return _r1uCell(o.id) !== ''; });
 }
-function _r1uSheetWriteResult(ss, table, rowId, status, message) {
+function _r1uResultApi() {
+  if (typeof _r1rFeedback === 'function' && typeof _r1rSheetWriteResult === 'function') return { feedback: _r1rFeedback, update: _r1rUpdate, write: _r1rSheetWriteResult };
+  if (typeof require === 'function' && typeof module !== 'undefined') { try { var m = require('./command-result.js'); return { feedback: m._r1rFeedback, update: m._r1rUpdate, write: m._r1rSheetWriteResult }; } catch (e) {} }
+  return null;
+}
+/* Staff-facing result for a retry outcome; falls back to the raw code only if the shared module is missing. */
+function _r1uFeedback(type, response, fallbackStatus) {
+  var api = _r1uResultApi();
+  if (api) { try { return api.feedback(type, response); } catch (e) {} }
+  var code = response && response.error ? String(response.error) : '';
+  return { status: fallbackStatus, message: code || fallbackStatus, code: code, result_json: '', extras: {} };
+}
+/* extra = {actorEmail, code, detail, extras}. The shared writer enforces row owner, existing columns and final-result preservation. */
+function _r1uSheetWriteResult(ss, table, rowId, status, message, extra) {
   try {
-    if (!ss || typeof ss.getId !== 'function' || ss.getId() !== R1U_DEV_SHEET_ID) return false;
-    var matches = ss.getSheets().filter(function (sh) { return sh.getName() === table; });
-    if (matches.length !== 1) return false;
-    var sh = matches[0], lastCol = sh.getLastColumn(), lastRow = sh.getLastRow();
-    if (lastCol < 1 || lastRow < 2) return false;
-    var h = sh.getRange(1, 1, 1, lastCol).getValues()[0].map(function (x) { return String(x || '').trim(); });
-    var idCol = h.indexOf('id'), sCol = h.indexOf('result_status'), mCol = h.indexOf('result_message');
-    if (idCol < 0 || sCol < 0 || mCol < 0) return false;
-    var ids = sh.getRange(2, idCol + 1, lastRow - 1, 1).getValues(), found = [];
-    ids.forEach(function (r, i) { if (_r1uCell(r[0]) === String(rowId)) found.push(i); });
-    if (found.length !== 1) return false;
-    var clean = function (v) { v = String(v === undefined || v === null ? '' : v).slice(0, 400); return /^[=+@'\-]/.test(v) ? "'" + v : v; };
-    sh.getRange(found[0] + 2, sCol + 1).setValue(clean(status));
-    sh.getRange(found[0] + 2, mCol + 1).setValue(clean(message));
-    if (typeof SpreadsheetApp !== 'undefined' && SpreadsheetApp.flush) SpreadsheetApp.flush();
-    return true;
+    var api = _r1uResultApi();
+    if (!api) return false;
+    extra = extra || {};
+    return !!api.write(ss, table, rowId, { status: status, message: message, code: extra.code || '', detail: extra.detail || '', extras: extra.extras || {}, actorEmail: extra.actorEmail }).written;
   } catch (e) { return false; }
 }
 function _r1uContext(deps) {
@@ -1646,7 +2785,7 @@ function _r1uContext(deps) {
   var ss = null;
   function sheet() { if (!ss) ss = _r1aOpenDevRequestSpreadsheet(); return ss; }
   ctx.readRows = typeof deps.readRows === 'function' ? deps.readRows : function (table) { return _r1uSheetRows(sheet(), table); };
-  ctx.writeResult = typeof deps.writeResult === 'function' ? deps.writeResult : function (table, rowId, status, message) { return _r1uSheetWriteResult(sheet(), table, rowId, status, message); };
+  ctx.writeResult = typeof deps.writeResult === 'function' ? deps.writeResult : function (table, rowId, status, message, extra) { return _r1uSheetWriteResult(sheet(), table, rowId, status, message, extra); };
   /* Retry attempts do a single Drive lookup (no in-call wait); the actor is the authoritative row's submitted_by. */
   ctx.command = typeof deps.command === 'function' ? deps.command : function (type, rowId, actor) {
     return _r1aCommandFromRequestRow(type, rowId, actor, { sessionEmail: '', resolveUpload: function (p) { return _r1cResolveUpload(p, { wait: false }); } });
@@ -1654,7 +2793,8 @@ function _r1uContext(deps) {
   return ctx;
 }
 function _r1uFind(store, key) { var rows = store.list('Outbox').filter(function (o) { return o.idempotency_key === key; }); if (rows.length > 1) _r1uRefuse('R1U_OUTBOX_AMBIGUOUS'); return rows[0] || null; }
-function _r1uSafeWrite(ctx, table, rowId, status, message) { try { return !!ctx.writeResult(table, rowId, status, message); } catch (e) { return false; } }
+function _r1uSafeWrite(ctx, table, rowId, status, message, extra) { try { return !!ctx.writeResult(table, rowId, status, message, extra || {}); } catch (e) { return false; } }
+function _r1uExtra(actor, fb) { return { actorEmail: actor, code: fb.code || '', detail: fb.result_json || '', extras: fb.extras || {} }; }
 function _r1uOutboxRow(table, row, type, now, attemptCount, status, nextAttempt, summary) {
   var rowId = _r1uCell(row.id);
   return {
@@ -1689,7 +2829,8 @@ function _r1uScheduleRetry(commandType, requestRowId, actorEmail, err, deps) {
     var lookups = err && err.attempts ? Number(err.attempts) : 1;
     var summary = 'R1C_UPLOAD_PENDING after bot attempt 1 of ' + R1U_MAX_ATTEMPTS + ' (' + lookups + ' Drive lookup(s)); next attempt ' + next;
     ctx.store.insert('Outbox', _r1uOutboxRow(table, row, type, now, 1, 'RetryDue', next, summary));
-    var written = _r1uSafeWrite(ctx, table, rowId, 'UploadPending', 'Upload not yet visible in Drive; backend retry 2 of ' + R1U_MAX_ATTEMPTS + ' scheduled for ' + next + '. No resubmission needed.');
+    var pendingFb = _r1uFeedback(type, { ok: false, error: 'R1C_UPLOAD_PENDING', retry: { scheduled: true, attempt: 1, next_attempt: next } }, 'UploadPending');
+    var written = _r1uSafeWrite(ctx, table, rowId, 'UploadPending', 'Your file is still uploading. The system will try again automatically (retry 2 of ' + R1U_MAX_ATTEMPTS + '), so you do not need to resubmit.', _r1uExtra(actor, pendingFb));
     return { scheduled: true, outbox_id: 'OUT-R1U-' + rowId, status: 'RetryDue', attempt: 1, max_attempts: R1U_MAX_ATTEMPTS, next_attempt: next, result_written: written };
   });
 }
@@ -1704,6 +2845,9 @@ function _r1uSweep(ctx, now) {
     if (!rows) return;
     rows.forEach(function (row) {
       if (_r1uEligibility(table, row)) return;
+      /* The bot already reached the backend and recorded a refusal: staff were told to submit a new request, so a
+       * later deploy must never silently re-run that refused row. */
+      if (R1U_SWEEP_SKIP_RESULTS.indexOf(_r1uCell(row.result_status)) >= 0) return;
       var rowId = _r1uCell(row.id), key = _r1uKey(table, rowId);
       if (keys[key] || journaled[_r1uCell(row.command_id)]) return;
       ctx.store.insert('Outbox', _r1uOutboxRow(table, row, _r1uRowType(table, row), now, 0, 'Pending', now.toISOString(), 'Swept: Ready upload request without journal entry'));
@@ -1722,37 +2866,44 @@ function _r1uDue(ctx, now) {
     return o.status === 'Processing' && !!o.next_attempt && due; /* stalled claim */
   }).sort(function (a, b) { return String(a.next_attempt || a.created_at).localeCompare(String(b.next_attempt || b.created_at)); }).slice(0, R1U_MAX_PER_TICK);
 }
-function _r1uFinish(ctx, item, table, rowId, status, summary, nextAttempt, resultStatus, resultMessage) {
+function _r1uFinish(ctx, item, table, rowId, status, summary, nextAttempt, resultStatus, resultMessage, extra) {
   ctx.store.update('Outbox', item.id, { status: status, next_attempt: nextAttempt || null, response_summary: String(summary).slice(0, 400) });
-  var written = _r1uSafeWrite(ctx, table, rowId, resultStatus, resultMessage);
+  var written = _r1uSafeWrite(ctx, table, rowId, resultStatus, resultMessage, extra);
   return { outbox_id: item.id, table: table, row_id: rowId, outcome: status, attempt: item.attempt_count, next_attempt: nextAttempt || null, summary: summary, result_written: written };
+}
+/* Final failure: Outbox keeps the diagnostic code; the request row gets the staff-facing message. */
+function _r1uFail(ctx, item, table, rowId, type, actor, code, summary) {
+  var fb = _r1uFeedback(type, { ok: false, error: code }, 'Failed');
+  return _r1uFinish(ctx, item, table, rowId, 'NeedsReview', summary || code, null, fb.status, fb.message, _r1uExtra(actor, fb));
 }
 function _r1uProcess(ctx, item) {
   var t = _r1uParseTarget(item.target), now = ctx.now();
   if (!t) return _r1uFinish(ctx, item, '', '', 'NeedsReview', 'R1U_TARGET_INVALID', null, 'Failed', 'R1U_TARGET_INVALID');
   var rows = ctx.readRows(t.table) || [], match = rows.filter(function (r) { return _r1uCell(r.id) === t.row_id; });
   if (match.length !== 1) return _r1uFinish(ctx, item, t.table, t.row_id, 'NeedsReview', 'R1U_REQUEST_NOT_FOUND', null, 'Failed', 'R1U_REQUEST_NOT_FOUND');
-  var row = match[0], reason = _r1uEligibility(t.table, row);
-  if (reason) return _r1uFinish(ctx, item, t.table, t.row_id, 'NeedsReview', reason, null, 'Failed', reason);
-  if (_r1uFingerprint(t.table, row) !== item.payload_hash) return _r1uFinish(ctx, item, t.table, t.row_id, 'NeedsReview', 'R1U_REQUEST_CHANGED', null, 'Failed', 'R1U_REQUEST_CHANGED: request identity or inputs changed after scheduling');
-  var type = _r1uRowType(t.table, row), actor = _r1uEmail(row.submitted_by), attempt = item.attempt_count, upload = _r1uCell(row[R1U_UPLOAD_TABLES[t.table].column]);
+  var row = match[0], reason = _r1uEligibility(t.table, row), rowActor = _r1uEmail(row.submitted_by), rowType = _r1uRowType(t.table, row);
+  if (reason) return _r1uFail(ctx, item, t.table, t.row_id, rowType, rowActor, reason);
+  if (_r1uFingerprint(t.table, row) !== item.payload_hash) return _r1uFail(ctx, item, t.table, t.row_id, rowType, rowActor, 'R1U_REQUEST_CHANGED', 'R1U_REQUEST_CHANGED: request identity or inputs changed after scheduling');
+  var type = rowType, actor = rowActor, attempt = item.attempt_count, upload = _r1uCell(row[R1U_UPLOAD_TABLES[t.table].column]);
   var result = null, error = null;
   try { result = ctx.command(type, t.row_id, actor); } catch (e) { error = e; }
   if (!error && result && result.ok === true) {
     var inner = result.result || {}, replay = inner.replay === true || inner.status === 'Replayed';
     var okSummary = 'Succeeded on attempt ' + attempt + (replay ? ' (replay of earlier commit)' : '') + (inner.status ? ': ' + inner.status : '');
-    return _r1uFinish(ctx, item, t.table, t.row_id, 'Succeeded', okSummary, null, 'Succeeded', okSummary);
+    var okFb = _r1uFeedback(type, result, 'Succeeded');
+    return _r1uFinish(ctx, item, t.table, t.row_id, 'Succeeded', okSummary, null, okFb.status, okFb.message === 'Succeeded' ? okSummary : okFb.message, _r1uExtra(actor, okFb));
   }
   var code = error ? (error.code || error.message || 'R1U_COMMAND_FAILED') : (result && result.error ? String(result.error) : 'R1U_UNEXPECTED_RESULT');
   if (code === 'R1C_UPLOAD_PENDING') {
     if (attempt >= R1U_MAX_ATTEMPTS) {
       var missing = 'R1C_UPLOAD_MISSING: upload "' + upload + '" never became visible in Drive after ' + attempt + ' attempts';
-      return _r1uFinish(ctx, item, t.table, t.row_id, 'NeedsReview', missing, null, 'Failed', missing + '. Re-upload through a new request.');
+      return _r1uFail(ctx, item, t.table, t.row_id, type, actor, 'R1C_UPLOAD_MISSING', missing);
     }
     var next = new Date(now.getTime() + _r1uBackoffMs(attempt)).toISOString();
-    return _r1uFinish(ctx, item, t.table, t.row_id, 'RetryDue', 'R1C_UPLOAD_PENDING after attempt ' + attempt + ' of ' + R1U_MAX_ATTEMPTS + '; next attempt ' + next, next, 'UploadPending', 'Upload not yet visible in Drive; backend retry ' + (attempt + 1) + ' of ' + R1U_MAX_ATTEMPTS + ' scheduled for ' + next + '. No resubmission needed.');
+    var pendingFb = _r1uFeedback(type, { ok: false, error: 'R1C_UPLOAD_PENDING', retry: { scheduled: true, attempt: attempt, next_attempt: next } }, 'UploadPending');
+    return _r1uFinish(ctx, item, t.table, t.row_id, 'RetryDue', 'R1C_UPLOAD_PENDING after attempt ' + attempt + ' of ' + R1U_MAX_ATTEMPTS + '; next attempt ' + next, next, 'UploadPending', 'Your file is still uploading. The system will try again automatically (retry ' + (attempt + 1) + ' of ' + R1U_MAX_ATTEMPTS + '), so you do not need to resubmit.', _r1uExtra(actor, pendingFb));
   }
-  return _r1uFinish(ctx, item, t.table, t.row_id, 'NeedsReview', code + ' on attempt ' + attempt + ' (final)', null, 'Failed', code);
+  return _r1uFail(ctx, item, t.table, t.row_id, type, actor, code, code + ' on attempt ' + attempt + ' (final)');
 }
 /* One trigger run: sweep, claim due items under the lock, then execute each outside the lock (the command path takes its own lock). */
 function _r1uTick(deps) {
@@ -1795,7 +2946,7 @@ function _r1aCloudOptions(){
   return {store:store,config:{environment:'DEV',sheetId:R1A_BOUND_DEV_SHEET_ID},actorEmail:function(){return Session.getActiveUser().getEmail();},effectiveUserEmail:function(){return Session.getEffectiveUser().getEmail();},reads:_r1aDefaultReads(),services:_r1sServices()};
 }
 function appSheetR1Read(requestJson,actorEmail){try{var request=JSON.parse(requestJson);return JSON.stringify(R1C_READS.indexOf(request.read_type)>=0?_r1cReadCloud(request,actorEmail):_r1aCreate(_r1aCloudOptions()).read(request));}catch(e){return JSON.stringify({ok:false,error:e.code||e.message||'R1A_REFUSED'});}}
-function appSheetR1Command(requestJson){try{return JSON.stringify(_r1aCreate(_r1aCloudOptions()).command(JSON.parse(requestJson)));}catch(e){return JSON.stringify({ok:false,error:e.code||e.message||'R1A_REFUSED'});}}
+function appSheetR1Command(requestJson){var type=null,fb=function(x){return typeof _r1rAttachFeedback==='function'?_r1rAttachFeedback(type,x):x;};try{var request=JSON.parse(requestJson);type=request&&typeof request.command_type==='string'?request.command_type:null;return JSON.stringify(fb(_r1aCreate(_r1aCloudOptions()).command(request)));}catch(e){return JSON.stringify(fb({ok:false,error:e.code||e.message||'R1A_REFUSED'}));}}
 
 /* Namespaced DEV synthetic fixtures for AppSheet command smokes. Exact DEV sheet only. */
 function _r1aFixtureResult(name,pass,detail){var r={test:name,pass:!!pass,detail:detail};console.log(JSON.stringify(r,null,2));return r;}

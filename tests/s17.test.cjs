@@ -456,3 +456,51 @@ test('S17 28: zero-arg DEV smoke with real header adapter reruns', () => {
   grids.Jobs[0][1] = 'bad';
   assert.equal(ctx.runS17FixtureApply().pass, false);
 });
+
+test('S17 staff identification: task rows derive public Job ID, customer, postcode and names; job search covers business identifiers', () => {
+  const s = makeStore();
+  s.insert('People', { id: 'PERSON-idt-tanya', email: 'idt-tanya@example.invalid', display_name: 'Tanya', role: 'Office', active: true });
+  s.insert('People', { id: 'PERSON-idt-ben', email: 'idt-ben@example.invalid', display_name: 'Ben', role: 'Director', active: true });
+  s.insert('Customers', { id: 'CUST-idt', first_name: 'Jane', last_name: 'Parton', address_line1: '12 Example Road', address_line2: null, town: 'Paignton', postcode: 'TQ3 3HY', email: 'parton@example.invalid', phone: '07000000002' });
+  s.insert('Customers', { id: 'CUST-idt-placeholder', first_name: 'Pat', last_name: 'Placeholder', address_line1: 'NOT_CONFIGURED', town: 'NOT_CONFIGURED', postcode: 'ZZ9 9ZZ' });
+  s.insert('Jobs', { id: 'J-mu12y2e6-7y7tui', job_id: 'SS-SHHC-8091', customer_id: 'CUST-idt', display_name: 'Parton – TQ3 3HY', quote_reference: 'TQ33HY111', finance_route: 'Standard', workflow_stage: 'Prebooking', pilot_job: true, release_scope: 'R1' });
+  s.insert('Jobs', { id: 'J-idt-placeholder', job_id: 'SS-PLAC-0001', customer_id: 'CUST-idt-placeholder', display_name: 'Placeholder – ZZ9 9ZZ', finance_route: 'Standard', workflow_stage: 'Prebooking', pilot_job: true, release_scope: 'R1' });
+  const base = { group: 'Prebooking', status: 'Open', priority: 1, due_at: '2026-09-20T09:00:00.000Z', related_entity_type: 'Jobs' };
+  s.insert('Tasks', { ...base, id: 'TASK-idt-pre03', job_id: 'J-mu12y2e6-7y7tui', template_code: 'PRE03', title: 'Confirm bank deposit', owner_id: 'PERSON-idt-ben', backup_id: 'PERSON-idt-missing', related_entity_id: 'J-mu12y2e6-7y7tui' });
+  s.insert('Tasks', { ...base, id: 'TASK-idt-sys', job_id: null, template_code: 'SYS-IDT', group: 'Booking', title: 'System check', owner_id: 'PERSON-idt-tanya', backup_id: null });
+
+  const queue = core._s17OperationalQueue(s, 'booking');
+  const pre03 = queue.tasks.find(t => t.id === 'TASK-idt-pre03');
+  assert.equal(pre03.job_id, 'J-mu12y2e6-7y7tui', 'canonical relationship retained');
+  assert.equal(pre03.owner_id, 'PERSON-idt-ben');
+  assert.equal(pre03.public_job_id, 'SS-SHHC-8091');
+  assert.equal(pre03.customer_name, 'Jane Parton');
+  assert.equal(pre03.postcode, 'TQ3 3HY');
+  assert.equal(pre03.owner_name, 'Ben');
+  assert.equal(pre03.backup_name, null, 'an unknown person never echoes a PERSON-* id as a name');
+  assert.equal(pre03.job_label, 'SS-SHHC-8091 – Parton – TQ3 3HY');
+  assert.equal(pre03.search_text, core._s17TaskSearchText(pre03));
+  assert.ok(pre03.search_text.split(' | ').includes('ss-shhc-8091'));
+  const sys = queue.tasks.find(t => t.id === 'TASK-idt-sys');
+  assert.deepEqual([sys.public_job_id, sys.customer_name, sys.postcode, sys.job_label, sys.owner_name], [null, null, null, null, 'Tanya']);
+  assert.equal(Object.prototype.hasOwnProperty.call(s.tables.Tasks.find(t => t.id === 'TASK-idt-pre03'), 'public_job_id'), false, 'presentation is never persisted onto Tasks');
+
+  const home = core._s17OfficeToday(s, { as_of: '2026-09-15' });
+  const homeRow = home.booking_review.find(t => t.id === 'TASK-idt-pre03');
+  assert.deepEqual([homeRow.public_job_id, homeRow.customer_name, homeRow.postcode, homeRow.owner_name], ['SS-SHHC-8091', 'Jane Parton', 'TQ3 3HY', 'Ben']);
+  const overview = core._s17JobOverview(s, 'J-mu12y2e6-7y7tui');
+  assert.equal(overview.booking.tasks.find(t => t.id === 'TASK-idt-pre03').owner_name, 'Ben');
+
+  for (const q of ['SS-SHHC-8091', 'ss-shhc', 'Parton', 'Jane', 'jane parton', 'TQ3 3HY', 'tq33hy', 'TQ3', 'TQ33HY111', '12 Example', 'Paignton', 'J-mu12y2e6-7y7tui']) {
+    const results = core._s17JobSearch(s, q);
+    const hit = results.find(r => r.id === 'J-mu12y2e6-7y7tui');
+    assert.ok(hit, 'job search should find Parton by ' + q);
+    assert.equal(results.some(r => r.id === 'J-idt-placeholder'), false, q + ' must not match the other job');
+    assert.deepEqual([hit.job_id, hit.customer_name, hit.postcode, hit.quote_reference, hit.address_line1, hit.town, hit.job_label],
+      ['SS-SHHC-8091', 'Jane Parton', 'TQ3 3HY', 'TQ33HY111', '12 Example Road', 'Paignton', 'SS-SHHC-8091 – Parton – TQ3 3HY']);
+  }
+  assert.equal(core._s17JobSearch(s, 'NOT_CONFIGURED').some(r => r.id === 'J-idt-placeholder'), false, 'placeholder address values are not searchable');
+  const placeholder = core._s17JobSearch(s, 'zz99zz').find(r => r.id === 'J-idt-placeholder');
+  assert.ok(placeholder);
+  assert.equal(placeholder.address_line1, null);
+});

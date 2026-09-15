@@ -233,8 +233,8 @@
     },
     {
       "file": "apps-script/r1-appsheet/R1AppSheetAdapter.js",
-      "bytes": 158580,
-      "sha256": "23e357b431b4879500d058b14fe6fd62da3f217880226816cf753f5b533f0c02",
+      "bytes": 250909,
+      "sha256": "e19ea60c86138cfb52bce59261cca166337dfb2fad44b7a922fe995b3d3cf73e",
       "entry_points": [
         "runR1CRequestProvisionCheck",
         "runR1CProvisionRequestTables",
@@ -242,6 +242,10 @@
         "runR1AReconcileTonyPaymentStages",
         "runR1ABackfillTonyPre04",
         "runR1AApplyTonyPre02ContractSideEffect",
+        "runR1APre03AssignmentAudit",
+        "runR1ARepairPre03Assignment",
+        "runR1ARepairPre03AssignmentSSSEXL5961DryRun",
+        "runR1ARepairPre03AssignmentSSSEXL5961Apply",
         "runR1URetryUploadRequests",
         "runR1UUploadRetryStatus",
         "appSheetR1Read",
@@ -714,8 +718,8 @@
     },
     {
       "file": "apps-script/s17/S17Admin.js",
-      "bytes": 75552,
-      "sha256": "1310a449617ec6ec44756cfa8458689edde5ecd6e38741a29ddf939cb6471e72",
+      "bytes": 79230,
+      "sha256": "ac5b6fc48334e1e5a2e62f330e1c5b3b7099099094484ea2636341102bc9066e",
       "entry_points": [
         "runS17FixtureDryRun",
         "runS17FixtureApply",
@@ -843,8 +847,8 @@
   ],
   "standalone_bridge": {
     "file": "standalone-bridge/AppSheetBridge.js",
-    "bytes": 455545,
-    "sha256": "ead417c51050da32e5a9de783e2fed1a664d7bf910af7e7b2f71a6b42dcfda49",
+    "bytes": 558117,
+    "sha256": "5b04fd690298b739c278786f25396946ec6b659236aa9a09e944fd2973df463a",
     "entry_points": [
       "runR1CRequestProvisionCheck",
       "runR1CProvisionRequestTables",
@@ -852,6 +856,10 @@
       "runR1AReconcileTonyPaymentStages",
       "runR1ABackfillTonyPre04",
       "runR1AApplyTonyPre02ContractSideEffect",
+      "runR1APre03AssignmentAudit",
+      "runR1ARepairPre03Assignment",
+      "runR1ARepairPre03AssignmentSSSEXL5961DryRun",
+      "runR1ARepairPre03AssignmentSSSEXL5961Apply",
       "runR1URetryUploadRequests",
       "runR1UUploadRetryStatus",
       "appSheetR1Read",

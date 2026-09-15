@@ -20,11 +20,11 @@ const services = require('../r1-appsheet/services.js');
 
 function store() {
   const data = {};
-  const names = ['Intake','Jobs','Customers','CustomerChanges','MappingRules','People','PersonRoles','TaskTemplates','Tasks','WorkPackages','Allocations','Materials','JobEquipment','ScaffoldBookings','Companies','Outbox','CalendarLinks','Holidays','Settings','ReleaseModes','CommitJournal','AuditEvents','TaskEvents'];
+  const names = ['Intake','Jobs','Customers','CustomerChanges','MappingRules','People','PersonRoles','TaskTemplates','Tasks','WorkPackages','Allocations','Materials','JobEquipment','ScaffoldBookings','Companies','Outbox','CalendarLinks','Holidays','Settings','ReleaseModes','CommitJournal','AuditEvents','TaskEvents','InvoiceStages','ManualBankChecks'];
   names.forEach(n => data[n] = []);
   data.People = [
     { id: 'PERSON-tanya', email: 'tanya@example.test', display_name: 'Tanya', role: 'Office', active: true, calendar_id: null, capacity_per_day: null },
-    { id: 'PERSON-ben', email: 'ben@example.test', display_name: 'Ben', role: 'Admin', active: true, calendar_id: null, capacity_per_day: null },
+    { id: 'PERSON-ben', email: 'ben@example.test', display_name: 'Ben', role: 'Director', active: true, calendar_id: null, capacity_per_day: null },
     { id: 'PERSON-dan', email: 'dan@example.test', display_name: 'Dan', role: 'Director', active: true, calendar_id: null, capacity_per_day: null },
     { id: 'PERSON-roofer-a', email: 'roofera@example.test', display_name: 'RooferA', role: 'Installer', active: true, calendar_id: 'CAL-roofer-a', capacity_per_day: 2 },
     { id: 'PERSON-sparky-a', email: 'sparkya@example.test', display_name: 'ElectricianA', role: 'Installer', active: true, calendar_id: 'CAL-sparky-a', capacity_per_day: 2 },
@@ -32,8 +32,8 @@ function store() {
   ];
   data.PersonRoles = [
     { id: 'R1', person_id: 'PERSON-tanya', role: 'Office', active: true },
-    { id: 'R2', person_id: 'PERSON-ben', role: 'Admin', active: true }
-    ,{ id: 'R3', person_id: 'PERSON-dan', role: 'Director', active: true }
+    { id: 'R2', person_id: 'PERSON-ben', role: 'Director', active: true },
+    { id: 'R3', person_id: 'PERSON-dan', role: 'Director', active: true }
   ];
   data.TaskTemplates = [
     { id: 'TPL-PRE01', template_code: 'PRE01', title: 'Send deposit invoice', group: 'Prebooking', active: true, template_version: '1.0' },
@@ -252,10 +252,13 @@ test('task generation after booking gates is idempotent with owners', () => {
     deposit_bank_confirmed_by: 'PERSON-ben',
     deposit_bank_reference: 'BANK-EVID-1',
     contract_status: 'Signed',
+    contract_id: 'SIGNABLE-JOURNEY-1',
+    contract_signed_at: '2026-09-01T00:00:00.000Z',
     contract_evidence_id: 'CONTRACT-EVID-1',
     customer_details_verified_at: '2026-09-01T00:00:00.000Z',
     customer_details_verified_by: 'PERSON-tanya',
     sold_booking_match_status: 'Match',
+    valuation_basis: 'Standard',
     original_gross_pence: 500000,
     finance_route: 'Standard',
     workflow_stage: 'BookingInProgress',
@@ -264,6 +267,25 @@ test('task generation after booking gates is idempotent with owners', () => {
   const a = processBookingGates(soldR.job_id, s);
   const required = ['PRE01','PRE02','PRE03','PRE04','BKG01','BKG02','BKG03'];
   s.list('Tasks').filter(t => required.includes(t.template_code)).forEach(t => s.update('Tasks', t.id, { status:'Complete',completed_at:'2026-09-02T00:00:00.000Z',completed_by:t.owner_id,completion_note:'Checked',evidence_id:'EVID-'+t.template_code,version:Number(t.version||0)+1 }));
+  const depositId = 'IS-' + soldR.job_id + '-deposit';
+  if (!s.get('InvoiceStages', depositId)) {
+    s.insert('InvoiceStages', {
+      id: depositId, job_id: soldR.job_id, stage: 'deposit', amount_net_pence: 100000, vat_pence: 20000, gross_pence: 120000,
+      status: 'Sent', invoice_number: 'INV-JOURNEY-1', sent_at: '2026-09-02T00:00:00.000Z', version: 1,
+      created_at: '2026-09-01T00:00:00.000Z', created_by: 'test', updated_at: '2026-09-02T00:00:00.000Z', updated_by: 'test',
+      source_system: 'test', commit_id: depositId
+    });
+  } else {
+    s.update('InvoiceStages', depositId, { invoice_number: 'INV-JOURNEY-1', sent_at: '2026-09-02T00:00:00.000Z', status: 'Sent' });
+  }
+  // Hardened PRE03: Jobs summary fields alone are not evidence — a reconciled Confirmed ManualBankChecks row is required.
+  assert.equal(s.get('Jobs', soldR.job_id).workflow_stage, 'BookingInProgress');
+  s.update('InvoiceStages', depositId, { status: 'Confirmed', reference: 'BANK-EVID-1' });
+  s.insert('ManualBankChecks', {
+    id: 'MBC-JOURNEY-1', job_id: soldR.job_id, stage: 'deposit', checked_at: '2026-09-01T00:00:00.000Z', checked_by: 'PERSON-ben',
+    amount_pence: s.get('InvoiceStages', depositId).gross_pence, outcome: 'Confirmed', evidence_reference: 'BANK-EVID-1',
+    created_at: '2026-09-01T00:00:00.000Z', commit_id: 'MBC-JOURNEY-1'
+  });
   const b = processBookingGates(soldR.job_id, s);
   const c = processBookingGates(soldR.job_id, s);
   assert.ok(a.tasks.created.length >= 1 || a.tasks.skipped.length >= 1);

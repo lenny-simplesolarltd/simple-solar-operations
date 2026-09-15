@@ -19,9 +19,41 @@ const {
   runFridayBeforeCalculation, runUnrelatedRowsUntouched
 } = require('../s06/fixture.js');
 
+
+function stampPre01Invoice(store, jobId, now) {
+  const id = 'IS-' + jobId + '-deposit';
+  const existing = store.get('InvoiceStages', id);
+  const row = {
+    id, job_id: jobId, stage: 'deposit', amount_net_pence: 100000, vat_pence: 20000, gross_pence: 120000,
+    due_date: null, status: 'Sent', xero_invoice_id: null, invoice_number: 'INV-' + jobId, xero_contact_id: null,
+    reference: null, request_id: null, last_synced_at: null, source_status: null,
+    sent_at: now || '2026-09-01T10:00:00.000Z', cancelled_at: null,
+    created_at: now || '2026-09-01T09:00:00.000Z', created_by: 'test', updated_at: now || '2026-09-01T10:00:00.000Z',
+    updated_by: 'test', version: existing ? Number(existing.version || 0) + 1 : 1, source_system: 'test', commit_id: id
+  };
+  if (existing) store.update('InvoiceStages', id, row);
+  else store.insert('InvoiceStages', row);
+}
+
+/* Hardened PRE03: gate evidence is a Confirmed ManualBankChecks row reconciled to Jobs summary fields + deposit InvoiceStage. */
+function stampPre03BankCheck(store, jobId) {
+  const job = store.get('Jobs', jobId);
+  const stage = store.get('InvoiceStages', 'IS-' + jobId + '-deposit');
+  assert.ok(job && stage, 'stampPre03BankCheck requires job + deposit stage');
+  store.update('InvoiceStages', stage.id, { status: 'Confirmed', reference: job.deposit_bank_reference });
+  const id = 'MBC-' + jobId + '-deposit';
+  if (!store.get('ManualBankChecks', id)) {
+    store.insert('ManualBankChecks', {
+      id, job_id: jobId, stage: 'deposit', checked_at: job.deposit_bank_confirmed_at, checked_by: job.deposit_bank_confirmed_by,
+      amount_pence: stage.gross_pence, outcome: 'Confirmed', evidence_reference: job.deposit_bank_reference,
+      created_at: job.deposit_bank_confirmed_at, commit_id: id
+    });
+  }
+}
+
 function makeStore() {
   const data = {};
-  const tables = ['Jobs', 'Tasks', 'TaskDependencies', 'TaskEvents', 'AuditEvents', 'Customers', 'TaskTemplates', 'People', 'PersonRoles', 'ReleaseModes', 'Intake'];
+  const tables = ['Jobs', 'Tasks', 'TaskDependencies', 'TaskEvents', 'AuditEvents', 'Customers', 'TaskTemplates', 'People', 'PersonRoles', 'ReleaseModes', 'Intake', 'InvoiceStages', 'ManualBankChecks'];
   for (const t of tables) data[t] = [];
 
   data.ReleaseModes = [
@@ -81,6 +113,61 @@ test('S06: re-evaluation idempotent — no duplicate tasks', () => {
   assert.equal(r.pass, true, JSON.stringify(r));
   assert.equal(r.second_created, 0);
   assert.ok(r.first_created > 0);
+});
+
+test('S06: PRE03 uses Director Ben and Director Dan even when Lenny is first active Admin', () => {
+  const store = makeStore();
+  installBaseFixture(store);
+  const job = buildReadyJob();
+  store.update('People', 'PERSON-ben', { role: 'Director' });
+  store.insert('People', { id: 'PERSON-lenny-dev', email: 'lenny@simplesolarltd.co.uk', display_name: 'Lenny DEV', role: 'Admin', active: true });
+  store.insert('PersonRoles', { id: 'PROLE-000-lenny-admin', person_id: 'PERSON-lenny-dev', role: 'Admin', active: true });
+  createPrebookingTasksForSold(job, store, { now: '2026-09-01T09:00:00.000Z' });
+  const task = store.list('Tasks').find(t => t.job_id === job.id && t.template_code === 'PRE03');
+  assert.equal(task.owner_id, 'PERSON-ben');
+  assert.equal(task.backup_id, 'PERSON-dan');
+  assert.equal(store.get('People', 'PERSON-ben').role, 'Director');
+  assert.equal(store.get('People', 'PERSON-dan').role, 'Director');
+  assert.equal(store.list('PersonRoles').some(r => r.person_id === 'PERSON-ben' && r.role === 'Admin' && r.active === true), false);
+  assert.equal(store.list('PersonRoles').some(r => r.person_id === 'PERSON-dan' && r.role === 'Admin' && r.active === true), false);
+  for (const code of ['PRE01', 'PRE02', 'PRE04']) {
+    assert.equal(store.list('Tasks').find(t => t.job_id === job.id && t.template_code === code).owner_id, 'PERSON-tanya');
+  }
+});
+
+test('S06: PRE03 fails visibly when configured Ben is inactive instead of choosing another Admin', () => {
+  const store = makeStore();
+  installBaseFixture(store);
+  const job = buildReadyJob();
+  store.update('People', 'PERSON-ben', { active: false });
+  store.insert('People', { id: 'PERSON-lenny-dev', email: 'lenny@simplesolarltd.co.uk', display_name: 'Lenny DEV', role: 'Admin', active: true });
+  store.insert('PersonRoles', { id: 'PROLE-lenny-admin', person_id: 'PERSON-lenny-dev', role: 'Admin', active: true });
+  assert.throws(() => createPrebookingTasksForSold(job, store), /S06_CONFIG: active PERSON-ben required for PRE03/);
+  assert.equal(store.list('Tasks').some(t => t.template_code === 'PRE03' && t.owner_id === 'PERSON-lenny-dev'), false);
+});
+
+test('S06: PRE03 fails visibly when Ben has no active Admin, Manager or Director role', () => {
+  const store = makeStore();
+  installBaseFixture(store);
+  const job = buildReadyJob();
+  store.update('People', 'PERSON-ben', { role: 'Office' });
+  store.update('PersonRoles', 'PROLE-ben-director', { active: false });
+  store.insert('People', { id: 'PERSON-lenny-dev', email: 'lenny@simplesolarltd.co.uk', display_name: 'Lenny DEV', role: 'Admin', active: true });
+  store.insert('PersonRoles', { id: 'PROLE-lenny-admin', person_id: 'PERSON-lenny-dev', role: 'Admin', active: true });
+  assert.throws(() => createPrebookingTasksForSold(job, store), /S06_CONFIG: PERSON-ben must have an active Admin, Manager or Director role for PRE03/);
+  assert.equal(store.list('Tasks').some(t => t.template_code === 'PRE03'), false);
+});
+
+test('S06: PRE03 continues with null backup when Dan has no active Admin, Manager or Director role', () => {
+  const store = makeStore();
+  installBaseFixture(store);
+  const job = buildReadyJob();
+  store.update('People', 'PERSON-dan', { role: 'Office', active: true });
+  store.update('PersonRoles', 'PROLE-dan-director', { active: false });
+  createPrebookingTasksForSold(job, store, { now: '2026-09-01T09:00:00.000Z' });
+  const task = store.list('Tasks').find(t => t.job_id === job.id && t.template_code === 'PRE03');
+  assert.equal(task.owner_id, 'PERSON-ben');
+  assert.equal(task.backup_id, null);
 });
 
 /* --- Test 5: Deterministic instance_key --- */
@@ -152,6 +239,9 @@ test('S06: explicit ReadyToBook requires task and field evidence and records one
   store.insert('Jobs',job); store.insert('Customers',buildCustomer(job.customer_id,'Alice','Ready'));
   createPrebookingTasksForSold(job,store,{now:'2026-09-01T09:00:00.000Z'});
   ['PRE01','PRE02','PRE03','PRE04'].forEach(code => { const t=store.list('Tasks').find(x=>x.job_id===job.id&&x.template_code===code); store.update('Tasks',t.id,{status:'Complete',completed_at:'2026-09-01T10:00:00.000Z',completed_by:t.owner_id,completion_note:'Verified',evidence_id:'EVID-'+code,version:2}); });
+  stampPre01Invoice(store, job.id);
+  assert.equal(evaluateReadyToBook(store.get('Jobs',job.id),store).ready,false, 'PRE03 Complete without ManualBankChecks must not be ready');
+  stampPre03BankCheck(store, job.id);
   assert.equal(evaluateReadyToBook(store.get('Jobs',job.id),store).ready,true);
   const first=processBookingGates(job.id,store,{actor:'PERSON-tanya',command_id:'READY-1',now:'2026-09-01T11:00:00.000Z'});
   assert.equal(store.get('Jobs',job.id).workflow_stage,'ReadyToBook');
@@ -183,6 +273,7 @@ test('S06: PRE01-PRE03 complete with PRE04 open stays Prebooking', () => {
     const task = store.list('Tasks').find(t => t.job_id === job.id && t.template_code === code);
     store.update('Tasks', task.id, { status: 'Complete', completed_at: '2026-09-01T10:00:00.000Z', completed_by: task.owner_id, completion_note: 'Verified', evidence_id: 'EV-' + code, version: 2 });
   });
+  stampPre01Invoice(store, job.id);
   const result = processBookingGates(job.id, store, { actor: 'PERSON-tanya', command_id: 'PRE04-OPEN' });
   assert.equal(result.readiness.ready, false);
   assert.ok(result.readiness.gates.some(g => g.name === 'PRE04_satisfied' && !g.pass));
@@ -222,6 +313,10 @@ test('S06: ReadyToBook requires PRE01/PRE02/PRE03/PRE04 and records actor/time/v
       completion_note: 'Verified', evidence_id: 'EVID-' + code, version: 2
     });
   });
+  stampPre01Invoice(store, job.id);
+  assert.equal(evaluateReadyToBook(store.get('Jobs', job.id), store).gates.find(g => g.name === 'PRE03_satisfied').pass, false);
+  assert.equal(evaluateReadyToBook(store.get('Jobs', job.id), store).gates.find(g => g.name === 'deposit_confirmation_evidence').pass, false);
+  stampPre03BankCheck(store, job.id);
   assert.equal(evaluateReadyToBook(store.get('Jobs', job.id), store).ready, true);
 
   const advanced = processBookingGates(job.id, store, {
@@ -321,6 +416,8 @@ test('S06: early Booking link stays Prebooking until ReadyToBook then advances o
       completion_note: 'Verified', evidence_id: 'EVID-' + code, version: 2
     });
   });
+  stampPre01Invoice(store, job.id);
+  stampPre03BankCheck(store, job.id);
   processBookingGates(job.id, store, { actor: 'PERSON-tanya', command_id: 'EARLY-2', now: '2026-09-01T11:00:00.000Z' });
   assert.equal(store.get('Jobs', job.id).workflow_stage, 'ReadyToBook');
 
@@ -345,6 +442,8 @@ test('S06: Booked denied for open/blocked mandatory tasks; BKG04/BKG05 never blo
       completion_note: 'Verified', evidence_id: 'EVID-' + code, version: 2
     });
   });
+  stampPre01Invoice(store, job.id);
+  stampPre03BankCheck(store, job.id);
   const bkg02 = store.list('Tasks').find(t => t.job_id === job.id && t.template_code === 'BKG02');
   store.update('Tasks', bkg02.id, { status: 'Blocked', blocking_reason: 'Awaiting survey', version: 3 });
   let result = processBookingGates(job.id, store);
@@ -515,4 +614,71 @@ test('S06: S06Gates.js entry points run via VM', () => {
 
   var ss = ctx.restoreS06SafeState();
   assert.equal(ss.pass, true);
+});
+
+test('S06: PRE03 owner is Ben by canonical identity whatever the order of Admin rows; Dan stays backup; both creators and replays never duplicate or reassign', () => {
+  const g = require('../s06/gates.js');
+  assert.deepEqual(JSON.parse(JSON.stringify(g.S06_PRE03_RESPONSIBILITY)), { template_code: 'PRE03', owner_person_id: 'PERSON-ben', backup_person_id: 'PERSON-dan', eligible_roles: ['Admin', 'Manager', 'Director'] });
+  for (const lennyFirst of [true, false]) {
+    const label = lennyFirst ? 'Lenny Admin row first' : 'Ben Admin row first';
+    const store = makeStore();
+    const addLenny = () => {
+      store.insert('People', { id: 'PERSON-lenny-dev', email: 'lenny@simplesolarltd.co.uk', display_name: 'Lenny DEV', role: 'Admin', active: true });
+      store.insert('PersonRoles', { id: 'PROLE-lenny-admin', person_id: 'PERSON-lenny-dev', role: 'Admin', active: true });
+    };
+    if (lennyFirst) addLenny();
+    installBaseFixture(store);
+    // Live seed shape: Ben is an Admin (not Director), so Ben and Lenny are both Admin.
+    store.update('People', 'PERSON-ben', { role: 'Admin' });
+    store.update('PersonRoles', 'PROLE-ben-director', { active: false });
+    store.insert('PersonRoles', { id: 'PROLE-ben-admin', person_id: 'PERSON-ben', role: 'Admin', active: true });
+    if (!lennyFirst) addLenny();
+    assert.equal(g.resolvePersonByRole(store, 'Admin'), lennyFirst ? 'PERSON-lenny-dev' : 'PERSON-ben', label + ': generic Admin resolution depends on row order (the old bug)');
+
+    const job = buildReadyJob();
+    job.workflow_stage = 'Prebooking';
+    job.booking_submission_id = null;
+    store.insert('Jobs', job);
+    store.insert('Customers', buildCustomer(job.customer_id, 'Alice', 'Owner'));
+    const pre03s = () => store.list('Tasks').filter(t => t.job_id === job.id && t.template_code === 'PRE03');
+
+    g.createPrebookingTasksForSold(store.get('Jobs', job.id), store, { now: '2026-09-14T07:50:11.000Z' });
+    assert.equal(pre03s().length, 1, label);
+    const created = pre03s()[0];
+    assert.deepEqual([created.owner_id, created.backup_id, created.title], ['PERSON-ben', 'PERSON-dan', 'Confirm bank deposit'], label);
+
+    // Replays through both creators and gate re-evaluation: one task, same owner, same version.
+    g.createPrebookingTasksForSold(store.get('Jobs', job.id), store, { now: '2026-09-14T09:00:00.000Z' });
+    g.createTasksForJob(store.get('Jobs', job.id), { ready: false, gates: [] }, store, { now: '2026-09-14T09:00:00.000Z' });
+    g.processBookingGates(job.id, store, { actor: 'PERSON-tanya', command_id: 'OWNER-REPLAY-' + lennyFirst, now: '2026-09-14T09:00:00.000Z' });
+    assert.equal(pre03s().length, 1, label + ': no duplicate PRE03');
+    assert.deepEqual([pre03s()[0].id, pre03s()[0].owner_id, pre03s()[0].backup_id, pre03s()[0].version], [created.id, 'PERSON-ben', 'PERSON-dan', created.version], label);
+
+    // The reconciliation creator on a job with no PRE03 yet also uses the canonical owner.
+    const job2 = Object.assign(buildReadyJob(), { id: 'J-s06-owner-2', job_id: 'SS-S06O-WNR2', customer_id: 'CUST-s06-owner-2', sold_submission_id: 'S06-sold-owner-2', booking_submission_id: null, workflow_stage: 'Prebooking' });
+    store.insert('Jobs', job2);
+    g.createTasksForJob(job2, { ready: false, gates: [] }, store, { now: '2026-09-14T09:30:00.000Z' });
+    const pre03Job2 = store.list('Tasks').filter(t => t.job_id === job2.id && t.template_code === 'PRE03');
+    assert.equal(pre03Job2.length, 1, label);
+    assert.deepEqual([pre03Job2[0].owner_id, pre03Job2[0].backup_id], ['PERSON-ben', 'PERSON-dan'], label);
+
+    // An existing wrongly-owned PRE03 is never silently changed by regeneration: it needs the explicit repair.
+    store.update('Tasks', created.id, { owner_id: 'PERSON-lenny-dev' });
+    g.createPrebookingTasksForSold(store.get('Jobs', job.id), store, { now: '2026-09-14T10:00:00.000Z' });
+    g.processBookingGates(job.id, store, { actor: 'PERSON-tanya', command_id: 'OWNER-REGEN-' + lennyFirst, now: '2026-09-14T10:00:00.000Z' });
+    assert.equal(pre03s().length, 1, label);
+    assert.equal(pre03s()[0].owner_id, 'PERSON-lenny-dev', label);
+  }
+
+  // Manager and Director also qualify; an ineligible Ben fails loudly and never falls back to another Admin.
+  const store = makeStore();
+  installBaseFixture(store);
+  store.insert('People', { id: 'PERSON-lenny-dev', email: 'lenny@simplesolarltd.co.uk', display_name: 'Lenny DEV', role: 'Admin', active: true });
+  store.insert('PersonRoles', { id: 'PROLE-lenny-admin', person_id: 'PERSON-lenny-dev', role: 'Admin', active: true });
+  store.update('People', 'PERSON-ben', { role: 'Office' });
+  store.update('PersonRoles', 'PROLE-ben-director', { active: false });
+  store.insert('PersonRoles', { id: 'PROLE-ben-manager', person_id: 'PERSON-ben', role: 'Manager', active: true });
+  assert.equal(g.resolveBankConfirmationOwner(store), 'PERSON-ben');
+  store.update('PersonRoles', 'PROLE-ben-manager', { active: false });
+  assert.throws(() => g.resolveBankConfirmationOwner(store), /PERSON-ben must have an active Admin, Manager or Director role for PRE03/);
 });

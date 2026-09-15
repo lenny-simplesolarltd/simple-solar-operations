@@ -58,20 +58,21 @@ function _s17OfficeToday(store, input) {
   var allTasks = store.list('Tasks').filter(function (t) {
     return t.status !== 'Cancelled' && t.status !== 'Complete' && t.status !== 'NotRequired';
   });
+  var taskView = _s17TaskView(_s17PresentationContext(store));
 
   // Overdue: due_at before today
   var overdue = allTasks.filter(function (t) {
     if (!t.due_at) return false;
     var due = _s17Date(t.due_at);
     return due && due < today;
-  }).map(_s17TaskSummary);
+  }).map(taskView);
 
   // Due today
   var dueToday = allTasks.filter(function (t) {
     if (!t.due_at) return false;
     var due = _s17Date(t.due_at);
     return due === today;
-  }).map(_s17TaskSummary);
+  }).map(taskView);
 
   // Due soon (next 7 days, excluding today)
   var dueSoon = allTasks.filter(function (t) {
@@ -81,12 +82,12 @@ function _s17OfficeToday(store, input) {
     var d = new Date(today + 'T12:00:00Z');
     d.setUTCDate(d.getUTCDate() + 7);
     return due <= d.toISOString().slice(0, 10);
-  }).map(_s17TaskSummary);
+  }).map(taskView);
 
   // Booking approvals
   var bookingReview = allTasks.filter(function (t) {
     return t.group === 'Booking' || t.group === 'Prebooking';
-  }).map(_s17TaskSummary);
+  }).map(taskView);
 
   // Unresolved issues
   var unresolvedIssues = store.list('Issues').filter(function (i) {
@@ -117,6 +118,65 @@ function _s17OfficeToday(store, input) {
     booking_review: bookingReview,
     unresolved_issues: unresolvedIssues,
     health_alerts: healthAlerts
+  };
+}
+
+/* --- Staff-facing presentation (read model only) ---
+ * Tasks keep canonical internal ids (job_id = Jobs.id "J-…", owner_id/backup_id = People.id). These helpers only ADD
+ * human fields derived from canonical Jobs / Customers / People rows. Nothing is written or copied onto Tasks. */
+function _s17IndexById(rows) {
+  var map = {};
+  (rows || []).forEach(function (r) { if (r && r.id !== undefined && r.id !== null && r.id !== '') map[r.id] = r; });
+  return map;
+}
+function _s17PresentationContext(store) {
+  return { jobs: _s17IndexById(store.list('Jobs')), customers: _s17IndexById(store.list('Customers')), people: _s17IndexById(store.list('People')) };
+}
+function _s17Clean(v) {
+  if (v === null || v === undefined) return '';
+  var text = String(v).trim();
+  return text === 'NOT_CONFIGURED' ? '' : text;
+}
+function _s17CustomerName(customer) {
+  if (!customer) return null;
+  var name = [_s17Clean(customer.first_name), _s17Clean(customer.last_name)].filter(Boolean).join(' ');
+  return name || null;
+}
+function _s17PersonName(ctx, personId) {
+  var id = _s17Clean(personId);
+  if (!id) return null;
+  var person = ctx.people[id];
+  return person && _s17Clean(person.display_name) ? _s17Clean(person.display_name) : null;
+}
+function _s17JobLabel(publicJobId, customer) {
+  var parts = [_s17Clean(publicJobId), customer ? _s17Clean(customer.last_name) : '', customer ? _s17Clean(customer.postcode) : ''].filter(Boolean);
+  return parts.length ? parts.join(' – ') : null;
+}
+/* Lower-case searchable segments joined by " | ". Matching is per segment, so a space-free query such as "tq33hy"
+ * matches "tq3 3hy" without joining neighbouring fields. Keep identical to _r1aTaskSearchText in r1-appsheet/adapter.js. */
+function _s17TaskSearchText(row) {
+  return ['public_job_id', 'customer_name', 'postcode', 'title', 'owner_name', 'backup_name', 'template_code']
+    .map(function (k) { return _s17Clean(row[k]).toLowerCase(); }).filter(Boolean).join(' | ');
+}
+function _s17QueryMatches(value, q, qCompact) {
+  var text = _s17Clean(value).toLowerCase();
+  if (!text) return false;
+  return text.indexOf(q) !== -1 || (qCompact.length >= 2 && text.replace(/\s+/g, '').indexOf(qCompact) !== -1);
+}
+/* Task summary + presentation fields. Build ctx once per read so each table is listed once. */
+function _s17TaskView(ctx) {
+  return function (t) {
+    var row = _s17TaskSummary(t);
+    var job = _s17Clean(t.job_id) ? ctx.jobs[_s17Clean(t.job_id)] || null : null;
+    var customer = job && _s17Clean(job.customer_id) ? ctx.customers[_s17Clean(job.customer_id)] || null : null;
+    row.public_job_id = job && _s17Clean(job.job_id) ? _s17Clean(job.job_id) : null;
+    row.customer_name = _s17CustomerName(customer);
+    row.postcode = customer && _s17Clean(customer.postcode) ? _s17Clean(customer.postcode) : null;
+    row.owner_name = _s17PersonName(ctx, t.owner_id);
+    row.backup_name = _s17PersonName(ctx, t.backup_id);
+    row.job_label = job ? _s17JobLabel(job.job_id, customer) : null;
+    row.search_text = _s17TaskSearchText(row);
+    return row;
   };
 }
 
@@ -191,7 +251,7 @@ function _s17BookingSummary(store, job) {
     booking_approved_by: job.booking_approved_by,
     sold_booking_match_status: job.sold_booking_match_status,
     outstanding_tasks: tasks.length,
-    tasks: tasks.map(_s17TaskSummary)
+    tasks: tasks.map(_s17TaskView(_s17PresentationContext(store)))
   };
 }
 
@@ -289,7 +349,7 @@ function _s17CancellationSummary(store, job) {
     cancellation_by: job.cancellation_by,
     cancellation_reason: job.cancellation_reason,
     open_review_tasks: cancelTasks.length,
-    tasks: cancelTasks.map(_s17TaskSummary)
+    tasks: cancelTasks.map(_s17TaskView(_s17PresentationContext(store)))
   };
 }
 
@@ -309,26 +369,29 @@ function _s17SystemSummary(store, job) {
 function _s17JobSearch(store, query) {
   _s17Scope(store);
   if (!_s17Text(query)) return [];
-  var q = query.toLowerCase().trim();
+  var q = query.toLowerCase().trim(), qCompact = q.replace(/\s+/g, '');
   var jobs = store.list('Jobs');
-  var customers = store.list('Customers');
+  var customers = _s17IndexById(store.list('Customers'));
   var results = [];
 
   for (var i = 0; i < jobs.length; i++) {
     var j = jobs[i];
-    var cust = customers.filter(function (c) { return c.id === j.customer_id; })[0] || {};
-    var match =
-      (j.job_id && j.job_id.toLowerCase().indexOf(q) !== -1) ||
-      (j.display_name && j.display_name.toLowerCase().indexOf(q) !== -1) ||
-      (cust.last_name && cust.last_name.toLowerCase().indexOf(q) !== -1) ||
-      (cust.postcode && cust.postcode.toLowerCase().indexOf(q) !== -1) ||
-      (cust.email && cust.email.toLowerCase().indexOf(q) !== -1) ||
-      (cust.phone && String(cust.phone).toLowerCase().indexOf(q) !== -1);
+    var cust = (_s17Clean(j.customer_id) && customers[_s17Clean(j.customer_id)]) || {};
+    var name = _s17CustomerName(cust);
+    /* Business identifiers (public Job ID, quote reference, customer name, postcode with or without the space, address,
+     * contact details). Internal Jobs.id stays matchable for diagnostics only; staff never need it. */
+    var fields = [j.job_id, j.quote_reference, j.display_name, name, cust.first_name, cust.last_name, cust.postcode,
+      cust.address_line1, cust.address_line2, cust.town, cust.email, cust.phone, j.id];
+    var match = fields.some(function (v) { return _s17QueryMatches(v, q, qCompact); });
     if (match) {
       results.push({
         id: j.id, job_id: j.job_id, display_name: j.display_name,
-        customer_name: [cust.first_name, cust.last_name].filter(Boolean).join(' ').trim(),
+        customer_name: name || '',
         postcode: cust.postcode || null,
+        quote_reference: j.quote_reference || null,
+        address_line1: _s17Clean(cust.address_line1) || null,
+        town: _s17Clean(cust.town) || null,
+        job_label: _s17JobLabel(j.job_id, cust),
         workflow_stage: j.workflow_stage, release_scope: j.release_scope
       });
     }
@@ -361,7 +424,7 @@ function _s17OperationalQueue(store, queueName) {
   var filter = queueMap[queueName];
   if (!filter) return { queue: queueName, error: 'UNKNOWN_QUEUE', available: Object.keys(queueMap) };
 
-  var tasks = filter().map(_s17TaskSummary);
+  var tasks = filter().map(_s17TaskView(_s17PresentationContext(store)));
   return { queue: queueName, count: tasks.length, tasks: tasks };
 }
 
@@ -597,7 +660,10 @@ function _s17TaskActionAvailability(store, taskId) {
     title: task.title,
     actions: {
       complete: { available: completable, note: completable ? null : (alreadyDone ? 'Already ' + task.status : 'Status ' + task.status + ' not completable') },
-      reopen: { available: task.status === 'Complete', note: task.status === 'Complete' ? null : 'Not complete' }
+      reopen: {
+        available: task.status === 'Complete' || task.status === 'NotRequired',
+        note: (task.status === 'Complete' || task.status === 'NotRequired') ? null : 'Status ' + task.status + ' not reopenable'
+      }
     }
   };
 }
@@ -606,6 +672,7 @@ if (typeof module !== 'undefined') {
   module.exports = {
     S17_ADMIN_DEV_SHEET_ID,
     _s17Date, _s17Today, _s17GuardStore, _s17Scope,
+    _s17PresentationContext, _s17TaskView, _s17TaskSearchText,
     _s17OfficeToday, _s17JobOverview, _s17JobSearch,
     _s17OperationalQueue, _s17AdminReleaseModes, _s17AdminSystemStatus,
     _s17AuditHistory, _s17ActionAvailability, _s17TaskActionAvailability
